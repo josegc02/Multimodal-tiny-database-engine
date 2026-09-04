@@ -1,11 +1,14 @@
 import os
-import struct
+import struct 
+from record import (Alumno, RECORD_SIZE, 
+                    serializar_alumno, deserializar_alumno)
 
+
+# imagine this is a define in C++
 MOVE_THE_LAST = True
 FREE_LIST = False
 
 # formats
-FORMAT = '=5s11s20s15sif'
 FILE_HEADER_FORMAT = '=ii?'
 PAGE_HEADER_FORMAT = '=iii'
 FREE_PTR_FORMAT = '=i'
@@ -15,31 +18,12 @@ FREE_SLOT_FORMAT = '=ii'
 FREE_SLOT_MARKER = -1
 
 # size in bytes of each format
-RECORD_SIZE = struct.calcsize(FORMAT)
 FILE_HEADER_SIZE = struct.calcsize(FILE_HEADER_FORMAT)
 PAGE_HEADER_SIZE = struct.calcsize(PAGE_HEADER_FORMAT)
 FREE_PTR_SIZE = struct.calcsize(FREE_PTR_FORMAT)
 FREE_SLOT_SIZE = struct.calcsize(FREE_SLOT_FORMAT)
 
 PAGE_SIZE = 512
-
-
-class Alumno:
-    def __init__(self, codigo: str, nombre: str, apellido: str,
-                 carrera: str, ciclo: int, mensualidad: float):
-        self.codigo = codigo
-        self.nombre = nombre
-        self.apellido = apellido
-        self.carrera = carrera
-        self.ciclo = ciclo
-        self.mensualidad = mensualidad
-
-    def __repr__(self):
-        return (
-            f"Alumno({self.codigo!r}, {self.nombre!r}, {self.apellido!r}, "
-            f"{self.carrera!r}, {self.ciclo}, {self.mensualidad})"
-        )
-
 
 class FileHeader:
     def __init__(self, page_size: int, num_pages: int, delete_mode: bool):
@@ -55,68 +39,40 @@ class PageHeader:
         self.free_list = free_list
 
 
-def escribir_file_header(filename: str, file_header: FileHeader):
-    """Crea un archivo nuevo y escribe su File Header inicial."""
-    with open(filename, 'wb') as file:
-        file.write(struct.pack(
-            FILE_HEADER_FORMAT,
-            file_header.page_size,
-            file_header.num_pages,
-            file_header.delete_mode
-        ))
-
-
-def leer_file_header(filename: str) -> FileHeader:
-    with open(filename, 'rb') as file:
-        data = file.read(FILE_HEADER_SIZE)
-
-    if len(data) != FILE_HEADER_SIZE:
-        raise ValueError('El archivo no contiene un File Header válido')
-
-    page_size, num_pages, delete_mode = struct.unpack(FILE_HEADER_FORMAT, data)
-    return FileHeader(page_size, num_pages, delete_mode)
-
-
-def serializar_alumno(alumno: Alumno) -> bytes:
-    return struct.pack(
-        FORMAT,
-        alumno.codigo.encode(),
-        alumno.nombre.encode(),
-        alumno.apellido.encode(),
-        alumno.carrera.encode(),
-        alumno.ciclo,
-        alumno.mensualidad
-    )
-
-
-def deserializar_alumno(data: bytes) -> Alumno:
-    codigo, nombre, apellido, carrera, ciclo, mensualidad = struct.unpack(
-        FORMAT, data
-    )
-
-    return Alumno(
-        codigo.decode().rstrip('\x00'),
-        nombre.decode().rstrip('\x00'),
-        apellido.decode().rstrip('\x00'),
-        carrera.decode().rstrip('\x00'),
-        ciclo,
-        mensualidad
-    )
-
-
-class FixedRecord:
+class Heapfile:
     def __init__(self, filename: str, delete_mode: bool):
         self.filename = filename
 
         if not os.path.exists(filename) or os.path.getsize(filename) == 0:
             self.file_header = FileHeader(PAGE_SIZE, 0, delete_mode)
-            escribir_file_header(self.filename, self.file_header)
+            self.escribir_file_header(self.filename, self.file_header)
         else:
-            self.file_header = leer_file_header(self.filename)
+            self.file_header = self.leer_file_header(self.filename)
 
         self.max_records_per_page = (
             (self.file_header.page_size - PAGE_HEADER_SIZE) // RECORD_SIZE
         )
+
+    def escribir_file_header(filename: str, file_header: FileHeader):
+        with open(filename, 'wb') as file:
+            file.write(struct.pack(
+                FILE_HEADER_FORMAT,
+                file_header.page_size,
+                file_header.num_pages,
+                file_header.delete_mode
+            ))
+
+
+    def leer_file_header(filename: str) -> FileHeader:
+        with open(filename, 'rb') as file:
+            data = file.read(FILE_HEADER_SIZE)
+
+        if len(data) != FILE_HEADER_SIZE:
+            raise ValueError('El archivo no contiene un File Header válido')
+
+        page_size, num_pages, delete_mode = struct.unpack(FILE_HEADER_FORMAT, data)
+        return FileHeader(page_size, num_pages, delete_mode)
+
 
     def _page_offset(self, page_id: int) -> int:
         return FILE_HEADER_SIZE + page_id * self.file_header.page_size
