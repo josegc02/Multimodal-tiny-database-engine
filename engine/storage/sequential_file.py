@@ -113,8 +113,53 @@ class SequentialFile:
                 lo = mid + 1
         return lo
 
+    def _find_insert_position_in_page(self, page: Page, key: Any) -> int:
+        lo, hi = 0, page.num_slots
+        while lo < hi:
+            mid = (lo + hi) // 2
+            offset, length, _ = page._read_slot(mid)
+            mid_key = self._record_key(bytes(page.buf[offset: offset + length]))
+            if mid_key < key:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+
+    def _insert_into_aux(self, data: bytes) -> RID:
+        for page_id in range(self.num_pages_aux):
+            page = self._read_page_aux(page_id)
+            slot_id = page.insert_record(data)
+            if slot_id is not None:
+                self._write_page_aux(page)
+                return RID(page_id, slot_id, file="aux")
+
+        page = self._create_page_aux()
+        slot_id = page.insert_record(data)
+        self._write_page_aux(page)
+        return RID(page.page_id, slot_id, file="aux")
+
     def insert(self, record: Dict[str, Any]) -> RID:
-        raise NotImplementedError("Pendiente: inserción manteniendo el orden por clave")
+        data = self.schema.serialize(record)
+        key = record[self.key_field]
+
+        if self.num_pages_main == 0:
+            page = self._create_page_main()
+            slot_id = page.insert_sorted_at(data, 0, self.schema.record_size)
+            self._write_page_main(page)
+            self._page_bounds[page.page_id] = self._page_key_bounds(page)
+            return RID(page.page_id, slot_id, file="main")
+
+        target_page_id = self._locate_page_for_key(key)
+        page = self._read_page_main(target_page_id)
+        position = self._find_insert_position_in_page(page, key)
+        slot_id = page.insert_sorted_at(data, position, self.schema.record_size)
+
+        if slot_id is not None:
+            self._write_page_main(page)
+            self._page_bounds[target_page_id] = self._page_key_bounds(page)
+            return RID(target_page_id, slot_id, file="main")
+
+        return self._insert_into_aux(data)
 
     def get(self, rid: RID) -> Optional[Dict[str, Any]]:
         raise NotImplementedError("Pendiente: se implementa junto con la búsqueda binaria")
