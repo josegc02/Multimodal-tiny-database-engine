@@ -80,6 +80,15 @@ class Page:
             return None
         return bytes(self.buf[offset: offset + length])
 
+    def delete_record(self, slot_id: int) -> bool:
+        if slot_id >= self.num_slots:
+            return False
+        offset, length, is_deleted = self._read_slot(slot_id)
+        if is_deleted:
+            return False
+        self._write_slot(slot_id, offset, length, is_deleted=1)
+        return True
+
     def iter_active(self) -> Generator[Tuple[int, bytes], None, None]:
         for slot_id in range(self.num_slots):
             offset, length, is_deleted = self._read_slot(slot_id)
@@ -143,6 +152,15 @@ class HeapFile:
         if data is None:
             return None
         return self.schema.deserialize(data)
+
+    def delete(self, rid: RID) -> bool:
+        if rid.page_id >= self.num_pages:
+            return False
+        page = self._read_page(rid.page_id)
+        ok = page.delete_record(rid.slot_id)
+        if ok:
+            self._write_page(page)
+        return ok
 
     def scan(self) -> Generator[Tuple[RID, Dict[str, Any]], None, None]:
         for page_id in range(self.num_pages):
