@@ -1,4 +1,5 @@
 import os
+import random
 import tempfile
 import unittest
 
@@ -128,36 +129,76 @@ class TestSequentialFile(unittest.TestCase):
 
         self.assertTrue(self.sf.needs_reorganization())
 
+    def test_order_preserved_random_insertions(self):
+        keys = list(range(1, 21))
+        shuffled = keys.copy()
+        random.Random(42).shuffle(shuffled)
+
+        main_p = os.path.join(self.tmpdir, "random.main")
+        aux_p = os.path.join(self.tmpdir, "random.aux")
+        sf_large = SequentialFile(main_p, aux_p, SCHEMA, key_field="id", page_size=2048)
+        try:
+            for k in shuffled:
+                sf_large.insert({"id": k, "name": f"item{k}", "price": float(k)})
+
+            collected = []
+            for p_id in range(sf_large.num_pages_main):
+                page = sf_large._read_page_main(p_id)
+                for _, data in page.iter_active():
+                    collected.append(sf_large._record_key(data))
+
+            self.assertEqual(collected, sorted(keys))
+        finally:
+            sf_large.close()
+
     def test_reorganize_empty(self):
         self.sf.reorganize()
         self.assertEqual(self.sf.num_pages_main, 0)
         self.assertEqual(self.sf.num_pages_aux, 0)
 
     def test_reorganize_consolidates_aux_and_purges_deleted(self):
-        rids = []
-        for i in range(10):
-            rids.append(self.sf.insert({"id": i * 10, "name": f"item{i}", "price": float(i)}))
+        keys_inserted = list(range(10, 130, 10))
+        rids = {}
+        for k in keys_inserted:
+            rids[k] = self.sf.insert({"id": k, "name": f"item{k}", "price": float(k)})
 
-        self.sf.delete(rids[0])
-        self.sf.delete(rids[7])
+        self.assertTrue(any(r.file == "aux" for r in rids.values()))
+
+        deleted_keys = [10, 30, 80, 100]
+        for dk in deleted_keys:
+            self.assertTrue(self.sf.delete(rids[dk]))
+
         self.assertTrue(self.sf.needs_reorganization())
 
-        self.sf.reorganize()
+        self.sf.reorganize(fill_factor=0.9)
 
+        # a) aux queda vacío
         self.assertEqual(self.sf.num_pages_aux, 0)
+
+        # b) registros activos siguen encontrables tras reorganizar
+        active_keys = [k for k in keys_inserted if k not in deleted_keys]
+        for ak in active_keys:
+            res = self.sf.search_by_key(ak)
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0][0].file, "main")
+            self.assertEqual(res[0][1]["id"], ak)
+
+        # c) registros eliminados no aparecen tras reorganizar
+        for dk in deleted_keys:
+            self.assertEqual(self.sf.search_by_key(dk), [])
+
+        # d) needs_reorganization vuelve a ser False
         self.assertFalse(self.sf.needs_reorganization())
 
-        keys = []
+        # e) main sigue ordenado globalmente
+        global_keys = []
         for p_id in range(self.sf.num_pages_main):
             page = self.sf._read_page_main(p_id)
             for _, data in page.iter_active():
-                rec = self.sf.schema.deserialize(data)
-                keys.append(rec["id"])
+                global_keys.append(self.sf._record_key(data))
 
-        self.assertEqual(keys, sorted(keys))
-        self.assertNotIn(0, keys)
-        self.assertNotIn(70, keys)
-        self.assertEqual(len(keys), 8)
+        self.assertEqual(global_keys, active_keys)
+        self.assertEqual(global_keys, sorted(global_keys))
 
     def test_get_record_main_and_aux(self):
         rid_main = self.sf.insert({"id": 10, "name": "MainRec", "price": 10.5})
