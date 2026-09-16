@@ -87,6 +87,23 @@ class Page:
         self._set_header(num_slots=num_slots + 1, data_end=data_end + record_len)
         return num_slots
 
+    def insert_sorted_at(self, data: bytes, position: int, record_len: int) -> Optional[int]:
+        if not self.can_fit_new_slot(record_len):
+            return None
+
+        num_slots, data_end = self._get_header()
+        offset = data_end
+        self.buf[offset: offset + record_len] = data
+
+        for i in range(num_slots - 1, position - 1, -1):
+            src_pos = self._slot_offset_in_buf(i)
+            dst_pos = self._slot_offset_in_buf(i + 1)
+            self.buf[dst_pos: dst_pos + SLOT_SIZE] = self.buf[src_pos: src_pos + SLOT_SIZE]
+
+        self._write_slot(position, offset, record_len, is_deleted=0)
+        self._set_header(num_slots=num_slots + 1, data_end=data_end + record_len)
+        return position
+
     def get_record(self, slot_id: int) -> Optional[bytes]:
         if slot_id >= self.num_slots:
             return None
