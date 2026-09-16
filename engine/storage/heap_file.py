@@ -57,11 +57,26 @@ class Page:
         slot_dir_start = self.page_size - num_slots * SLOT_SIZE
         return slot_dir_start - data_end
 
+    def find_reusable_slot(self, record_len: int) -> Optional[int]:
+        for slot_id in range(self.num_slots):
+            offset, length, is_deleted = self._read_slot(slot_id)
+            if is_deleted and length >= record_len:
+                return slot_id
+        return None
+
     def can_fit_new_slot(self, record_len: int) -> bool:
         return self.free_space() >= record_len + SLOT_SIZE
 
     def insert_record(self, data: bytes) -> Optional[int]:
         record_len = len(data)
+
+        reusable = self.find_reusable_slot(record_len)
+        if reusable is not None:
+            offset, length, _ = self._read_slot(reusable)
+            self.buf[offset: offset + record_len] = data
+            self._write_slot(reusable, offset, length, is_deleted=0)
+            return reusable
+
         if not self.can_fit_new_slot(record_len):
             return None
 
@@ -95,6 +110,13 @@ class Page:
             if not is_deleted:
                 yield slot_id, bytes(self.buf[offset: offset + length])
 
+    def has_deleted_slots(self) -> bool:
+        for slot_id in range(self.num_slots):
+            _, _, is_deleted = self._read_slot(slot_id)
+            if is_deleted:
+                return True
+        return False
+
 
 class HeapFile:
     def __init__(self, filepath: str, schema_def: List[Tuple[Any, ...]], page_size: int = DEFAULT_PAGE_SIZE):
@@ -113,6 +135,9 @@ class HeapFile:
 
         self.num_pages = 0 if is_new else os.path.getsize(filepath) // page_size
 
+        self.free_pages: set = set()
+        self._scan_free_pages()
+
     def _read_page(self, page_id: int) -> Page:
         self._fh.seek(page_id * self.page_size)
         buf = self._fh.read(self.page_size)
@@ -123,21 +148,38 @@ class HeapFile:
         self._fh.write(page.buf)
         self._fh.flush()
 
+    def _scan_free_pages(self) -> None:
+        self.free_pages.clear()
+        for page_id in range(self.num_pages):
+            self._fh.seek(page_id * self.page_size)
+            header = self._fh.read(PAGE_HEADER_SIZE)
+            if len(header) < PAGE_HEADER_SIZE:
+                continue
+            num_slots, data_end = struct.unpack(PAGE_HEADER_FORMAT, header)
+            slot_dir_start = self.page_size - num_slots * SLOT_SIZE
+            free = slot_dir_start - data_end
+            record_needs = self.schema.record_size + SLOT_SIZE
+            if free >= record_needs or num_slots > 0:
+                self.free_pages.add(page_id)
+
     def _create_page(self) -> Page:
         page = Page(self.num_pages, self.page_size)
         self.num_pages += 1
         self._write_page(page)
+        self.free_pages.add(page.page_id)
         return page
 
     def insert(self, record: Dict[str, Any]) -> RID:
         data = self.schema.serialize(record)
 
-        if self.num_pages > 0:
-            last_page = self._read_page(self.num_pages - 1)
-            slot_id = last_page.insert_record(data)
+        for page_id in sorted(self.free_pages):
+            page = self._read_page(page_id)
+            slot_id = page.insert_record(data)
             if slot_id is not None:
-                self._write_page(last_page)
-                return RID(last_page.page_id, slot_id)
+                self._write_page(page)
+                if page.free_space() < self.schema.record_size + SLOT_SIZE and not page.has_deleted_slots():
+                    self.free_pages.discard(page_id)
+                return RID(page_id, slot_id)
 
         page = self._create_page()
         slot_id = page.insert_record(data)
@@ -160,6 +202,7 @@ class HeapFile:
         ok = page.delete_record(rid.slot_id)
         if ok:
             self._write_page(page)
+            self.free_pages.add(rid.page_id)
         return ok
 
     def scan(self) -> Generator[Tuple[RID, Dict[str, Any]], None, None]:
