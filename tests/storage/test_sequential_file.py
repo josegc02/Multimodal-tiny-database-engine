@@ -128,6 +128,38 @@ class TestSequentialFile(unittest.TestCase):
 
         self.assertTrue(self.sf.needs_reorganization())
 
+    def test_reorganize_empty(self):
+        self.sf.reorganize()
+        self.assertEqual(self.sf.num_pages_main, 0)
+        self.assertEqual(self.sf.num_pages_aux, 0)
+
+    def test_reorganize_consolidates_aux_and_purges_deleted(self):
+        rids = []
+        for i in range(10):
+            rids.append(self.sf.insert({"id": i * 10, "name": f"item{i}", "price": float(i)}))
+
+        self.sf.delete(rids[0])
+        self.sf.delete(rids[7])
+        self.assertTrue(self.sf.needs_reorganization())
+
+        self.sf.reorganize()
+
+        self.assertEqual(self.sf.num_pages_aux, 0)
+        self.assertFalse(self.sf.needs_reorganization())
+
+        keys = []
+        for p_id in range(self.sf.num_pages_main):
+            page = self.sf._read_page_main(p_id)
+            for _, data in page.iter_active():
+                rec = self.sf.schema.deserialize(data)
+                keys.append(rec["id"])
+
+        self.assertEqual(keys, sorted(keys))
+        self.assertNotIn(0, keys)
+        self.assertNotIn(70, keys)
+        self.assertEqual(len(keys), 8)
+
 
 if __name__ == "__main__":
     unittest.main()
+

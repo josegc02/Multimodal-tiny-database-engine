@@ -210,8 +210,48 @@ class SequentialFile:
 
         return (deleted_main + aux_count) / total > 0.30
 
-    def reorganize(self) -> None:
-        raise NotImplementedError("Pendiente: proceso de reorganización")
+    def reorganize(self, fill_factor: float = 0.9) -> None:
+        all_records: List[bytes] = []
+        for page_id in range(self.num_pages_main):
+            page = self._read_page_main(page_id)
+            for _, data in page.iter_active():
+                all_records.append(data)
+
+        for page_id in range(self.num_pages_aux):
+            page = self._read_page_aux(page_id)
+            for _, data in page.iter_active():
+                all_records.append(data)
+
+        all_records.sort(key=lambda d: self._record_key(d))
+
+        self._fh_main.truncate(0)
+        self._fh_main.seek(0)
+        self.num_pages_main = 0
+        self._page_bounds = []
+
+        self._fh_aux.truncate(0)
+        self._fh_aux.seek(0)
+        self.num_pages_aux = 0
+
+        if not all_records:
+            return
+
+        record_size = self.schema.record_size
+        max_capacity = (self.page_size - PAGE_HEADER_SIZE) // (record_size + SLOT_SIZE)
+        capacity_per_page = max(1, int(max_capacity * fill_factor))
+
+        current_page = self._create_page_main()
+        for data in all_records:
+            if current_page.num_slots >= capacity_per_page:
+                self._write_page_main(current_page)
+                self._page_bounds[current_page.page_id] = self._page_key_bounds(current_page)
+                current_page = self._create_page_main()
+
+            current_page.insert_sorted_at(data, current_page.num_slots, record_size)
+
+        if current_page.num_slots > 0:
+            self._write_page_main(current_page)
+            self._page_bounds[current_page.page_id] = self._page_key_bounds(current_page)
 
     def close(self) -> None:
         self._fh_main.close()
