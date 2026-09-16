@@ -211,6 +211,32 @@ class HeapFile:
             for slot_id, data in page.iter_active():
                 yield RID(page_id, slot_id), self.schema.deserialize(data)
 
+    def search_by_key(self, field: str, value: Any) -> List[Tuple[RID, Dict[str, Any]]]:
+        results = []
+        for rid, record in self.scan():
+            if record.get(field) == value:
+                results.append((rid, record))
+        return results
+
+    def stats(self) -> Dict[str, Any]:
+        active = 0
+        deleted = 0
+        for page_id in range(self.num_pages):
+            page = self._read_page(page_id)
+            for slot_id in range(page.num_slots):
+                _, _, is_deleted = page._read_slot(slot_id)
+                if is_deleted:
+                    deleted += 1
+                else:
+                    active += 1
+        return {
+            "num_pages": self.num_pages,
+            "active_records": active,
+            "deleted_slots": deleted,
+            "disk_bytes": self.num_pages * self.page_size,
+            "record_size": self.schema.record_size,
+        }
+
     def close(self) -> None:
         self._fh.close()
 
