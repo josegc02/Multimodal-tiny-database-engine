@@ -188,7 +188,27 @@ class SequentialFile:
         raise NotImplementedError("Pendiente: búsqueda binaria sobre páginas ordenadas")
 
     def needs_reorganization(self) -> bool:
-        raise NotImplementedError("Pendiente: condición de disparo de reorganización")
+        deleted_main = 0
+        active_main = 0
+        for page_id in range(self.num_pages_main):
+            page = self._read_page_main(page_id)
+            for slot_id in range(page.num_slots):
+                _, _, is_deleted = page._read_slot(slot_id)
+                if is_deleted:
+                    deleted_main += 1
+                else:
+                    active_main += 1
+
+        aux_count = 0
+        for page_id in range(self.num_pages_aux):
+            page = self._read_page_aux(page_id)
+            aux_count += sum(1 for _ in page.iter_active())
+
+        total = active_main + deleted_main + aux_count
+        if total == 0:
+            return False
+
+        return (deleted_main + aux_count) / total > 0.30
 
     def reorganize(self) -> None:
         raise NotImplementedError("Pendiente: proceso de reorganización")

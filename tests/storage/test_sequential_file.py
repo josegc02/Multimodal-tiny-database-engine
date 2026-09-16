@@ -100,6 +100,34 @@ class TestSequentialFile(unittest.TestCase):
         self.assertTrue(self.sf.delete(rid))
         self.assertIsNone(self.sf._page_bounds[0])
 
+    def test_needs_reorganization_empty(self):
+        self.assertFalse(self.sf.needs_reorganization())
+
+    def test_needs_reorganization_clean(self):
+        self.sf.insert({"id": 1, "name": "A", "price": 1.0})
+        self.sf.insert({"id": 2, "name": "B", "price": 2.0})
+        self.assertFalse(self.sf.needs_reorganization())
+
+    def test_needs_reorganization_by_deleted_records(self):
+        rids = []
+        for i in range(5):
+            rids.append(self.sf.insert({"id": i, "name": f"item{i}", "price": float(i)}))
+
+        # 0 borrados de 5 -> 0% <= 30%
+        self.assertFalse(self.sf.needs_reorganization())
+
+        # Borrar 2 registros -> 2 borrados / 5 total = 40% > 30%
+        self.sf.delete(rids[0])
+        self.sf.delete(rids[1])
+        self.assertTrue(self.sf.needs_reorganization())
+
+    def test_needs_reorganization_by_aux_overflow(self):
+        # Insertar 10 registros: 6 van a main y 4 a aux (4/10 = 40% > 30%)
+        for i in range(10):
+            self.sf.insert({"id": i * 10, "name": f"item{i}", "price": float(i)})
+
+        self.assertTrue(self.sf.needs_reorganization())
+
 
 if __name__ == "__main__":
     unittest.main()
