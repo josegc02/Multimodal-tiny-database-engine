@@ -57,6 +57,21 @@ class Page:
         slot_dir_start = self.page_size - num_slots * SLOT_SIZE
         return slot_dir_start - data_end
 
+    def can_fit_new_slot(self, record_len: int) -> bool:
+        return self.free_space() >= record_len + SLOT_SIZE
+
+    def insert_record(self, data: bytes) -> Optional[int]:
+        record_len = len(data)
+        if not self.can_fit_new_slot(record_len):
+            return None
+
+        num_slots, data_end = self._get_header()
+        offset = data_end
+        self.buf[offset: offset + record_len] = data
+        self._write_slot(num_slots, offset, record_len, is_deleted=0)
+        self._set_header(num_slots=num_slots + 1, data_end=data_end + record_len)
+        return num_slots
+
     def get_record(self, slot_id: int) -> Optional[bytes]:
         if slot_id >= self.num_slots:
             return None
@@ -64,6 +79,12 @@ class Page:
         if is_deleted:
             return None
         return bytes(self.buf[offset: offset + length])
+
+    def iter_active(self) -> Generator[Tuple[int, bytes], None, None]:
+        for slot_id in range(self.num_slots):
+            offset, length, is_deleted = self._read_slot(slot_id)
+            if not is_deleted:
+                yield slot_id, bytes(self.buf[offset: offset + length])
 
 
 class HeapFile:
@@ -99,6 +120,21 @@ class HeapFile:
         self._write_page(page)
         return page
 
+    def insert(self, record: Dict[str, Any]) -> RID:
+        data = self.schema.serialize(record)
+
+        if self.num_pages > 0:
+            last_page = self._read_page(self.num_pages - 1)
+            slot_id = last_page.insert_record(data)
+            if slot_id is not None:
+                self._write_page(last_page)
+                return RID(last_page.page_id, slot_id)
+
+        page = self._create_page()
+        slot_id = page.insert_record(data)
+        self._write_page(page)
+        return RID(page.page_id, slot_id)
+
     def get(self, rid: RID) -> Optional[Dict[str, Any]]:
         if rid.page_id >= self.num_pages:
             return None
@@ -107,6 +143,12 @@ class HeapFile:
         if data is None:
             return None
         return self.schema.deserialize(data)
+
+    def scan(self) -> Generator[Tuple[RID, Dict[str, Any]], None, None]:
+        for page_id in range(self.num_pages):
+            page = self._read_page(page_id)
+            for slot_id, data in page.iter_active():
+                yield RID(page_id, slot_id), self.schema.deserialize(data)
 
     def close(self) -> None:
         self._fh.close()
