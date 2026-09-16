@@ -165,7 +165,24 @@ class SequentialFile:
         raise NotImplementedError("Pendiente: se implementa junto con la búsqueda binaria")
 
     def delete(self, rid: RID) -> bool:
-        raise NotImplementedError("Pendiente: eliminación lazy")
+        if rid.file == "main":
+            if rid.page_id < 0 or rid.page_id >= self.num_pages_main:
+                return False
+            page = self._read_page_main(rid.page_id)
+            ok = page.delete_record(rid.slot_id)
+            if ok:
+                self._write_page_main(page)
+                self._page_bounds[rid.page_id] = self._page_key_bounds(page)
+            return ok
+        elif rid.file == "aux":
+            if rid.page_id < 0 or rid.page_id >= self.num_pages_aux:
+                return False
+            page = self._read_page_aux(rid.page_id)
+            ok = page.delete_record(rid.slot_id)
+            if ok:
+                self._write_page_aux(page)
+            return ok
+        return False
 
     def search_by_key(self, value: Any) -> List[Tuple[RID, Dict[str, Any]]]:
         raise NotImplementedError("Pendiente: búsqueda binaria sobre páginas ordenadas")
