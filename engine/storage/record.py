@@ -14,9 +14,10 @@ _TYPE_FORMATS = {
 class RID:
     page_id: int
     slot_id: int
+    file: str = "main"  # "main" o "aux" -> para SequentialFile. HeapFile usa el default.
 
     def __str__(self) -> str:
-        return f"RID(page={self.page_id}, slot={self.slot_id})"
+        return f"RID(file={self.file}, page={self.page_id}, slot={self.slot_id})"
 
 
 class Schema:
