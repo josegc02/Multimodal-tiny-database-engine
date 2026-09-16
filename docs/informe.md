@@ -44,6 +44,9 @@ Diseñado para tablas con orden físico por clave primaria o de ordenamiento, co
 * **Eliminación Lógica**:
   - Marca `is_deleted = 1` en el slot sin compactación inmediata física y actualiza `_page_bounds` para mantener la coherencia de los límites del archivo.
 
+* **Inestabilidad de RIDs en `main` (Trade-off de Diseño)**:
+  - A diferencia del Heap File, los RIDs devueltos por operaciones de inserción en `main` no son estables frente a inserciones posteriores en la misma página, dado que el reordenamiento del directorio de slots desplaza el `slot_id` de los registros existentes. Por diseño, el acceso recomendado a este storage es mediante `search_by_key`, no mediante almacenamiento externo persistente de RIDs.
+
 * **Disparador de Reorganización (>30%)**:
   - `needs_reorganization()` monitorea el porcentaje de registros obsoletos o desbordados: `(deleted_main + aux_count) / total > 0.30`. Al superarse este umbral, se requiere compactación.
 
