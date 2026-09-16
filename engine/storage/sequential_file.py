@@ -162,7 +162,21 @@ class SequentialFile:
         return self._insert_into_aux(data)
 
     def get(self, rid: RID) -> Optional[Dict[str, Any]]:
-        raise NotImplementedError("Pendiente: se implementa junto con la búsqueda binaria")
+        if rid.file == "main":
+            if rid.page_id < 0 or rid.page_id >= self.num_pages_main:
+                return None
+            page = self._read_page_main(rid.page_id)
+        elif rid.file == "aux":
+            if rid.page_id < 0 or rid.page_id >= self.num_pages_aux:
+                return None
+            page = self._read_page_aux(rid.page_id)
+        else:
+            return None
+
+        data = page.get_record(rid.slot_id)
+        if data is None:
+            return None
+        return self.schema.deserialize(data)
 
     def delete(self, rid: RID) -> bool:
         if rid.file == "main":
@@ -184,8 +198,42 @@ class SequentialFile:
             return ok
         return False
 
+    def _binary_search_in_page(self, page: Page, value: Any) -> Optional[int]:
+        lo, hi = 0, page.num_slots - 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            offset, length, is_deleted = page._read_slot(mid)
+            mid_key = self._record_key(bytes(page.buf[offset: offset + length]))
+            if mid_key == value:
+                if is_deleted:
+                    return None
+                return mid
+            elif mid_key < value:
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return None
+
     def search_by_key(self, value: Any) -> List[Tuple[RID, Dict[str, Any]]]:
-        raise NotImplementedError("Pendiente: búsqueda binaria sobre páginas ordenadas")
+        if self.num_pages_main > 0:
+            target_page_id = self._locate_page_for_key(value)
+            if 0 <= target_page_id < self.num_pages_main:
+                page = self._read_page_main(target_page_id)
+                slot_id = self._binary_search_in_page(page, value)
+                if slot_id is not None:
+                    data = page.get_record(slot_id)
+                    if data is not None:
+                        rid = RID(target_page_id, slot_id, file="main")
+                        return [(rid, self.schema.deserialize(data))]
+
+        for page_id in range(self.num_pages_aux):
+            page = self._read_page_aux(page_id)
+            for slot_id, data in page.iter_active():
+                if self._record_key(data) == value:
+                    rid = RID(page_id, slot_id, file="aux")
+                    return [(rid, self.schema.deserialize(data))]
+
+        return []
 
     def needs_reorganization(self) -> bool:
         deleted_main = 0

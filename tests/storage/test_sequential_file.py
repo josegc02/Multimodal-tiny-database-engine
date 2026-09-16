@@ -159,7 +159,75 @@ class TestSequentialFile(unittest.TestCase):
         self.assertNotIn(70, keys)
         self.assertEqual(len(keys), 8)
 
+    def test_get_record_main_and_aux(self):
+        rid_main = self.sf.insert({"id": 10, "name": "MainRec", "price": 10.5})
+        rec_main = self.sf.get(rid_main)
+        self.assertIsNotNone(rec_main)
+        self.assertEqual(rec_main["id"], 10)
+        self.assertEqual(rec_main["name"], "MainRec")
+
+        # Llenar página 0 de main para forzar a aux
+        for i in range(1, 6):
+            self.sf.insert({"id": 10 + i, "name": f"Main{i}", "price": float(i)})
+
+        rid_aux = self.sf.insert({"id": 99, "name": "AuxRec", "price": 99.0})
+        self.assertEqual(rid_aux.file, "aux")
+
+        rec_aux = self.sf.get(rid_aux)
+        self.assertIsNotNone(rec_aux)
+        self.assertEqual(rec_aux["id"], 99)
+        self.assertEqual(rec_aux["name"], "AuxRec")
+
+    def test_get_invalid_or_deleted_returns_none(self):
+        rid = self.sf.insert({"id": 10, "name": "A", "price": 1.0})
+        self.assertIsNone(self.sf.get(RID(page_id=99, slot_id=0, file="main")))
+        self.assertIsNone(self.sf.get(RID(page_id=0, slot_id=99, file="main")))
+        self.assertIsNone(self.sf.get(RID(page_id=99, slot_id=0, file="aux")))
+
+        self.sf.delete(rid)
+        self.assertIsNone(self.sf.get(rid))
+
+    def test_search_by_key_empty(self):
+        self.assertEqual(self.sf.search_by_key(42), [])
+
+    def test_search_by_key_in_main(self):
+        for val in [30, 10, 20]:
+            self.sf.insert({"id": val, "name": f"item{val}", "price": float(val)})
+
+        results = self.sf.search_by_key(20)
+        self.assertEqual(len(results), 1)
+        rid, rec = results[0]
+        self.assertEqual(rid.file, "main")
+        self.assertEqual(rec["id"], 20)
+        self.assertEqual(rec["name"], "item20")
+
+    def test_search_by_key_in_aux(self):
+        for i in range(6):
+            self.sf.insert({"id": i * 10, "name": f"main{i}", "price": float(i)})
+
+        rid_aux = self.sf.insert({"id": 99, "name": "overflow", "price": 99.0})
+        self.assertEqual(rid_aux.file, "aux")
+
+        results = self.sf.search_by_key(99)
+        self.assertEqual(len(results), 1)
+        rid, rec = results[0]
+        self.assertEqual(rid.file, "aux")
+        self.assertEqual(rec["id"], 99)
+
+    def test_search_by_key_deleted_returns_empty(self):
+        rid = self.sf.insert({"id": 50, "name": "ToDelete", "price": 50.0})
+        self.assertEqual(len(self.sf.search_by_key(50)), 1)
+
+        self.sf.delete(rid)
+        self.assertEqual(self.sf.search_by_key(50), [])
+
+    def test_search_by_key_nonexistent(self):
+        self.sf.insert({"id": 10, "name": "A", "price": 1.0})
+        self.sf.insert({"id": 20, "name": "B", "price": 2.0})
+        self.assertEqual(self.sf.search_by_key(999), [])
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
