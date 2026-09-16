@@ -1,0 +1,3 @@
+# Dependencias principales del proyecto
+matplotlib>=3.8.0
+tabulate>=0.9.0
