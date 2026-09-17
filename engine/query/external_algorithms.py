@@ -12,6 +12,7 @@ from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass
 import heapq
 import hashlib
+from itertools import islice
 import math
 from pathlib import Path
 import tempfile
@@ -445,3 +446,100 @@ def external_hash_group_by(
             if run.count:
                 yield from _group_partition(run, fields, specs, ws, 0)
             run.path.unlink(missing_ok=True)
+
+
+def _probe_join(table: dict, probe: _Run, fields: tuple, swapped: bool, ws: _Workspace):
+    with closing(ws.read(probe)) as rows:
+        for row in rows:
+            for match in table.get(_key(row, fields), ()):
+                # Mantener orientación izquierda/derecha aunque se construya S.
+                yield (row, match) if swapped else (match, row)
+
+
+def _build_join_table(rows: Iterable[Row], fields: tuple, ws: _Workspace) -> dict:
+    table = {}
+    count = 0
+    for row in rows:
+        table.setdefault(_key(row, fields), []).append(row)
+        count += 1
+        ws.observe(count + 1)  # Construcción + registro corriente del probe.
+    return table
+
+
+def _block_join(build: _Run, probe: _Run, build_fields: tuple, probe_fields: tuple,
+                swapped: bool, ws: _Workspace):
+    """Fallback acotado para skew: hash por bloques y relectura del probe."""
+    ws.stats.skew_fallbacks += 1
+    with closing(ws.read(build)) as rows:
+        while True:
+            table = _build_join_table(islice(rows, ws.config.hash_capacity), build_fields, ws)
+            if not table:
+                break
+            yield from _probe_join(table, probe, probe_fields, swapped, ws)
+            table.clear()
+
+
+def _join_partition(left: _Run, right: _Run, left_fields: tuple, right_fields: tuple,
+                    ws: _Workspace, depth: int):
+    if not left.count or not right.count:
+        return
+    swapped = right.count < left.count
+    build, probe = (right, left) if swapped else (left, right)
+    build_fields, probe_fields = (right_fields, left_fields) if swapped else (left_fields, right_fields)
+    if build.count <= ws.config.hash_capacity:
+        with closing(ws.read(build)) as rows:
+            table = _build_join_table(rows, build_fields, ws)
+        yield from _probe_join(table, probe, probe_fields, swapped, ws)
+        return
+    if depth >= ws.config.max_partition_depth:
+        yield from _block_join(build, probe, build_fields, probe_fields, swapped, ws)
+        return
+
+    ws.stats.repartitions += 1
+    with closing(ws.read(left)) as rows:
+        left_parts = _partition(rows, left_fields, ws, depth + 1)
+    with closing(ws.read(right)) as rows:
+        right_parts = _partition(rows, right_fields, ws, depth + 1)
+    left.path.unlink()
+    right.path.unlink()
+    for lpart, rpart in zip(left_parts, right_parts):
+        # Si no se redujo el lado de construcción, más hashing no garantiza
+        # progreso (por ejemplo, una sola clave repetida en ambas relaciones).
+        if min(lpart.count, rpart.count) >= build.count:
+            swap_child = rpart.count < lpart.count
+            bpart, ppart = (rpart, lpart) if swap_child else (lpart, rpart)
+            bfields, pfields = (right_fields, left_fields) if swap_child else (left_fields, right_fields)
+            yield from _block_join(bpart, ppart, bfields, pfields, swap_child, ws)
+        else:
+            yield from _join_partition(lpart, rpart, left_fields, right_fields, ws, depth + 1)
+        lpart.path.unlink(missing_ok=True)
+        rpart.path.unlink(missing_ok=True)
+
+
+def external_hash_join(
+    left_rows: Iterable[Row], right_rows: Iterable[Row],
+    left_on: str | Sequence[str], right_on: str | Sequence[str], *,
+    config: BufferConfig | None = None, stats: ExecutionStats | None = None,
+) -> Iterator[tuple[Row, Row]]:
+    """INNER equijoin Grace: particiona ambas fuentes con la misma hp.
+
+    Construye una tabla sobre la partición menor y sondea con la otra. Cuenta
+    registros, no claves distintas, al limitar el buffer de construcción. Las
+    claves duplicadas producen todas las combinaciones; NULL no coincide con NULL.
+    Si hay skew usa bloques de tamaño (B-2)*R y relee la partición opuesta.
+    Devuelve pares (registro_izquierdo, registro_derecho) para no perder columnas
+    homónimas. No materializa el resultado ni garantiza un orden de salida.
+    """
+    config = config or BufferConfig()
+    stats = stats if stats is not None else ExecutionStats()
+    left_fields, right_fields = _fields(left_on), _fields(right_on)
+    if len(left_fields) != len(right_fields):
+        raise ValueError("JOIN requiere igual cantidad de campos en ambos lados")
+    with tempfile.TemporaryDirectory(prefix="external-join-", dir=config.temp_dir) as directory:
+        ws = _Workspace(directory, config, stats)
+        left_parts = _partition(left_rows, left_fields, ws, 0, skip_nulls=True)
+        right_parts = _partition(right_rows, right_fields, ws, 0, skip_nulls=True)
+        for left, right in zip(left_parts, right_parts):
+            yield from _join_partition(left, right, left_fields, right_fields, ws, 0)
+            left.path.unlink(missing_ok=True)
+            right.path.unlink(missing_ok=True)
