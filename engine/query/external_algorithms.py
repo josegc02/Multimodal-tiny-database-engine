@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass
 import heapq
+import hashlib
 import math
 from pathlib import Path
 import tempfile
@@ -201,6 +202,7 @@ def _sort(rows: Iterable[Row], order: tuple[OrderKey, ...], ws: _Workspace) -> I
         chunk.sort(key=lambda item: _SortKey(item, order))
         runs.append(ws.write(chunk))
         chunk.clear()
+    row = None  # No retener el último registro de entrada durante las mezclas.
     ws.stats.initial_runs += len(runs)
 
     while len(runs) > 1:
@@ -235,3 +237,211 @@ def external_sort(
     order = _order_keys(order_by)
     with tempfile.TemporaryDirectory(prefix="external-sort-", dir=config.temp_dir) as directory:
         yield from _sort(rows, order, _Workspace(directory, config, stats))
+
+
+@dataclass(frozen=True)
+class Aggregate:
+    """COUNT(*) usa field=None; los demás agregados requieren un campo."""
+
+    function: str = "count"
+    field: str | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "function", self.function.lower())
+        if self.function not in {"count", "sum", "avg", "min", "max"}:
+            raise ValueError("Agregado no soportado")
+        if self.function != "count" and not self.field:
+            raise ValueError("El agregado requiere un campo")
+
+
+def _fields(fields: str | Sequence[str], *, allow_empty: bool = False) -> tuple[str, ...]:
+    result = (fields,) if isinstance(fields, str) else tuple(fields)
+    if ((not result and not allow_empty)
+            or any(not isinstance(item, str) or not item for item in result)
+            or len(set(result)) != len(result)):
+        raise ValueError("Se requieren campos válidos y sin repeticiones")
+    return result
+
+
+def _aggregates(fields: tuple[str, ...], aggregates: Mapping[str, Aggregate] | None) -> dict:
+    result = dict(aggregates) if aggregates is not None else {"count": Aggregate()}
+    if not result or any(
+        not isinstance(alias, str) or not alias or alias in fields or not isinstance(spec, Aggregate)
+        for alias, spec in result.items()
+    ):
+        raise ValueError("Los agregados necesitan aliases únicos que no sean campos de agrupación")
+    return result
+
+
+def _new_state(specs: Mapping[str, Aggregate]) -> list:
+    # [cantidad no nula, acumulado]; una cantidad fija de valores por grupo.
+    return [[0, None] for _ in specs]
+
+
+def _accumulate(state: list, row: Row, specs: Mapping[str, Aggregate]) -> None:
+    for slot, spec in zip(state, specs.values()):
+        value = 1 if spec.field is None else row[spec.field]
+        if value is None:
+            continue
+        slot[0] += 1
+        if spec.function == "count":
+            continue
+        if spec.function in {"sum", "avg"}:
+            if type(value) not in (int, float):
+                raise TypeError("SUM y AVG requieren valores numéricos")
+            if type(value) is float and not math.isfinite(value):
+                raise ValueError("SUM y AVG requieren valores finitos")
+            slot[1] = value if slot[1] is None else slot[1] + value
+        elif slot[1] is None:
+            slot[1] = value
+        elif spec.function == "min":
+            slot[1] = min(slot[1], value)
+        else:
+            slot[1] = max(slot[1], value)
+
+
+def _group_result(key: tuple, state: list, fields: tuple, specs: Mapping[str, Aggregate]) -> dict:
+    result = dict(zip(fields, key))
+    for (alias, spec), (count, value) in zip(specs.items(), state):
+        result[alias] = count if spec.function == "count" else (
+            value / count if spec.function == "avg" and count else value
+        )
+    return result
+
+
+def _ordered_groups(rows: Iterable[Row], fields: tuple, specs: dict) -> Iterator[Row]:
+    current = None
+    state = None
+    for row in rows:
+        key = _key(row, fields)
+        if state is None or key != current:
+            if state is not None:
+                yield _group_result(current, state, fields, specs)
+            current = key
+            state = _new_state(specs)
+        _accumulate(state, row, specs)
+    if state is not None:
+        yield _group_result(current, state, fields, specs)
+    elif not fields:
+        yield _group_result((), _new_state(specs), fields, specs)
+
+
+def streaming_group_by(
+    rows: Iterable[Row], group_by: str | Sequence[str],
+    aggregates: Mapping[str, Aggregate] | None = None,
+) -> Iterator[Row]:
+    """Agrupa con un solo estado si la fuente garantiza claves contiguas.
+
+    Se usa para recorridos de índices ordenados y para el fallback por sorting.
+    None forma un grupo; COUNT(campo), SUM, AVG, MIN y MAX ignoran valores None.
+    """
+    fields = _fields(group_by, allow_empty=True)
+    yield from _ordered_groups(rows, fields, _aggregates(fields, aggregates))
+
+
+def _partition_id(key: tuple, fanout: int, depth: int) -> int:
+    # hp estable y distinto por nivel. La tabla de construcción usa hash(tuple)
+    # de Python como h2 y compara las claves completas al resolver colisiones.
+    canonical = []
+    for value in key:
+        if value is None:
+            canonical.append(("null",))
+        elif type(value) in (int, float):
+            numerator, denominator = value.as_integer_ratio() if type(value) is float else (value, 1)
+            canonical.append(("n", numerator, denominator))
+        else:
+            canonical.append(("s", value))
+    data = repr((depth, canonical)).encode("utf-8")
+    return int.from_bytes(hashlib.blake2b(data, digest_size=8).digest(), "big") % fanout
+
+
+def _partition(
+    rows: Iterable[Row], fields: tuple, ws: _Workspace, depth: int, *, skip_nulls: bool = False,
+) -> list[_Run]:
+    paths = [ws.path() for _ in range(ws.config.fan_in)]
+    counts = [0] * len(paths)
+    with ExitStack() as stack:
+        writers = [stack.enter_context(ws.open(path, "wb")) for path in paths]
+        for row in rows:
+            key = _key(row, fields)
+            if skip_nulls and any(value is None for value in key):
+                continue
+            position = _partition_id(key, len(paths), depth)
+            write_record(writers[position], row)
+            counts[position] += 1
+            ws.stats.records_written += 1
+            ws.observe(1)
+    ws.stats.partitions += len(paths)
+    return [_Run(path, count) for path, count in zip(paths, counts)]
+
+
+def _group_partition(run: _Run, fields: tuple, specs: dict, ws: _Workspace, depth: int) -> Iterator[Row]:
+    table = {}
+    overflow = False
+    with closing(ws.read(run)) as rows:
+        for row in rows:
+            key = _key(row, fields)
+            if key not in table:
+                if len(table) == ws.config.hash_capacity:
+                    overflow = True
+                    break
+                table[key] = _new_state(specs)
+            _accumulate(table[key], row, specs)
+            ws.observe(len(table) + 1)
+    if not overflow:
+        for key, state in table.items():
+            yield _group_result(key, state, fields, specs)
+        return
+    table.clear()
+    row = None  # Liberar la entrada que provocó overflow antes de recursar.
+
+    if depth >= ws.config.max_partition_depth:
+        ws.stats.skew_fallbacks += 1
+        with closing(ws.read(run)) as rows, closing(_sort(rows, _order_keys(fields), ws)) as ordered:
+            yield from _ordered_groups(ordered, fields, specs)
+        return
+
+    ws.stats.repartitions += 1
+    with closing(ws.read(run)) as rows:
+        children = _partition(rows, fields, ws, depth + 1)
+    run.path.unlink()
+    no_progress = max(child.count for child in children) == run.count
+    for child in children:
+        if not child.count:
+            child.path.unlink()
+            continue
+        if no_progress:
+            ws.stats.skew_fallbacks += 1
+            with closing(ws.read(child)) as rows, closing(_sort(rows, _order_keys(fields), ws)) as ordered:
+                yield from _ordered_groups(ordered, fields, specs)
+        else:
+            yield from _group_partition(child, fields, specs, ws, depth + 1)
+        child.path.unlink(missing_ok=True)
+
+
+def external_hash_group_by(
+    rows: Iterable[Row], group_by: str | Sequence[str],
+    aggregates: Mapping[str, Aggregate] | None = None, *,
+    config: BufferConfig | None = None, stats: ExecutionStats | None = None,
+) -> Iterator[Row]:
+    """GROUP BY: B-1 particiones y tablas de hasta (B-2)*R grupos en memoria.
+
+    Reparticiona si hay demasiados grupos. Ante skew sin progreso o al alcanzar
+    max_partition_depth, usa sorting externo y un acumulador por grupo. La salida
+    no promete orden. Sin campos de agrupación produce un agregado global.
+    """
+    config = config or BufferConfig()
+    stats = stats if stats is not None else ExecutionStats()
+    fields = _fields(group_by, allow_empty=True)
+    specs = _aggregates(fields, aggregates)
+    if not fields:
+        stats.peak_buffered_records = max(stats.peak_buffered_records, 2)
+        yield from _ordered_groups(rows, fields, specs)
+        return
+    with tempfile.TemporaryDirectory(prefix="external-group-", dir=config.temp_dir) as directory:
+        ws = _Workspace(directory, config, stats)
+        partitions = _partition(rows, fields, ws, 0)
+        for run in partitions:
+            if run.count:
+                yield from _group_partition(run, fields, specs, ws, 0)
+            run.path.unlink(missing_ok=True)
