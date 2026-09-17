@@ -161,6 +161,12 @@ class ExtendibleHash:
             target.add_record((key, rid))
 
 
+    def search(self, key: Key) -> List[RID]:
+        """Devuelve todos los RIDs asociados a la clave, o una lista vacía."""
+        bucket = self.directory[self._index(self._hash_key(key))]
+        return [rid for stored_key, rid in bucket.entries() if stored_key == key]
+
+
     def bulk_load(self, entries: Iterable[Entry], *, replace: bool = False) -> int:
         """Carga pares (clave, RID) desde un iterable, sin materializar su entrada.
 
