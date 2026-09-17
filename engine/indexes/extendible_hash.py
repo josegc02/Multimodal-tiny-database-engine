@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import math
 from dataclasses import dataclass, field
 from typing import Iterator, List, Optional, Tuple, Union
 
@@ -49,6 +51,23 @@ class ExtendibleHash:
         self.clear()
 
 
+    @staticmethod
+    def _hash_key(key: Key) -> int:
+        # No usar hash(str): su semilla cambia entre procesos de Python.
+        if type(key) is str:
+            encoded = b"s:" + key.encode("utf-8")
+        elif type(key) is int:
+            encoded = f"n:{key}/1".encode("ascii")
+        elif type(key) is float:
+            if not math.isfinite(key):
+                raise ValueError("La clave float debe ser finita")
+            numerator, denominator = key.as_integer_ratio()
+            encoded = f"n:{numerator}/{denominator}".encode("ascii")
+        else:
+            raise TypeError("La clave debe ser int, float o str")
+        return int.from_bytes(hashlib.blake2b(encoded, digest_size=8).digest(), "big")
+
+
     def clear(self) -> None:
         """Vacía el índice sin modificar el storage."""
         self.global_depth = 1
@@ -59,6 +78,10 @@ class ExtendibleHash:
     def __len__(self) -> int:
         """Número de pares (clave, RID), sin contar dos veces buckets compartidos."""
         return self._size
+
+
+    def _index(self, hashed: int) -> int:
+        return hashed & ((1 << self.global_depth) - 1)
 
 
     def stats(self) -> dict:
