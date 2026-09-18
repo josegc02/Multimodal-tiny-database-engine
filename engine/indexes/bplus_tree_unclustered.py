@@ -90,6 +90,22 @@ class BPlusTreeUnclustered:
         self.key_field = key_field
         return count
 
+    @staticmethod
+    def resolve(rid: RID, storage):
+        """Resuelve el RID en el storage indicado; devuelve None si fue eliminado."""
+        if not isinstance(rid, RID):
+            raise TypeError("Se requiere un RID")
+        return storage.get(rid)
+
+    def search_records(self, key, storage, *, key_field=None):
+        field = key_field or self.key_field
+        records = []
+        for rid in self.search(key):
+            record = self.resolve(rid, storage)
+            if record is not None and (field is None or record[field] == key):
+                records.append(record)
+        return records
+
     def close(self):
         self.tree.close()
 

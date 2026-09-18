@@ -119,7 +119,9 @@ usan una cota conservadora, sin materializar datos durante la planificación.
 Para índices ordenados se registra un `IndexInfo` con `ordered=True` y un índice
 que implemente `iter_ordered(reverse=False)`, además de búsqueda y reconstrucción.
 También admite `clustered`, `lookup_pages` y la ubicación de NULLs. El extendible
-hash solo ofrece igualdad; el B+ incompleto no se anuncia como índice ordenado.
+hash solo ofrece igualdad. `BPlusTreeUnclustered` implementa el contrato ordenado
+y se puede registrar con `IndexInfo(..., ordered=True)`; sus RIDs se resuelven
+en el storage registrado. Véase [Índices B+](bplus_indexes.md).
 Las expresiones calculadas o entradas transformadas usan operadores externos.
 Los temporales se serializan con `struct`, sin `pickle`. `BufferConfig` limita
 la cantidad lógica de registros del buffer, no los bytes de objetos Python.

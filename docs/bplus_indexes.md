@@ -34,3 +34,39 @@ quedan sin referencias y no se reutilizan aún. No hay WAL, recuperación ante
 caídas ni coordinación de escritores concurrentes.
 
 Pruebas: `python -m unittest discover -s tests -v`.
+
+## No agrupado — issue #4
+
+`BPlusTreeUnclustered(filepath, key_type="int", order=4, key_size=64,
+page_size=4096)` usa la misma estructura y rebalanceo, pero guarda **clave y RID**
+en las hojas. `order` es el máximo de claves `M`; `key_size` se usa para strings.
+Los RIDs codifican página y slot (31 bits cada uno) y archivo `main`/`aux`.
+Admite claves repetidas, incluso si ocupan varias hojas; no repite el mismo par.
+
+- `insert(key, rid)`: devuelve si insertó un par nuevo.
+- `search(key)`: lista de todos los RIDs de esa clave.
+- `delete(key, rid=None)`: elimina un par o toda la clave y devuelve la cantidad.
+- `range_search(lower, upper)`: RIDs del rango; `iter_range` produce pares.
+- `iter_ordered(reverse=False)`: RIDs de todos los registros en orden de clave.
+- `resolve(rid, storage)`: obtiene el registro real con `storage.get`, o `None`
+  si fue eliminado. `search_records(key, storage, key_field=...)` resuelve todos
+  los resultados; el campo permite descartar referencias cuyo valor no coincide.
+- `bulk_load_from_storage(storage, key_field, replace=True)`: carga los registros
+  activos de heap/secuencial. `bulk_load(entries, replace=False)` acepta pares.
+
+Con `replace=True` se construye un archivo temporal y se reemplaza el índice
+solo al completar la carga. Un fallo de la fuente conserva el índice anterior.
+La carga incremental conserva los pares ya insertados si falla la fuente.
+El llamador mantiene abierto el storage y debe sincronizar el índice después
+de cambios directos: en particular, los RIDs del secuencial pueden moverse.
+Al reabrir debe usar el mismo tipo y tamaño de clave. `key_field` de la fuente
+no se persiste: puede proporcionarse a `search_records` o establecerse de nuevo
+con `bulk_load_from_storage`.
+
+Para SQL se registra con
+`IndexInfo("nombre", "campo", indice, ordered=True)` en `Catalog`. El optimizador
+puede usarlo para igualdad, ORDER BY, GROUP BY y joins, según costo. El catálogo
+reconstruye el índice después de INSERT/DELETE para actualizar los RIDs.
+
+La rama #4 se basa en la implementación de #3. Integrar primero #3 en main y
+después #4 evita duplicar cambios del motor compartido.
