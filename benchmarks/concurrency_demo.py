@@ -55,6 +55,7 @@ def demo_race_condition_sin_locks():
         log(f"  {nombre} comienza")
         for _ in range(ITERACIONES):
             contador.incrementar()
+        time.sleep(0.001)
         log(f"  {nombre} termina")
 
     t1 = threading.Thread(target=worker, args=("Hilo-1",))
@@ -235,8 +236,74 @@ def demo_transacciones_concurrentes():
         os.remove(db_path)
 
 
+# =====================================================================
+# Escenario 4: deteccion de deadlocks
+# =====================================================================
+
 def demo_deadlock():
-    raise NotImplementedError("Pendiente")
+    """Dos transacciones se esperan mutuamente.
+
+    T1 tiene A, quiere B.
+    T2 tiene B, quiere A.
+    Deadlock.
+
+    El LockManager lo detecta y aborta una transaccion.
+    """
+    log("Iniciando escenario 4: deteccion de deadlocks")
+
+    lm = LockManager()
+    errores = []
+
+    def transaccion_1():
+        try:
+            lm.acquire(1, "cuenta:A", LockMode.EXCLUSIVE)
+            log("  T1 obtiene lock sobre A")
+
+            time.sleep(0.1)  # Esperar a que T2 tome B
+
+            log("  T1 intenta lock sobre B")
+            lm.acquire(1, "cuenta:B", LockMode.EXCLUSIVE, timeout=5)
+            log("  T1 obtiene lock sobre B")
+
+        except RuntimeError as e:
+            log(f"  T1 ABORTADA: {e}")
+            errores.append("T1")
+        finally:
+            lm.release_all(1)
+
+    def transaccion_2():
+        try:
+            lm.acquire(2, "cuenta:B", LockMode.EXCLUSIVE)
+            log("  T2 obtiene lock sobre B")
+
+            time.sleep(0.1)  # Esperar a que T1 tome A
+
+            log("  T2 intenta lock sobre A")
+            lm.acquire(2, "cuenta:A", LockMode.EXCLUSIVE, timeout=5)
+            log("  T2 obtiene lock sobre A")
+
+        except RuntimeError as e:
+            log(f"  T2 ABORTADA: {e}")
+            errores.append("T2")
+        finally:
+            lm.release_all(2)
+
+    t1 = threading.Thread(target=transaccion_1, daemon=True)
+    t2 = threading.Thread(target=transaccion_2, daemon=True)
+
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    if t1.is_alive() or t2.is_alive():
+        log("  TIMEOUT: alguna transaccion quedo colgada (deadlock no detectado)")
+        return
+
+    if errores:
+        log(f"  CORRECTO: deadlock detectado y resuelto (abortada: {errores[0]})")
+    else:
+        log("  ERROR: no se detecto deadlock, algo esta mal")
 
 
 # =====================================================================
@@ -258,10 +325,7 @@ def main():
     demo_transacciones_concurrentes()
 
     print("\n--- Escenario 4: Deteccion de deadlock ---")
-    try:
-        demo_deadlock()
-    except NotImplementedError:
-        print("  (Pendiente)")
+    demo_deadlock()
 
 
 
