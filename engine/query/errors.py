@@ -7,7 +7,9 @@ class SQLError(ValueError):
         self.offset = offset
         self.line = line
         self.column = column
-        super().__init__(message)
+        lines = source.split("\n")
+        text = lines[line - 1] if line <= len(lines) else ""
+        super().__init__(f"{message} (línea {line}, columna {column})\n{text}\n{' ' * (column - 1)}^")
 
 
 class SQLLexError(SQLError):
