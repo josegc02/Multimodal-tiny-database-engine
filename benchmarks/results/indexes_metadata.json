@@ -1,0 +1,90 @@
+{
+  "timestamp_utc": "2026-09-18T19:06:59.221669+00:00",
+  "python": "3.14.7 (main, Aug 10 2026, 07:46:56) [GCC 16.1.1 20260728]",
+  "platform": "Linux-7.2.4-arch1-2-x86_64-with-glibc2.44",
+  "machine": "x86_64",
+  "seed": 42,
+  "sizes": [
+    1000,
+    10000,
+    100000
+  ],
+  "repetitions": 1,
+  "elapsed_seconds": 1231.0147070880012,
+  "matplotlib": "3.11.2",
+  "page_size": 4096,
+  "bplus_max_keys": 64,
+  "hash_bucket_capacity": 64,
+  "hash_max_depth": 16,
+  "equality_queries": 100,
+  "range_queries": 20,
+  "range_width": "[k, min(N-1, k+100)], hasta 101 claves",
+  "update_pairs": 500,
+  "space_state": "Antes de actualizaciones; agrupado incluye registros completos",
+  "extra_disk": "Agrupado: archivo - N*36; no agrupado: archivo completo",
+  "memory_estimate": "sys.getsizeof del grafo retenido del hash, referencias únicas; no RSS",
+  "NA": "Rango de Hash no soportado; disco de Hash no persistido; RAM B+ no medida",
+  "durability": "B+ escribe/flush; Hash en memoria, sin snapshot. Ninguno fuerza fsync",
+  "structural_stats": [
+    {
+      "tecnica": "B+ agrupado",
+      "n_registros": 1000,
+      "allocated_node_pages": 22
+    },
+    {
+      "tecnica": "B+ no agrupado",
+      "n_registros": 1000,
+      "allocated_node_pages": 22
+    },
+    {
+      "tecnica": "Extendible Hash",
+      "n_registros": 1000,
+      "global_depth": 5,
+      "directory_size": 32,
+      "num_buckets": 21,
+      "overflow_buckets": 0,
+      "entries": 1000,
+      "load_factor": 0.7440476190476191
+    },
+    {
+      "tecnica": "B+ agrupado",
+      "n_registros": 10000,
+      "allocated_node_pages": 224
+    },
+    {
+      "tecnica": "B+ no agrupado",
+      "n_registros": 10000,
+      "allocated_node_pages": 224
+    },
+    {
+      "tecnica": "Extendible Hash",
+      "n_registros": 10000,
+      "global_depth": 8,
+      "directory_size": 256,
+      "num_buckets": 249,
+      "overflow_buckets": 0,
+      "entries": 10000,
+      "load_factor": 0.6275100401606426
+    },
+    {
+      "tecnica": "B+ agrupado",
+      "n_registros": 100000,
+      "allocated_node_pages": 2303
+    },
+    {
+      "tecnica": "B+ no agrupado",
+      "n_registros": 100000,
+      "allocated_node_pages": 2303
+    },
+    {
+      "tecnica": "Extendible Hash",
+      "n_registros": 100000,
+      "global_depth": 12,
+      "directory_size": 4096,
+      "num_buckets": 2081,
+      "overflow_buckets": 0,
+      "entries": 100000,
+      "load_factor": 0.7508409418548775
+    }
+  ]
+}

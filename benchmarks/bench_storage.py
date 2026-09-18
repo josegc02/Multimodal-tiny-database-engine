@@ -94,4 +94,11 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Conclusiones de la corrida oficial: se completan después de medir los CSV reales.
+# Conclusiones medidas el 2026-09-18, semilla 42, una corrida, /tmp en tmpfs:
+# 1. En N=100000, Heap insertó en 2.296409 s y Secuencial en 1459.402136 s:
+#    el tiempo del Secuencial fue 635.51 veces el de Heap en esta carga aleatoria.
+# 2. Las 100 búsquedas tardaron 21.079896 s (Heap) y 8.013247 s (Secuencial):
+#    Heap consumió 2.63 veces el tiempo de búsqueda del Secuencial.
+# 3. Ambos ocuparon 4141056 bytes antes de borrar; no hubo ventaja de espacio.
+# 4. Tras borrar 35%, reorganize() tomó 0.374408 s; excluye el costo del borrado.
+#    La corrida completa tomó 1513.480775 s. No son tiempos de un SSD físico.

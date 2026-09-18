@@ -1,0 +1,11 @@
+tecnica        | n_registros | tiempo_insercion_seg | tiempo_busqueda_seg | espacio_disco_bytes | tiempo_reorganizacion_seg
+---------------+-------------+----------------------+---------------------+---------------------+--------------------------
+HeapFile       | 1000        | 0.022871             | 0.212630            | 45056               | NA                       
+SequentialFile | 1000        | 0.149530             | 0.069035            | 45056               | 0.003647                 
+HeapFile       | 10000       | 0.237460             | 2.118676            | 417792              | NA                       
+SequentialFile | 10000       | 14.286807            | 0.804472            | 417792              | 0.036352                 
+HeapFile       | 100000      | 2.296409             | 21.079896           | 4141056             | NA                       
+SequentialFile | 100000      | 1459.402136          | 8.013247            | 4141056             | 0.374408                 
+
+Resultados: /home/emhp24/Desktop/UTEC/2026-2/base-de-datos-2/proyectos/Multimodal-tiny-database-engine/benchmarks/results
+Duración completa: 1513.481 s
