@@ -1,0 +1,14 @@
+tecnica         | n_registros | tiempo_construccion_seg | tiempo_igualdad_seg | tiempo_rango_seg | espacio_disco_bytes | espacio_adicional_disco_bytes | memoria_estimada_bytes | tiempo_actualizaciones_seg
+----------------+-------------+-------------------------+---------------------+------------------+---------------------+-------------------------------+------------------------+---------------------------
+B+ agrupado     | 1000        | 0.880939                | 0.010016            | 0.007414         | 94208               | 58208                         | NA                     | 1.662218                  
+B+ no agrupado  | 1000        | 0.475835                | 0.008788            | 0.004595         | 94208               | 94208                         | NA                     | 0.812609                  
+Extendible Hash | 1000        | 0.007724                | 0.000463            | NA               | NA                  | NA                            | 251051                 | 0.015140                  
+B+ agrupado     | 10000       | 34.242905               | 0.015316            | 0.009359         | 921600              | 561600                        | NA                     | 5.001173                  
+B+ no agrupado  | 10000       | 17.996046               | 0.014537            | 0.006495         | 921600              | 921600                        | NA                     | 2.722059                  
+Extendible Hash | 10000       | 0.086604                | 0.000479            | NA               | NA                  | NA                            | 2504675                | 0.012707                  
+B+ agrupado     | 100000      | 698.397620              | 0.018516            | 0.010128         | 9437184             | 5837184                       | NA                     | 10.963724                 
+B+ no agrupado  | 100000      | 442.521788              | 0.018218            | 0.007554         | 9437184             | 9437184                       | NA                     | 7.480661                  
+Extendible Hash | 100000      | 1.530415                | 0.000952            | NA               | NA                  | NA                            | 27037259               | 0.023630                  
+
+Resultados: /home/emhp24/Desktop/UTEC/2026-2/base-de-datos-2/proyectos/Multimodal-tiny-database-engine/benchmarks/results
+Duración completa: 1231.015 s

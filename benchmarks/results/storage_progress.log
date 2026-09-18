@@ -1,0 +1,6 @@
+[storage] N=1000: HeapFile
+[storage] N=1000: SequentialFile
+[storage] N=10000: HeapFile
+[storage] N=10000: SequentialFile
+[storage] N=100000: HeapFile
+[storage] N=100000: SequentialFile

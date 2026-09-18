@@ -1,0 +1,9 @@
+[indexes] N=1000: B+ agrupado
+[indexes] N=1000: B+ no agrupado
+[indexes] N=1000: Extendible Hash
+[indexes] N=10000: B+ agrupado
+[indexes] N=10000: B+ no agrupado
+[indexes] N=10000: Extendible Hash
+[indexes] N=100000: B+ agrupado
+[indexes] N=100000: B+ no agrupado
+[indexes] N=100000: Extendible Hash
