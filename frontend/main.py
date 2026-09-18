@@ -40,7 +40,7 @@ class Aplicacion(tk.Tk):
 
         # Crear los 4 paneles
         self.panel_archivos = PanelArchivos(self)
-        self.panel_consultas = PanelConsultas(self)
+        self.panel_consultas = PanelConsultas(self, on_ejecutar=None)
         self.panel_resultados = PanelResultados(self)
         self.panel_plan = PanelPlanEjecucion(self)
 
