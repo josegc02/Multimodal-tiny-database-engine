@@ -2,8 +2,7 @@
 # concurrency/lock_manager.py
 
 from enum import Enum
-from typing import Dict
-
+from typing import Dict, List, Tuple
 
 class LockMode(Enum):
     """Tipos de lock soportados."""
@@ -51,6 +50,25 @@ class LockManager:
 
         if not self.lock_table[resource]:
             del self.lock_table[resource]
+
+    def release_all(self, tx_id: int) -> None:
+        """Libera TODOS los locks de una transacción.
+
+        Se llama al hacer commit o rollback.
+        """
+        for resource in list(self.lock_table.keys()):
+            if tx_id in self.lock_table[resource]:
+                del self.lock_table[resource][tx_id]
+            if not self.lock_table[resource]:
+                del self.lock_table[resource]
+
+    def get_locks(self, tx_id: int) -> List[Tuple[str, LockMode]]:
+        """Devuelve todos los locks que tiene una transacción."""
+        result = []
+        for resource, holders in self.lock_table.items():
+            if tx_id in holders:
+                result.append((resource, holders[tx_id]))
+        return result
 
     # --- Helpers internos ---
 
