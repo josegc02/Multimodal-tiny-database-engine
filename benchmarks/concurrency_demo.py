@@ -7,13 +7,16 @@ Demuestra:
 4. Deteccion de deadlocks
 """
 
+import os
 import sys
+import tempfile
 import threading
 import time
-import faulthandler
-faulthandler.dump_traceback_later(10, exit=True)
 
 from engine.concurrency.lock_manager import LockManager, LockMode
+from engine.concurrency.transaction_manager import TransactionManager
+from engine.query.catalog import Catalog
+from engine.storage.heap_file import HeapFile
 
 
 def _timestamp() -> str:
@@ -131,11 +134,105 @@ def demo_race_condition_con_locks():
 
 
 # =====================================================================
-# Escenarios pendientes
+# Escenario 3: transacciones concurrentes sobre el mismo registro
 # =====================================================================
 
 def demo_transacciones_concurrentes():
-    raise NotImplementedError("Pendiente")
+    """Dos transacciones reales modifican el mismo registro en un HeapFile.
+
+    Cada transaccion:
+    1. Abre una transaccion (BEGIN).
+    2. Adquiere lock exclusivo sobre el registro.
+    3. Lee el saldo actual.
+    4. Simula un poco de trabajo.
+    5. Escribe el saldo actualizado.
+    6. Hace commit.
+
+    Con locks, el saldo final debe ser exactamente 700.
+    Sin locks, habria lost update.
+    """
+    log("Iniciando escenario 3: transacciones concurrentes")
+
+    # 1. Crear storage limpio
+    db_path = os.path.join(tempfile.gettempdir(), "demo_concurrente.db")
+    if os.path.exists(db_path):
+        os.remove(db_path)
+
+    schema = [("id", "int"), ("saldo", "int")]
+    storage = HeapFile(db_path, schema)
+    storage.insert({"id": 1, "saldo": 1000})
+
+    catalog = Catalog()
+    catalog.register_table("cuentas", storage)
+
+    lm = LockManager()
+    tm = TransactionManager(lm, storage=catalog)
+
+    # 2. Funcion de una transaccion
+    def transaccion(monto, nombre):
+        tx_id = tm.begin()
+        log(f"  {nombre} inicia tx {tx_id}")
+
+        # Lock exclusivo sobre el registro
+        lm.acquire(tx_id, "cuentas:1", LockMode.EXCLUSIVE)
+        tx = tm.get_transaction(tx_id)
+        tx.add_lock("cuentas:1", LockMode.EXCLUSIVE)
+
+        # Leer saldo actual
+        filas = list(storage.scan())
+        rid = filas[0][0]
+        saldo_actual = filas[0][1]["saldo"]
+        log(f"  {nombre} lee saldo = {saldo_actual}")
+
+        # Simular trabajo (esto fuerza la race condition si no hay lock)
+        time.sleep(0.05)
+
+        # Escribir saldo actualizado
+        storage.delete(rid)
+        storage.insert({"id": 1, "saldo": saldo_actual - monto})
+        log(f"  {nombre} escribe saldo = {saldo_actual - monto}")
+
+        # Registrar en undo_log para rollback
+        tx.add_operation({
+            "op": "UPDATE",
+            "table": "cuentas",
+            "rid": rid,
+            "old": {"id": 1, "saldo": saldo_actual},
+        })
+
+        tm.commit(tx_id)
+        log(f"  {nombre} confirma tx {tx_id}")
+
+    # 3. Lanzar dos transacciones concurrentes
+    t1 = threading.Thread(target=transaccion, args=(100, "T1"), daemon=True)
+    t2 = threading.Thread(target=transaccion, args=(200, "T2"), daemon=True)
+
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    if t1.is_alive() or t2.is_alive():
+        log("  TIMEOUT: alguna transaccion se quedo colgada")
+        storage.close()
+        return
+
+    # 4. Verificar saldo final
+    filas = list(storage.scan())
+    saldo_final = filas[0][1]["saldo"]
+    esperado = 1000 - 100 - 200
+
+    log(f"  Saldo esperado: {esperado}")
+    log(f"  Saldo obtenido: {saldo_final}")
+
+    if saldo_final == esperado:
+        log(f"  CORRECTO: las transacciones se serializaron bien")
+    else:
+        log(f"  ERROR: lost update detectado (diferencia: {saldo_final - esperado})")
+
+    storage.close()
+    if os.path.exists(db_path):
+        os.remove(db_path)
 
 
 def demo_deadlock():
@@ -158,10 +255,7 @@ def main():
     demo_race_condition_con_locks()
 
     print("\n--- Escenario 3: Transacciones concurrentes ---")
-    try:
-        demo_transacciones_concurrentes()
-    except NotImplementedError:
-        print("  (Pendiente)")
+    demo_transacciones_concurrentes()
 
     print("\n--- Escenario 4: Deteccion de deadlock ---")
     try:
