@@ -1,8 +1,12 @@
-from __future__ import annotations #nolose
-import os # I/O
+"""B+ paginado. M es el máximo de claves (M+1 hijos por nodo interno)."""
+
+from __future__ import annotations
+import math
+import hashlib
+import os
 import struct
-from engine.storage.record import RID, Schema # ID
-from typing import Any, List, Optional, Tuple #tipos
+from engine.storage.record import RID, Schema
+from typing import Any, List, Tuple
 
 BPLUS_HEADER_FORMAT = ">qq??qqqq?"
 BPLUS_HEADER_SIZE = struct.calcsize(BPLUS_HEADER_FORMAT)
@@ -18,6 +22,8 @@ RID_SLOT_BITS = 31
 RID_PAGE_BITS = 31
 RID_SLOT_MASK = (1 << RID_SLOT_BITS) - 1
 RID_PAGE_MASK = (1 << RID_PAGE_BITS) - 1
+LAYOUT_MAGIC = b"BPT2"
+LAYOUT_SIZE = 36
 
 class BplusHeader_file: 
     def __init__(self, M: int, root_pos: int, overflow_state: bool, underflow_state: bool, exception_pos: int,
@@ -46,6 +52,13 @@ class BplusNode:
         
 
 class BPlusTree:
+    """Índice de claves únicas: hojas con page_id agrupado o RID no agrupado.
+
+    BPlusTreeClustered especializa las hojas para guardar registros completos.
+    El almacenamiento usa struct y páginas fijas; no ofrece recuperación ante
+    caídas durante una escritura ni acceso concurrente al mismo archivo.
+    """
+    leaf_records = False
     def __init__(
         self,
         filename: str,
@@ -63,6 +76,10 @@ class BPlusTree:
             raise ValueError(f"key_field '{key_field}' no existe en el schema")
 
         self._configure_key_layout()
+        if type(M) is not int or M < 2:
+            raise ValueError("M debe ser un entero >= 2")
+        if type(page_size) is not int or page_size < BPLUS_HEADER_SIZE + LAYOUT_SIZE:
+            raise ValueError("page_size insuficiente para el header")
 
         #nuestro estandar de creacion/lectura del archivo
         is_new = not os.path.exists(filename)
@@ -70,13 +87,16 @@ class BPlusTree:
             os.makedirs(os.path.dirname(filename), exist_ok=True)
         mode = "w+b" if is_new else "r+b"
         
-        self._fh = open(filename, mode) #OTRO ATRIBUTO!
+        self._fh = open(filename, mode)
 
 
-        if not is_new: #es decir, si no es nuevo, o sea, si existia, lees el header
-            self.header = self._read_header()
-        else: #creas el header con valores iniciales 
-            self.header = BplusHeader_file(
+        try:
+            if not is_new:
+                self.header = self._read_header()
+                if self.header.is_clustered != is_clustered:
+                    raise ValueError("El modo agrupado/no agrupado no coincide con el archivo")
+            else:
+                self.header = BplusHeader_file(
                 M=M,
                 root_pos=-1,
                 overflow_state=False,
@@ -86,16 +106,30 @@ class BPlusTree:
                 page_size=page_size,
                 number_pages=1,
                 is_clustered=is_clustered,
-            )
-            self._write_header()
-        self._configure_node_layout()
+                )
+            self._configure_node_layout()
+            if is_new:
+                self._fh.truncate(page_size)
+                self._write_header()
+            elif os.fstat(self._fh.fileno()).st_size < self.header.number_pages * self.header.page_size:
+                raise ValueError("Archivo B+ truncado")
+        except Exception:
+            self._fh.close()
+            raise
 
     def _read_header(self):
         self._fh.seek(0)
         buf = self._fh.read(BPLUS_HEADER_SIZE)
         if len(buf) != BPLUS_HEADER_SIZE:
             raise ValueError("Archivo B+ tree invalido: header incompleto")
+        layout = self._fh.read(LAYOUT_SIZE)
+        if layout != LAYOUT_MAGIC + self._layout_signature():
+            raise ValueError("Formato B+ antiguo o schema/tipo de hoja incompatible; reconstruye el índice")
         return BplusHeader_file(*struct.unpack(BPLUS_HEADER_FORMAT, buf))
+
+    def _layout_signature(self):
+        layout = (self.schema.fields, self.schema.types, self.schema.sizes, self.key_field, self.leaf_records)
+        return hashlib.sha256(repr(layout).encode("utf-8")).digest()
 
     def _write_header(self):
         self._fh.seek(0)
@@ -111,6 +145,7 @@ class BPlusTree:
             self.header.number_pages,
             self.header.is_clustered,
         ))
+        self._fh.write(LAYOUT_MAGIC + self._layout_signature())
         self._fh.flush()
 
     def _configure_key_layout(self):
@@ -130,6 +165,11 @@ class BPlusTree:
             raise ValueError(f"Tipo de key no soportado: {self.key_type}")
 
     def _configure_node_layout(self):
+        if self.header.M < 2 or self.header.page_size < BPLUS_HEADER_SIZE + LAYOUT_SIZE or self.header.number_pages < 1:
+            raise ValueError("Header B+ invalido")
+        for pos in (self.header.root_pos, self.header.min_node_pos):
+            if pos != EMPTY_CHILD and not 1 <= pos < self.header.number_pages:
+                raise ValueError("Puntero de header fuera del archivo")
         self.node_body_size = (self.header.M * (CHILD_SIZE + self.key_size)) + CHILD_SIZE
         self.node_size = NODE_HEADER_SIZE + self.node_body_size
         if self.node_size > self.header.page_size:
@@ -166,25 +206,35 @@ class BPlusTree:
 
     def _normalize_key(self, key: Any) -> Any:
         if self.key_type == "int":
-            return int(key)
+            if type(key) is not int or not -(1 << 63) <= key < (1 << 63):
+                raise ValueError("La clave debe ser un entero de 64 bits")
+            return key
         if self.key_type == "float":
+            if type(key) not in (int, float) or not math.isfinite(key):
+                raise ValueError("La clave debe ser numérica y finita")
             return float(key)
-        return str(key)[:self.key_size]
+        if not isinstance(key, str) or "\x00" in key or len(key.encode("utf-8")) > self.key_size:
+            raise ValueError("La clave debe caber en el campo UTF-8, sin NUL")
+        return key
 
     def _validate_node_shape(self, node: BplusNode) -> None:
         if not 0 <= node.fullness <= self.header.M:
             raise ValueError("fullness invalido")
-        if len(node.keys) > self.header.M:
-            raise ValueError("demasiadas keys en el nodo")
+        if len(node.keys) != node.fullness or node.keys != sorted(node.keys):
+            raise ValueError("Claves de nodo inconsistentes o desordenadas")
         if len(node.childs) > self.header.M + 1:
             raise ValueError("demasiados childs en el nodo")
 
     def _read_node(self, page_id: int) -> BplusNode:
+        if not 1 <= page_id < self.header.number_pages:
+            raise ValueError("Puntero de nodo fuera del archivo")
         self._fh.seek(self._page_offset(page_id))
         header = self._fh.read(NODE_HEADER_SIZE)
         if len(header) != NODE_HEADER_SIZE:
             raise ValueError("Nodo B+ invalido: header incompleto")
         fullness, is_leaf, next_leaf = struct.unpack(NODE_HEADER_FORMAT, header)
+        if not 0 <= fullness <= self.header.M:
+            raise ValueError("Cantidad de claves inválida en disco")
         childs = []
         keys = []
         for i in range(self.header.M):
@@ -222,10 +272,12 @@ class BPlusTree:
 
     def _pack_leaf_payload(self, payload: Any) -> int:
         if self.header.is_clustered:
-            if type(payload) is not int or payload < 0:
+            if type(payload) is not int or not 0 <= payload < (1 << 63):
                 raise ValueError("En indice clustered el payload de hoja debe ser un page_id entero")
             return payload
         if type(payload) is int:
+            if not 0 <= payload < (1 << 63):
+                raise ValueError("RID empaquetado fuera de rango")
             return payload
         if not isinstance(payload, RID):
             raise TypeError("En indice unclustered el payload de hoja debe ser RID o int empaquetado")
@@ -235,7 +287,8 @@ class BPlusTree:
             file_flag = AUX_FILE_FLAG
         else:
             raise ValueError("RID invalido: file debe ser main o aux")
-        if not 0 <= payload.page_id <= RID_PAGE_MASK or not 0 <= payload.slot_id <= RID_SLOT_MASK:
+        if (type(payload.page_id) is not int or type(payload.slot_id) is not int
+                or not 0 <= payload.page_id <= RID_PAGE_MASK or not 0 <= payload.slot_id <= RID_SLOT_MASK):
             raise ValueError("RID fuera del rango empaquetable")
         return (file_flag << (RID_PAGE_BITS + RID_SLOT_BITS)) | (payload.page_id << RID_SLOT_BITS) | payload.slot_id
 
@@ -295,7 +348,7 @@ class BPlusTree:
     def _refresh_internal_node(self, node: BplusNode) -> None:
         if node.isLeaf:
             return
-        children = node.childs[:node.fullness + 1]
+        children = [child for child in node.childs if child != EMPTY_CHILD]
         node.keys = [self._first_key(child) for child in children[1:]]
         node.fullness = len(node.keys)
         node.childs = children
@@ -343,6 +396,7 @@ class BPlusTree:
 
         if parent.fullness <= self.header.M:
             self._write_node(parent_pos, parent)
+            self._refresh_path(path)
             return
 
         promote_index = parent.fullness // 2
@@ -433,23 +487,6 @@ class BPlusTree:
         self._set_clean_state()
         return True
 
-    # en el header del archivo te indica en donde ocurrio la excepcion
-    def split(self):
-        if self.header.exception_pos == EMPTY_CHILD:
-            return False
-        return True
-
-    def handle_underflow(self, path=None):
-        if path is None:
-            return False
-        return self._rebalance_after_delete(path)
-
-    def borrow(self):
-        pass
-
-    def fusion(self):
-        pass
-    
     def insert(self, key: Any, payload: Any) -> bool:
         return self.add(key, payload)
 
@@ -473,6 +510,26 @@ class BPlusTree:
             pos = node.childs[0]
             node = self._read_node(pos)
         return pos
+
+    def iter_range(self, lower=None, upper=None, *, include_lower=True, include_upper=True):
+        """Pares (clave, payload), O(altura + hojas del rango), límites opcionales."""
+        lower = self._normalize_key(lower) if lower is not None else None
+        upper = self._normalize_key(upper) if upper is not None else None
+        if lower is not None and upper is not None and lower > upper:
+            return
+        pos = self._leftmost_leaf_pos() if lower is None else self._find_leaf_pos(lower)
+        while pos != EMPTY_CHILD:
+            leaf = self._read_node(pos)
+            for key, payload in zip(leaf.keys, leaf.childs[:leaf.fullness]):
+                if lower is not None and (key < lower or key == lower and not include_lower):
+                    continue
+                if upper is not None and (key > upper or key == upper and not include_upper):
+                    return
+                yield key, self._unpack_leaf_payload(payload)
+            pos = leaf.nextLeaf
+
+    def range_search(self, lower=None, upper=None, **kwargs):
+        return list(self.iter_range(lower, upper, **kwargs))
 
     def _leaf_entries(self) -> List[Tuple[Any, int]]:
         entries = []
@@ -506,6 +563,7 @@ class BPlusTree:
             if node.isLeaf and node.fullness == 0:
                 self.header.root_pos = EMPTY_CHILD
                 self.header.min_node_pos = EMPTY_CHILD
+            self._write_node(pos, node)
             self._write_header()
             return
 
@@ -595,21 +653,28 @@ class BPlusTree:
 
     def delete(self, key: Any) -> bool:
         key = self._normalize_key(key)
-        entries = self._leaf_entries()
-        kept = [(stored_key, payload) for stored_key, payload in entries if stored_key != key]
-        if len(kept) == len(entries):
+        path = self._find_leaf_path(key)
+        if not path or key not in path[-1][1].keys:
             return False
-
-        self._reset_tree_storage()
-        for stored_key, payload in kept:
-            self.add(stored_key, payload)
+        pos, leaf = path[-1]
+        index = leaf.keys.index(key)
+        leaf.keys.pop(index)
+        leaf.childs.pop(index)
+        leaf.fullness -= 1
+        leaf.childs = leaf.childs[:leaf.fullness] + [EMPTY_CHILD]
+        self.header.underflow_state = True
+        self.header.exception_pos = pos
+        self._write_header()
+        self._write_node(pos, leaf)
+        self._rebalance_after_delete(path)
         self.header.min_node_pos = self._leftmost_leaf_pos()
         self._set_clean_state()
         return True
 
     def close(self):
-        self._write_header()
-        self._fh.close()
+        if not self._fh.closed:
+            self._write_header()
+            self._fh.close()
 
     def __enter__(self):
         return self
