@@ -14,6 +14,7 @@ from engine.indexes import ExtendibleHash
 from engine.query import (Catalog, LogicalPlanner, SQLExecutor, SQLSemanticError,
                           SQLExecutionError, parse)
 from engine.query.external_algorithms import BufferConfig, ExecutionStats
+from engine.query.planner import TableStats
 from engine.storage.heap_file import HeapFile
 from engine.storage.sequential_file import SequentialFile
 
@@ -124,6 +125,8 @@ class TestSQLStorageIntegration(SQLTestCase):
     def test_real_index_is_used_and_or_does_not_lose_rows(self):
         storage, catalog, executor = self.database(indexed=True)
         index = catalog.table("productos").indexes["id"].index
+        # Simular una tabla grande y selectiva: el índice debe ganar por costo.
+        catalog.table("productos").statistics = TableStats(1000, 100, {"id": 1000})
         stats = ExecutionStats()
         with patch.object(storage, "scan", side_effect=AssertionError("No debería hacer scan")), patch.object(index, "search", wraps=index.search) as search:
             self.assertEqual(list(executor.execute("SELECT nombre FROM productos WHERE 2=id AND precio > 10", stats=stats)), [{"nombre": "Libro"}])

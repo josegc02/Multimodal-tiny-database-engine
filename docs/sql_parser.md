@@ -98,10 +98,29 @@ rows = list(executor.execute("SELECT * FROM products WHERE price >= 10"))
 print(executor.explain("SELECT * FROM products ORDER BY price"))
 ```
 
-Se pueden registrar índices con `indexes={"id": index}`. Una igualdad sobre una
-columna con índice vigente utiliza sus RIDs; los demás filtros se evalúan sobre
-el recorrido del storage. `ORDER BY`, `GROUP BY` y joins por igualdad utilizan
-los algoritmos externos incorporados desde la rama de algoritmos externos.
+Se pueden registrar índices con `indexes={"id": index}`. El adaptador
+`sql_optimizer.py` conecta el plan SQL con `QueryPlanner`, incorporado desde la
+rama `6-algoritmos-externos-sort-group-by-join`. Compara costos estimados de
+páginas: igualdad mediante índice o scan; join mediante búsquedas en el índice
+derecho o external hash join; orden y agrupación mediante un índice ordenado
+compatible o los algoritmos externos. En empates conserva el scan/algoritmo
+externo. `explain()` incluye `physical` con algoritmo, costo y motivo para cada
+operador elegible; no recorre las tablas. La decisión se vuelve a calcular al
+ejecutar para respetar índices invalidados.
+
+El catálogo calcula filas, páginas y cardinalidades al registrar o refrescar una
+tabla. Conserva hasta 1024 valores distintos por columna; las cardinalidades
+mayores se subestiman. Se pueden proporcionar estimaciones con
+`register_table(..., statistics=TableStats(rows, pages, distinct_values))`.
+Las escrituras SQL refrescan estas estadísticas. Los costos son aproximaciones:
+los filtros intermedios conservan la estimación de entrada y los joins encadenados
+usan una cota conservadora, sin materializar datos durante la planificación.
+
+Para índices ordenados se registra un `IndexInfo` con `ordered=True` y un índice
+que implemente `iter_ordered(reverse=False)`, además de búsqueda y reconstrucción.
+También admite `clustered`, `lookup_pages` y la ubicación de NULLs. El extendible
+hash solo ofrece igualdad; el B+ incompleto no se anuncia como índice ordenado.
+Las expresiones calculadas o entradas transformadas usan operadores externos.
 Los temporales se serializan con `struct`, sin `pickle`. `BufferConfig` limita
 la cantidad lógica de registros del buffer, no los bytes de objetos Python.
 
@@ -128,7 +147,7 @@ la línea original y un indicador `^` donde se detectó el error.
 ## Pruebas
 
 ```bash
-python -m unittest tests.query.test_lexer tests.query.test_parser tests.query.test_sql_execution -v
+python -m unittest discover -s tests -v
 ```
 
 Las pruebas verifican tokens, escapes, comentarios, ASTs, precedencia, joins,
@@ -137,3 +156,6 @@ Las cuatro formas del enunciado (`SELECT WHERE`, `SELECT ORDER BY/GROUP BY`,
 `INSERT` y `DELETE`) se ejecutan sobre heap y secuencial. También se comparan
 consultas con SQLite y se comprueba el uso real del índice, la actualización de
 RIDs, los fallos de escritura y la limpieza de temporales con buffers pequeños.
+Las pruebas del optimizador cambian estadísticas y costos para comprobar ambas
+rutas de ejecución (índice/externo), filtros residuales, índices inválidos y el
+contrato de índices ordenados mediante un índice de prueba.

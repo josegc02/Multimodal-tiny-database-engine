@@ -10,11 +10,12 @@ from engine.query.catalog import Catalog
 from engine.query.expressions import evaluate, truth
 from engine.query.external_algorithms import (
     Aggregate, BufferConfig, ExecutionStats, OrderKey,
-    external_hash_group_by, external_hash_join, external_sort,
+    external_hash_group_by, external_hash_join, external_sort, streaming_group_by,
 )
 from engine.query.logical_plan import LogicalPlan, LogicalPlanner, column_key, normalize_insert
 from engine.query.errors import SQLExecutionError
 from engine.query.parser import parse
+from engine.query.sql_optimizer import SQLOptimizer, base_scan
 from engine.storage.record import RID
 
 
@@ -48,9 +49,10 @@ class SQLExecutor:
         self.catalog = catalog
         self.config = config or BufferConfig()
         self.planner = LogicalPlanner(catalog)
+        self.optimizer = SQLOptimizer(catalog, self.config)
 
     def explain(self, sql):
-        return self.planner.plan(parse(sql)).to_dict()
+        return self.optimizer.explain(self.planner.plan(parse(sql)))
 
     def execute(self, sql_or_plan, *, stats: ExecutionStats | None = None):
         plan = self.planner.plan(parse(sql_or_plan)) if isinstance(sql_or_plan, str) else sql_or_plan
@@ -63,39 +65,44 @@ class SQLExecutor:
             return iter(({"affected_rows": self._delete(plan, stats)},))
         return self._run(plan, stats)
 
-    def _lookup(self, expression, qualifier, binding):
-        if isinstance(expression, ast.BinaryOp) and expression.operator == "AND":
-            return self._lookup(expression.left, qualifier, binding) or self._lookup(expression.right, qualifier, binding)
-        if isinstance(expression, ast.BinaryOp) and expression.operator == "=":
-            for column, literal in ((expression.left, expression.right), (expression.right, expression.left)):
-                if (isinstance(column, ast.ColumnRef) and column.table == qualifier
-                        and isinstance(literal, ast.Literal) and type(literal.value) in (int, float, str)):
-                    index = binding.indexes.get(column.name)
-                    if index is not None and index.valid:
-                        return index.index, literal.value
-        return None
-
     def _scan(self, plan, stats):
         table = plan.get("table")
         binding = self.catalog.table(table.name)
-        lookup = self._lookup(plan.get("predicate"), table.alias or table.name, binding)
-        if lookup is None:
+        physical = self.optimizer.choice(plan)
+        if physical is None or physical.algorithm == "sequential_scan":
             for rid, record in binding.storage.scan():
                 yield _context(table, rid, record)
         else:
-            index, value = lookup
             stats.index_probes += 1
-            for rid in index.search(value):
+            for rid in physical.index.index.search(physical.value):
                 record = binding.storage.get(rid)
                 if record is not None:
                     yield _context(table, rid, record)
+
+    def _ordered_source(self, source, physical):
+        scan = base_scan(source)
+        table = scan.get("table")
+        binding = self.catalog.table(table.name)
+        predicates = []
+        while source.operation == "Filter":
+            predicates.append(source.get("predicate"))
+            source = source.children[0]
+        for rid in physical.index.index.iter_ordered(reverse=physical.reverse):
+            record = binding.storage.get(rid)
+            if record is not None:
+                row = _context(table, rid, record)
+                if all(truth(evaluate(predicate, row)) is True for predicate in predicates):
+                    yield row
 
     def _run(self, plan, stats):
         operation = plan.operation
         if operation == "Scan":
             yield from self._scan(plan, stats)
             return
-        with closing(self._run(plan.children[0], stats)) as rows:
+        physical = self.optimizer.choice(plan)
+        ordered = physical is not None and physical.algorithm in ("index_order_scan", "index_group_by")
+        source = self._ordered_source(plan.children[0], physical) if ordered else self._run(plan.children[0], stats)
+        with closing(source) as rows:
             if operation == "Filter":
                 for row in rows:
                     if truth(evaluate(plan.get("predicate"), row)) is True:
@@ -107,6 +114,9 @@ class SQLExecutor:
                 offset, limit = plan.get("offset"), plan.get("limit")
                 yield from islice(rows, offset, None if limit is None else offset + limit)
             elif operation == "Sort":
+                if ordered:
+                    yield from rows
+                    return
                 order = plan.get("order_by")
                 keyed = _computed(rows, tuple(item.expression for item in order), "$sort")
                 keys = [OrderKey(f"$sort{i}", item.direction == "DESC",
@@ -124,8 +134,12 @@ class SQLExecutor:
                         yield result
                 specs = {f"$agg{i}": Aggregate(call.function, None if isinstance(call.argument, ast.Star) else f"$value{i}")
                          for i, call in enumerate(aggregates)}
-                yield from external_hash_group_by(prepared(), tuple(f"$group{i}" for i in range(len(groups))),
-                                                  specs or {"$unused": Aggregate()}, config=self.config, stats=stats)
+                fields = tuple(f"$group{i}" for i in range(len(groups)))
+                specs = specs or {"$unused": Aggregate()}
+                if ordered:
+                    yield from streaming_group_by(prepared(), fields, specs)
+                else:
+                    yield from external_hash_group_by(prepared(), fields, specs, config=self.config, stats=stats)
             elif operation == "Distinct":
                 expressions = plan.get("expressions")
                 keys = tuple(f"$distinct{i}" for i in range(len(expressions)))
@@ -139,6 +153,21 @@ class SQLExecutor:
                             previous = key
             elif operation == "Join":
                 pairs = plan.get("pairs")
+                if physical.algorithm == "index_nested_loop_join":
+                    table = plan.children[1].get("table")
+                    binding = self.catalog.table(table.name)
+                    for left_row in rows:
+                        value = evaluate(pairs[0][0], left_row)
+                        if value is None:
+                            continue
+                        stats.index_probes += 1
+                        for rid in physical.index.index.search(value):
+                            record = binding.storage.get(rid)
+                            if record is not None:
+                                row = {**left_row, **_context(table, rid, record)}
+                                if truth(evaluate(plan.get("predicate"), row)) is True:
+                                    yield row
+                    return
                 with closing(self._run(plan.children[1], stats)) as right:
                     with closing(external_hash_join(rows, right, tuple(column_key(l) for l, _ in pairs),
                                                     tuple(column_key(r) for _, r in pairs),
