@@ -67,10 +67,12 @@ class BPlusTree:
         M: int = 4,
         page_size: int = DEFAULT_BPLUS_PAGE_SIZE,
         is_clustered: bool = True,
+        *, allow_duplicates: bool = False,
     ):
         self.filename = filename
         self.schema = Schema(schema_def)
         self.key_field = key_field
+        self.allow_duplicates = allow_duplicates
     
         if key_field not in self.schema.fields:
             raise ValueError(f"key_field '{key_field}' no existe en el schema")
@@ -129,6 +131,8 @@ class BPlusTree:
 
     def _layout_signature(self):
         layout = (self.schema.fields, self.schema.types, self.schema.sizes, self.key_field, self.leaf_records)
+        if self.allow_duplicates:
+            layout += ("duplicate_keys",)
         return hashlib.sha256(repr(layout).encode("utf-8")).digest()
 
     def _write_header(self):
@@ -302,18 +306,8 @@ class BPlusTree:
         return RID(page_id, slot_id, file_name)
 
     def _find_leaf_pos(self, key: Any) -> int:
-        if self.header.root_pos == EMPTY_CHILD:
-            return EMPTY_CHILD
-        pos = self.header.root_pos
-        key = self._normalize_key(key)
-        while True:
-            node = self._read_node(pos)
-            if node.isLeaf:
-                return pos
-            i = 0
-            while i < node.fullness and key >= node.keys[i]:
-                i += 1
-            pos = node.childs[i]
+        path = self._find_leaf_path(key)
+        return path[-1][0] if path else EMPTY_CHILD
 
     def _find_leaf_path(self, key: Any) -> List[Tuple[int, BplusNode]]:
         path = []
@@ -327,9 +321,42 @@ class BPlusTree:
             if node.isLeaf:
                 return path
             i = 0
-            while i < node.fullness and key >= node.keys[i]:
+            while i < node.fullness and (key > node.keys[i] if self.allow_duplicates else key >= node.keys[i]):
                 i += 1
             pos = node.childs[i]
+
+    def _next_leaf_path(self, path):
+        """Sucesor con ruta de ancestros, sin recorrer el árbol completo."""
+        path = list(path)
+        child, _ = path.pop()
+        while path:
+            pos, parent = path[-1]
+            children = parent.childs[:parent.fullness + 1]
+            index = children.index(child)
+            if index + 1 < len(children):
+                pos = children[index + 1]
+                while True:
+                    node = self._read_node(pos)
+                    path.append((pos, node))
+                    if node.isLeaf:
+                        return path
+                    pos = node.childs[0]
+            child, _ = path.pop()
+        return []
+
+    def _matching_path(self, key, payload=None):
+        path = self._find_leaf_path(key)
+        while path:
+            leaf = path[-1][1]
+            for index, stored in enumerate(leaf.keys):
+                if stored > key:
+                    return None
+                if stored == key and (payload is None or leaf.childs[index] == payload):
+                    return path, index
+            if not self.allow_duplicates:
+                break
+            path = self._next_leaf_path(path)
+        return None
 
     def _min_leaf_keys(self) -> int:
         return (self.header.M + 1) // 2
@@ -424,6 +451,8 @@ class BPlusTree:
     def add(self, key: Any, payload: Any) -> bool:
         key = self._normalize_key(key)
         payload = self._pack_leaf_payload(payload)
+        if self.allow_duplicates and self._matching_path(key, payload) is not None:
+            return False
         if self.header.root_pos == EMPTY_CHILD:
             root_pos = self._allocate_node()
             root = BplusNode(
@@ -442,7 +471,7 @@ class BPlusTree:
         path = self._find_leaf_path(key)
         leaf_pos, leaf = path[-1]
         parent_path = path[:-1]
-        if key in leaf.keys:
+        if not self.allow_duplicates and key in leaf.keys:
             return False
 
         index = 0
@@ -492,14 +521,11 @@ class BPlusTree:
 
     def search(self, key: Any):
         key = self._normalize_key(key)
-        leaf_pos = self._find_leaf_pos(key)
-        if leaf_pos == EMPTY_CHILD:
+        match = self._matching_path(key)
+        if match is None:
             return None
-        leaf = self._read_node(leaf_pos)
-        for stored_key, payload in zip(leaf.keys, leaf.childs):
-            if stored_key == key:
-                return self._unpack_leaf_payload(payload)
-        return None
+        path, index = match
+        return self._unpack_leaf_payload(path[-1][1].childs[index])
 
     def _leftmost_leaf_pos(self) -> int:
         if self.header.root_pos == EMPTY_CHILD:
@@ -530,6 +556,19 @@ class BPlusTree:
 
     def range_search(self, lower=None, upper=None, **kwargs):
         return list(self.iter_range(lower, upper, **kwargs))
+
+    def iter_reverse(self):
+        """Recorrido descendente con memoria O(altura * M)."""
+        def visit(pos):
+            node = self._read_node(pos)
+            if node.isLeaf:
+                for index in range(node.fullness - 1, -1, -1):
+                    yield node.keys[index], self._unpack_leaf_payload(node.childs[index])
+            else:
+                for child in reversed(node.childs[:node.fullness + 1]):
+                    yield from visit(child)
+        if self.header.root_pos != EMPTY_CHILD:
+            yield from visit(self.header.root_pos)
 
     def _leaf_entries(self) -> List[Tuple[Any, int]]:
         entries = []
@@ -651,13 +690,14 @@ class BPlusTree:
         path[-2] = (parent_pos, parent)
         self._rebalance_after_delete(path[:-1])
 
-    def delete(self, key: Any) -> bool:
+    def delete(self, key: Any, payload=None) -> bool:
         key = self._normalize_key(key)
-        path = self._find_leaf_path(key)
-        if not path or key not in path[-1][1].keys:
+        packed = self._pack_leaf_payload(payload) if payload is not None else None
+        match = self._matching_path(key, packed)
+        if match is None:
             return False
+        path, index = match
         pos, leaf = path[-1]
-        index = leaf.keys.index(key)
         leaf.keys.pop(index)
         leaf.childs.pop(index)
         leaf.fullness -= 1
