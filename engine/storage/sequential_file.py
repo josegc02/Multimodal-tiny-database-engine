@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from engine.storage.heap_file import Page, PAGE_HEADER_SIZE, SLOT_SIZE, DEFAULT_PAGE_SIZE
 from engine.storage.record import RID, Schema
@@ -234,6 +234,21 @@ class SequentialFile:
                     return [(rid, self.schema.deserialize(data))]
 
         return []
+
+    def scan(self) -> Generator[Tuple[RID, Dict[str, Any]], None, None]:
+        """Recorre activos de main y luego aux, con sus RIDs físicos actuales.
+
+        El recorrido no garantiza orden global. No modificar el archivo durante
+        el scan; inserciones y reorganizaciones pueden invalidar RIDs anteriores.
+        """
+        for file, fh, num_pages in (
+            ("main", self._fh_main, self.num_pages_main),
+            ("aux", self._fh_aux, self.num_pages_aux),
+        ):
+            for page_id in range(num_pages):
+                page = self._read_page(fh, page_id)
+                for slot_id, data in page.iter_active():
+                    yield RID(page_id, slot_id, file), self.schema.deserialize(data)
 
     def needs_reorganization(self) -> bool:
         deleted_main = 0

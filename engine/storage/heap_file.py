@@ -148,6 +148,7 @@ class HeapFile:
         if os.path.dirname(filepath):
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
         mode = "w+b" if is_new else "r+b"
+        
         self._fh = open(filepath, mode)
 
         self.num_pages = 0 if is_new else os.path.getsize(filepath) // page_size

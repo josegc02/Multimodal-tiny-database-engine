@@ -3,6 +3,8 @@
 La documentación e informe técnico del proyecto se encuentran organizados en este directorio:
 
 * [**`informe.md`**](informe.md): Informe técnico incremental del proyecto (arquitectura, decisiones de diseño, algoritmos y resultados experimentales).
+* [**`sql_grammar.ebnf`**](sql_grammar.ebnf): Gramática formal del dialecto SQL soportado.
+* [**`sql_parser.md`**](sql_parser.md): Diseño del parser, contrato del AST y límites del análisis sintáctico.
 
 ---
 

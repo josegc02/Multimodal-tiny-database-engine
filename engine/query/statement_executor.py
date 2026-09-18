@@ -40,8 +40,39 @@ class StatementExecutor:
         )
 
     def _execute_transaction(self, statement: TransactionStatement):
-        """Maneja BEGIN / COMMIT / ROLLBACK.
+        """Maneja BEGIN / COMMIT / ROLLBACK."""
+        action = statement.action
 
-        Pendiente de implementar en el siguiente commit.
-        """
-        raise NotImplementedError("Pendiente en el siguiente commit")
+        if action == "BEGIN":
+            return self._begin()
+        if action == "COMMIT":
+            return self._commit()
+        if action == "ROLLBACK":
+            return self._rollback()
+
+        raise ValueError(f"Accion de transaccion desconocida: {action}")
+
+    def _begin(self):
+        """Inicia una nueva transaccion."""
+        if self.current_tx_id is not None:
+            raise RuntimeError("Ya hay una transaccion activa")
+        self.current_tx_id = self.tm.begin()
+        return f"Transaccion {self.current_tx_id} iniciada"
+
+    def _commit(self):
+        """Confirma la transaccion activa."""
+        if self.current_tx_id is None:
+            raise RuntimeError("No hay transaccion activa")
+        tx_id = self.current_tx_id
+        self.tm.commit(tx_id)
+        self.current_tx_id = None
+        return f"Transaccion {tx_id} confirmada"
+
+    def _rollback(self):
+        """Aborta la transaccion activa."""
+        if self.current_tx_id is None:
+            raise RuntimeError("No hay transaccion activa")
+        tx_id = self.current_tx_id
+        self.tm.rollback(tx_id)
+        self.current_tx_id = None
+        return f"Transaccion {tx_id} abortada"
