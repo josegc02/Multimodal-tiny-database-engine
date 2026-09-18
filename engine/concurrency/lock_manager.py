@@ -2,7 +2,8 @@
 # concurrency/lock_manager.py
 
 from enum import Enum
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+
 
 class LockMode(Enum):
     """Tipos de lock soportados."""
@@ -24,6 +25,7 @@ class LockManager:
 
     def __init__(self):
         self.lock_table: Dict[str, Dict[int, LockMode]] = {}
+        self.wait_queue: Dict[str, List[int]] = {}
 
     def acquire(self, tx_id: int, resource: str, mode: LockMode) -> bool:
         """Intenta adquirir un lock.
@@ -70,6 +72,61 @@ class LockManager:
                 result.append((resource, holders[tx_id]))
         return result
 
+
+    # --- Deteccion de deadlocks ---
+
+    def detect_deadlock(self) -> Optional[List[int]]:
+        """Busca ciclos en el wait-for graph.
+
+        Devuelve la lista de tx_ids que forman el ciclo, o None si no hay.
+        """
+        graph = self._build_wait_for_graph()
+        return self._find_cycle(graph)
+
+    def _build_wait_for_graph(self) -> Dict[int, Set[int]]:
+        """Construye: tx_id -> {tx_ids a los que espera}."""
+        graph: Dict[int, Set[int]] = {}
+
+        for resource, holders in self.lock_table.items():
+            waiting = self.wait_queue.get(resource, [])
+            for waiter in waiting:
+                for holder in holders:
+                    if waiter != holder:
+                        graph.setdefault(waiter, set()).add(holder)
+
+        return graph
+
+    def _find_cycle(self, graph: Dict[int, Set[int]]) -> Optional[List[int]]:
+        """DFS para encontrar un ciclo en el grafo."""
+        visited: Set[int] = set()
+        stack: Set[int] = set()
+        path: List[int] = []
+
+        def dfs(node: int) -> Optional[List[int]]:
+            visited.add(node)
+            stack.add(node)
+            path.append(node)
+
+            for neighbor in graph.get(node, set()):
+                if neighbor not in visited:
+                    result = dfs(neighbor)
+                    if result:
+                        return result
+                elif neighbor in stack:
+                    idx = path.index(neighbor)
+                    return path[idx:]
+
+            path.pop()
+            stack.discard(node)
+            return None
+
+        for node in graph:
+            if node not in visited:
+                cycle = dfs(node)
+                if cycle:
+                    return cycle
+        return None
+
     # --- Helpers internos ---
 
     def _already_holds(self, tx_id: int, resource: str, mode: LockMode) -> bool:
@@ -93,3 +150,13 @@ class LockManager:
 
     def _grant(self, tx_id: int, resource: str, mode: LockMode) -> None:
         self.lock_table.setdefault(resource, {})[tx_id] = mode
+
+    def _enqueue(self, tx_id: int, resource: str) -> None:
+        q = self.wait_queue.setdefault(resource, [])
+        if tx_id not in q:
+            q.append(tx_id)
+
+    def _dequeue(self, tx_id: int, resource: str) -> None:
+        q = self.wait_queue.get(resource, [])
+        if tx_id in q:
+            q.remove(tx_id)
