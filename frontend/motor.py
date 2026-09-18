@@ -22,7 +22,7 @@ from engine.query.ast import (
 from engine.query.catalog import Catalog
 from engine.query.sql_executor import SQLExecutor
 from engine.query.statement_executor import StatementExecutor
-from engine.query.parser import parse
+from engine.query.parser import parse_script
 from engine.storage.heap_file import HeapFile
 
 
@@ -111,16 +111,47 @@ class Motor:
         self.catalog.register_table("productos", storage_productos)
 
     def ejecutar(self, sql: str) -> Resultado:
-        """Ejecuta SQL y devuelve un Resultado."""
+        """Ejecuta SQL y devuelve un Resultado.
+
+        Acepta multiples sentencias separadas por ';'.
+        Devuelve el resultado de la ULTIMA sentencia, y los mensajes
+        de las anteriores concatenados.
+        """
         sql = sql.strip()
         if not sql:
             return Resultado(error="La consulta esta vacia")
 
         try:
-            ast = parse(sql)
+            sentencias = parse_script(sql)
         except Exception as e:
             return Resultado(error=f"Error de sintaxis: {e}")
 
+        if not sentencias:
+            return Resultado(error="No se encontro ninguna sentencia")
+
+        mensajes = []
+        ultimo_resultado = Resultado()
+
+        for ast in sentencias:
+            resultado = self._ejecutar_una(ast)
+            if resultado.tiene_error:
+                return resultado
+            if resultado.mensaje:
+                mensajes.append(resultado.mensaje)
+            ultimo_resultado = resultado
+
+        # Si hay varios mensajes, los concatenamos
+        if mensajes:
+            ultimo_resultado.mensaje = "\n".join(mensajes)
+            # Si la ultima sentencia dio tabla, conservamos el mensaje aparte
+            if ultimo_resultado.tiene_tabla:
+                # El mensaje no se muestra cuando hay tabla, pero lo dejamos por si acaso
+                pass
+
+        return ultimo_resultado
+
+    def _ejecutar_una(self, ast) -> Resultado:
+        """Ejecuta una sola sentencia AST."""
         try:
             # --- Transacciones ---
             if isinstance(ast, TransactionStatement):
@@ -136,10 +167,14 @@ class Motor:
             if isinstance(ast, SelectStatement):
                 plan = self.sql_executor.planner.plan(ast)
                 filas_iter = self.sql_executor.execute(plan)
-                filas = list(filas_iter)
+                filas_dict = list(filas_iter)
 
-                # Extraer columnas del primer registro
-                columnas = list(filas[0].keys()) if filas else self._columnas_del_plan(plan)
+                if filas_dict:
+                    columnas = list(filas_dict[0].keys())
+                    filas = [tuple(d.get(c) for c in columnas) for d in filas_dict]
+                else:
+                    columnas = self._columnas_del_plan(plan)
+                    filas = []
 
                 return Resultado(columnas=columnas, filas=filas, plan=plan)
 
