@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from engine.query.ast import InsertStatement, TransactionStatement
-
 from engine.concurrency.lock_manager import LockMode
+from engine.query import ast
+from engine.query.ast import DeleteStatement, InsertStatement, TransactionStatement
+from engine.query.expressions import evaluate, truth
+from engine.query.logical_plan import column_key
 
 class StatementExecutor:
     """Ejecuta sentencias AST.
@@ -37,6 +39,8 @@ class StatementExecutor:
             return self._execute_transaction(statement)
         if isinstance(statement, InsertStatement):
             return self._execute_insert(statement)
+        if isinstance(statement, DeleteStatement):
+            return self._execute_delete(statement)
 
         raise NotImplementedError(
             f"Sentencia no soportada: {type(statement).__name__}"
@@ -144,3 +148,77 @@ class StatementExecutor:
             if autocommit:
                 self._rollback()
             raise
+
+    # --- DELETE ---
+
+    def _execute_delete(self, statement: DeleteStatement):
+        """Ejecuta un DELETE, con o sin transaccion activa."""
+        if self.storage is None:
+            raise RuntimeError("Storage no configurado")
+
+        table_name = statement.table.name
+        binding = self.storage.table(table_name)
+        storage = binding.storage
+
+        # 1. Recolectar RIDs que cumplen el WHERE
+        to_delete = []
+        for rid, record in storage.scan():
+            if self._matches_where(record, statement.where):
+                to_delete.append((rid, record))
+
+        # 2. Autocommit si no hay transaccion
+        autocommit = self.current_tx_id is None
+        if autocommit:
+            self._begin()
+
+        tx_id = self.current_tx_id
+        tx = self.tm.get_transaction(tx_id)
+
+        try:
+            binding.invalidate_indexes()
+
+            deleted = 0
+            for rid, old_record in to_delete:
+                # 3. Pedir lock exclusivo sobre el registro
+                key = old_record[storage.schema.fields[0]]
+                resource = f"{table_name}:{key}"
+
+                if self.lock_manager is not None:
+                    self.lock_manager.acquire(tx_id, resource, LockMode.EXCLUSIVE)
+                    tx.add_lock(resource, LockMode.EXCLUSIVE)
+
+                # 4. Borrar
+                if storage.delete(rid):
+                    tx.add_operation({
+                        "op": "DELETE",
+                        "table": table_name,
+                        "rid": rid,
+                        "old": old_record,
+                    })
+                    deleted += 1
+
+            binding.refresh_indexes()
+
+            if autocommit:
+                self._commit()
+
+            return f"{deleted} registro(s) eliminado(s)"
+
+        except Exception:
+            if autocommit:
+                self._rollback()
+            raise
+
+    def _matches_where(self, record, where) -> bool:
+        """Evalua el WHERE contra un registro."""
+        if where is None:
+            return True
+
+        # Convertir el registro a la forma que espera evaluate:
+        # claves normalizadas via column_key
+        row = {
+            column_key(ast.ColumnRef(name)): value
+            for name, value in record.items()
+        }
+
+        return truth(evaluate(where, row)) is True
