@@ -70,6 +70,21 @@ class Transaction:
             raise RuntimeError("No se pueden registrar operaciones en transacción terminada")
         self.undo_log.append(op)
 
+
+    # --- Locks ---
+
+    def add_lock(self, resource: str, mode) -> None:
+        """Registra que esta transaccion adquirio un lock."""
+        self.locks_held.add((resource, mode))
+
+    def remove_lock(self, resource: str, mode) -> None:
+        """Registra que esta transaccion libero un lock."""
+        self.locks_held.discard((resource, mode))
+
+    def clear_locks(self) -> None:
+        """Limpia todos los locks (usado al commit/rollback)."""
+        self.locks_held.clear()
+
     # --- Representación ---
 
     def __repr__(self):
