@@ -26,7 +26,7 @@ class LockManager:
     def __init__(self):
         self.lock_table: Dict[str, Dict[int, LockMode]] = {}
         self.wait_queue: Dict[str, List[int]] = {}
-        self._mutex = threading.Lock()
+        self._mutex = threading.RLock()
         self._condition = threading.Condition(self._mutex)
 
     def acquire(self, tx_id: int, resource: str, mode: LockMode,
@@ -115,10 +115,10 @@ class LockManager:
     # --- Deteccion de deadlocks ---
 
     def detect_deadlock(self) -> Optional[List[int]]:
-        """Busca ciclos en el wait-for graph."""
-        with self._mutex:
-            graph = self._build_wait_for_graph()
-            return self._find_cycle(graph)
+        """Busca ciclos en el wait-for graph.
+        """
+        graph = self._build_wait_for_graph()
+        return self._find_cycle(graph)
 
     def _build_wait_for_graph(self) -> Dict[int, Set[int]]:
         """Construye: tx_id -> {tx_ids a los que espera}."""
@@ -177,6 +177,11 @@ class LockManager:
         return False
 
     def _can_grant(self, tx_id: int, resource: str, mode: LockMode) -> bool:
+        """Verifica si el lock puede concederse.
+
+        Nota: no se aplica FIFO estricto porque puede causar starvation
+        en el Condition. Cualquier hilo que pueda obtener el lock lo obtiene.
+        """
         holders = self.lock_table.get(resource, {})
         for holder_id, holder_mode in holders.items():
             if holder_id == tx_id:
