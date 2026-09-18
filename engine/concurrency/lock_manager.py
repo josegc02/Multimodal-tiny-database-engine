@@ -1,6 +1,6 @@
 """Gestion de locks (bloqueos) para control de concurrencia."""
 # concurrency/lock_manager.py
-
+import threading
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -26,62 +26,99 @@ class LockManager:
     def __init__(self):
         self.lock_table: Dict[str, Dict[int, LockMode]] = {}
         self.wait_queue: Dict[str, List[int]] = {}
+        self._mutex = threading.Lock()
+        self._condition = threading.Condition(self._mutex)
 
-    def acquire(self, tx_id: int, resource: str, mode: LockMode) -> bool:
+    def acquire(self, tx_id: int, resource: str, mode: LockMode,
+                timeout: Optional[float] = None) -> bool:
         """Intenta adquirir un lock.
 
-        Devuelve True si lo consigue, False si no es posible.
+        Devuelve True si lo consigue, False si expira el timeout.
+        Si timeout es None, espera indefinidamente.
         """
-        if self._already_holds(tx_id, resource, mode):
+        with self._condition:
+            self._ensure_resource(resource)
+
+            # Caso 1: ya tengo el lock (o uno mas fuerte)
+            if self._already_holds(tx_id, resource, mode):
+                return True
+
+            # Caso 2: puedo obtenerlo sin esperar
+            if self._can_grant(tx_id, resource, mode):
+                self._grant(tx_id, resource, mode)
+                return True
+
+            # Caso 3: debo esperar
+            self._enqueue(tx_id, resource)
+
+            # Si hay deadlock, abortamos al solicitante
+            if self._would_deadlock(tx_id):
+                self._dequeue(tx_id, resource)
+                raise RuntimeError(
+                    f"Deadlock detectado: tx {tx_id} no puede esperar por {resource}"
+                )
+
+            # Esperar hasta ser notificado o timeout
+            if timeout is None:
+                while not self._can_grant(tx_id, resource, mode):
+                    self._condition.wait()
+            else:
+                got = self._condition.wait_for(
+                    lambda: self._can_grant(tx_id, resource, mode),
+                    timeout=timeout
+                )
+                if not got:
+                    self._dequeue(tx_id, resource)
+                    return False
+
+            # Al despertar, verificar de nuevo
+            self._dequeue(tx_id, resource)
+            self._grant(tx_id, resource, mode)
             return True
-
-        if not self._can_grant(tx_id, resource, mode):
-            return False
-
-        self._grant(tx_id, resource, mode)
-        return True
 
     def release(self, tx_id: int, resource: str) -> None:
         """Libera el lock de una transacción sobre un recurso."""
-        if resource not in self.lock_table:
-            return
-        if tx_id not in self.lock_table[resource]:
-            return
+        with self._condition:
+            if resource not in self.lock_table:
+                return
+            if tx_id not in self.lock_table[resource]:
+                return
 
-        del self.lock_table[resource][tx_id]
+            del self.lock_table[resource][tx_id]
 
-        if not self.lock_table[resource]:
-            del self.lock_table[resource]
-
-    def release_all(self, tx_id: int) -> None:
-        """Libera TODOS los locks de una transacción.
-
-        Se llama al hacer commit o rollback.
-        """
-        for resource in list(self.lock_table.keys()):
-            if tx_id in self.lock_table[resource]:
-                del self.lock_table[resource][tx_id]
             if not self.lock_table[resource]:
                 del self.lock_table[resource]
 
+            # Despertar a quien esté esperando
+            self._condition.notify_all()
+
+    def release_all(self, tx_id: int) -> None:
+        """Libera TODOS los locks de una transacción."""
+        with self._condition:
+            for resource in list(self.lock_table.keys()):
+                if tx_id in self.lock_table[resource]:
+                    del self.lock_table[resource][tx_id]
+                if not self.lock_table[resource]:
+                    del self.lock_table[resource]
+            self._condition.notify_all()
+
     def get_locks(self, tx_id: int) -> List[Tuple[str, LockMode]]:
         """Devuelve todos los locks que tiene una transacción."""
-        result = []
-        for resource, holders in self.lock_table.items():
-            if tx_id in holders:
-                result.append((resource, holders[tx_id]))
-        return result
+        with self._mutex:
+            result = []
+            for resource, holders in self.lock_table.items():
+                if tx_id in holders:
+                    result.append((resource, holders[tx_id]))
+            return result
 
 
     # --- Deteccion de deadlocks ---
 
     def detect_deadlock(self) -> Optional[List[int]]:
-        """Busca ciclos en el wait-for graph.
-
-        Devuelve la lista de tx_ids que forman el ciclo, o None si no hay.
-        """
-        graph = self._build_wait_for_graph()
-        return self._find_cycle(graph)
+        """Busca ciclos en el wait-for graph."""
+        with self._mutex:
+            graph = self._build_wait_for_graph()
+            return self._find_cycle(graph)
 
     def _build_wait_for_graph(self) -> Dict[int, Set[int]]:
         """Construye: tx_id -> {tx_ids a los que espera}."""
@@ -160,3 +197,12 @@ class LockManager:
         q = self.wait_queue.get(resource, [])
         if tx_id in q:
             q.remove(tx_id)
+
+    def _ensure_resource(self, resource: str) -> None:
+        self.lock_table.setdefault(resource, {})
+        self.wait_queue.setdefault(resource, [])
+
+    def _would_deadlock(self, tx_id: int) -> bool:
+        """Verifica si agregar esta espera crearia un ciclo."""
+        cycle = self.detect_deadlock()
+        return cycle is not None and tx_id in cycle
