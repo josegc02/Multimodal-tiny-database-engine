@@ -52,6 +52,33 @@ class TransactionManager:
         del self.active[tx_id]
         return True
 
+    def rollback(self, tx_id: int) -> bool:
+        """Deshace los cambios de una transacción.
+
+        Pasos:
+        1. Verificar que la transacción existe.
+        2. Recorrer el undo_log en orden inverso y deshacer cada operación.
+        3. Liberar todos los locks.
+        4. Cambiar el estado a ABORTED.
+        """
+        tx = self.active.get(tx_id)
+        if tx is None:
+            raise RuntimeError(f"Transacción {tx_id} no existe")
+
+        # 1. Deshacer operaciones en orden inverso
+        for op in reversed(tx.undo_log):
+            self._undo_operation(op)
+
+        # 2. Liberar locks
+        self.lock_manager.release_all(tx_id)
+
+        # 3. Cambiar estado
+        tx.mark_aborted()
+
+        # 4. Quitar de activas
+        del self.active[tx_id]
+        return True
+
     def get_transaction(self, tx_id: int) -> Optional[Transaction]:
         """Devuelve una transacción activa o None."""
         return self.active.get(tx_id)
@@ -76,6 +103,12 @@ class TransactionManager:
         return tx
 
     def _flush_to_disk(self, tx: Transaction) -> None:
+
+        if self.storage is None:
+            return
+        pass
+
+    def _undo_operation(self, op) -> None:
 
         if self.storage is None:
             return
