@@ -46,6 +46,16 @@ class Aplicacion(tk.Tk):
         # Conectar paneles con el motor
         self.panel_archivos.set_catalog(self.motor.catalog)
 
+        # Registrar cierre limpio
+        self.protocol("WM_DELETE_WINDOW", self._on_cerrar)
+
+    def _on_cerrar(self):
+        """Cierra los storages antes de salir."""
+        try:
+            self.motor.cerrar()
+        finally:
+            self.destroy()
+
     def _on_ejecutar(self, sql):
         """Callback cuando el usuario presiona Ejecutar."""
         resultado = self.motor.ejecutar(sql)

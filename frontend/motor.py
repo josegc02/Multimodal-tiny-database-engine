@@ -74,6 +74,10 @@ class Motor:
         )
         self._cargar_tablas_demo()
 
+    # ------------------------------------------------------------------
+    # Carga de tablas de demo
+    # ------------------------------------------------------------------
+
     def _cargar_tablas_demo(self):
         """Crea tablas de ejemplo para la demo."""
         os.makedirs(DEMO_DIR, exist_ok=True)
@@ -92,6 +96,7 @@ class Motor:
         storage_cuentas.insert({"id": 1, "nombre": "Ana", "saldo": 1000})
         storage_cuentas.insert({"id": 2, "nombre": "Bob", "saldo": 500})
         storage_cuentas.insert({"id": 3, "nombre": "Carlos", "saldo": 750})
+
         self.catalog.register_table("cuentas", storage_cuentas)
 
         # --- Tabla productos ---
@@ -108,7 +113,12 @@ class Motor:
         storage_productos.insert({"id": 1, "nombre": "Laptop", "precio": 2500})
         storage_productos.insert({"id": 2, "nombre": "Mouse", "precio": 50})
         storage_productos.insert({"id": 3, "nombre": "Teclado", "precio": 150})
+
         self.catalog.register_table("productos", storage_productos)
+
+    # ------------------------------------------------------------------
+    # Ejecucion
+    # ------------------------------------------------------------------
 
     def ejecutar(self, sql: str) -> Resultado:
         """Ejecuta SQL y devuelve un Resultado.
@@ -140,13 +150,8 @@ class Motor:
                 mensajes.append(resultado.mensaje)
             ultimo_resultado = resultado
 
-        # Si hay varios mensajes, los concatenamos
         if mensajes:
             ultimo_resultado.mensaje = "\n".join(mensajes)
-            # Si la ultima sentencia dio tabla, conservamos el mensaje aparte
-            if ultimo_resultado.tiene_tabla:
-                # El mensaje no se muestra cuando hay tabla, pero lo dejamos por si acaso
-                pass
 
         return ultimo_resultado
 
@@ -193,3 +198,25 @@ class Motor:
         except Exception:
             pass
         return []
+
+    # ------------------------------------------------------------------
+    # Cierre
+    # ------------------------------------------------------------------
+
+    def cerrar(self):
+        """Cierra todos los storages e indices abiertos."""
+        for nombre, binding in self.catalog.tables.items():
+            # Cerrar storage
+            try:
+                if hasattr(binding.storage, "close"):
+                    binding.storage.close()
+            except Exception:
+                pass
+
+            # Cerrar indices
+            for campo, reg in binding.indexes.items():
+                try:
+                    if hasattr(reg.index, "close"):
+                        reg.index.close()
+                except Exception:
+                    pass
