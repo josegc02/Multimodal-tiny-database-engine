@@ -22,3 +22,5 @@ benchmarks/results/*.csv
 .idea/
 .DS_Store
 Thumbs.db
+
+test_manual.py
