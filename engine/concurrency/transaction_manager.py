@@ -71,11 +71,29 @@ class TransactionManager:
         return tx
 
     def _get_storage(self, table: str):
-        """Devuelve el storage asociado a una tabla."""
+        """Devuelve el storage asociado a una tabla.
+
+        Acepta:
+        - Catalog (con .table(name).storage)
+        - dict {nombre: storage}
+        - un storage unico
+        """
         if self.storage is None:
             return None
+
+        # Caso 1: Catalog
+        if hasattr(self.storage, "table") and callable(self.storage.table):
+            try:
+                binding = self.storage.table(table)
+                return binding.storage
+            except Exception:
+                return None
+
+        # Caso 2: dict {nombre: storage}
         if isinstance(self.storage, dict):
             return self.storage.get(table)
+
+        # Caso 3: un solo storage
         return self.storage
 
     def _flush_to_disk(self, tx: Transaction) -> None:
