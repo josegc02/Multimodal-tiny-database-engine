@@ -1,0 +1,74 @@
+(* Dialecto SQL del motor. Keywords sin distinción entre mayúsculas/minúsculas.
+   Notación: ',' concatena, '|' alterna, [...] es opcional, {...} repite.
+   Espacios y comentarios se descartan antes del análisis sintáctico.
+   Los terminales identifier, integer, number y string se definen al final. *)
+
+single_statement = statement, [";"], EOF ;
+script = [statement, {";", statement}, [";"]], EOF ;
+
+statement = select | insert | delete | transaction ;
+
+select = "SELECT", ["DISTINCT"], select_item, {",", select_item},
+         "FROM", table_ref, {join},
+         ["WHERE", expression],
+         ["GROUP", "BY", expression, {",", expression}],
+         ["HAVING", expression],
+         ["ORDER", "BY", order_item, {",", order_item}],
+         ["LIMIT", integer], ["OFFSET", integer] ;
+
+select_item = "*" | identifier, ".", "*" | expression, [alias] ;
+alias = ["AS"], identifier ;
+table_ref = identifier, [alias] ;
+join = ["INNER"], "JOIN", table_ref, "ON", expression ;
+order_item = expression, ["ASC" | "DESC"], ["NULLS", ("FIRST" | "LAST")] ;
+
+insert = "INSERT", "INTO", identifier,
+         ["(", identifier, {",", identifier}, ")"],
+         "VALUES", value_row, {",", value_row} ;
+value_row = "(", signed_literal, {",", signed_literal}, ")" ;
+signed_literal = ["+" | "-"], number | string | "NULL" | "TRUE" | "FALSE" ;
+
+delete = "DELETE", "FROM", table_ref, ["WHERE", expression] ;
+transaction = ("BEGIN" | "COMMIT" | "END" | "ROLLBACK"), ["TRANSACTION"] ;
+
+(* Precedencia de menor a mayor: OR, AND, NOT, predicados, +/-, */%, unarios. *)
+expression = or_expression ;
+or_expression = and_expression, {"OR", and_expression} ;
+and_expression = not_expression, {"AND", not_expression} ;
+not_expression = {"NOT"}, predicate ;
+predicate = additive, [comparison, additive
+                      | "IS", ["NOT"], "NULL"
+                      | ["NOT"], "BETWEEN", additive, "AND", additive
+                      | ["NOT"], "IN", "(", expression, {",", expression}, ")"
+                      | ["NOT"], "LIKE", additive] ;
+comparison = "=" | "!=" | "<>" | "<" | "<=" | ">" | ">=" ;
+additive = multiplicative, {("+" | "-"), multiplicative} ;
+multiplicative = unary, {("*" | "/" | "%"), unary} ;
+unary = {"+" | "-"}, primary ;
+primary = literal | column_ref | aggregate | "(", expression, ")" ;
+literal = number | string | "NULL" | "TRUE" | "FALSE" ;
+column_ref = identifier, [".", identifier] ;
+aggregate = "COUNT", "(", "*", ")"
+          | aggregate_name, "(", ["DISTINCT"], expression, ")" ;
+aggregate_name = "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" ;
+
+(* Terminales léxicos:
+   integer: [0-9]+
+   number: ([0-9]+(\.[0-9]{0,})?|\.[0-9]+)([eE][+-]?[0-9]+)?
+   identifier: [A-Za-z_][A-Za-z_0-9]*, salvo keywords, o texto entre comillas
+               dobles. Las comillas dobles dentro del nombre se duplican.
+   string: texto entre comillas simples; una comilla interna se escribe ''.
+   EOF: fin de entrada, no una palabra del lenguaje.
+   Comentarios: -- hasta fin de línea y bloques /* ... */ anidables.
+
+   Restricciones adicionales del parser:
+   - No se permiten identificadores citados vacíos ni floats no finitos.
+   - Un literal numérico no puede continuar con letras, '_' ni otro punto.
+   - INSERT no permite columnas repetidas y exige igual ancho en cada fila;
+     si declara columnas, el ancho debe coincidir con esa lista.
+   - El comodín solo es válido como argumento único de COUNT, sin DISTINCT.
+     Los agregados anidados se rechazan.
+   - LIMIT y OFFSET son enteros sin signo; se permite cero.
+   - El anidamiento de paréntesis/llamadas se limita a 64 niveles por defecto.
+   - single_statement no acepta SQL sobrante y script no acepta sentencias vacías.
+*)

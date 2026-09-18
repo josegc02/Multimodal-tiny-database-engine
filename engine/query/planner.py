@@ -1,7 +1,7 @@
 """Selección de operadores físicos mediante costos aproximados de páginas.
 
-El parser SQL todavía no está implementado: estos métodos reciben operaciones
-estructuradas. Las estadísticas son estimaciones del catálogo, no se obtiene la
+Estos métodos reciben operaciones estructuradas desde el adaptador SQL.
+Las estadísticas son estimaciones del catálogo, no se obtiene la
 cardinalidad leyendo/materializando una tabla durante la planificación.
 """
 
