@@ -26,8 +26,8 @@ def generar_dataset(nombre, n):
 def main():
     print("Generando datasets...")
     generar_dataset("dataset_1k", 1_000)
+    generar_dataset("dataset_5k", 5_000)
     generar_dataset("dataset_10k", 10_000)
-    generar_dataset("dataset_100k", 100_000)
     print("Listo.")
 
 
