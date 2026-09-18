@@ -7,10 +7,13 @@ Proyecto de Base de Datos II para la implementación de un motor de base de dato
 ## Estructura del proyecto — Avance 1 (Parte 1: Base de Datos Relacional)
 
 ```text
-minigestor-bd/
+Multimodal-tiny-database-engine/
 ├── README.md                       # este archivo: arquitectura, instalación, uso
+├── LICENSE                         # licencia del proyecto
 ├── requirements.txt                 # dependencias Python del proyecto
-├── .gitignore                       # __pycache__/, *.heap, *.db, venv/, results/
+├── .gitignore                       # __pycache__/, *.db, *.bpt, venv/, demo_data/, results/
+├── setup_avance1.ps1                # script de setup para Windows
+├── setup_avance1.sh                 # script de setup para Linux/Mac
 │
 ├── engine/                          # motor de base de datos (código fuente principal)
 │   ├── __init__.py
@@ -23,26 +26,38 @@ minigestor-bd/
 │   │
 │   ├── indexes/                     # Estructuras de indexación
 │   │   ├── __init__.py
-│   │   ├── bplus_tree.py            # Índice B+ agrupado (clustered)
-│   │   ├── bplus_tree_unclustered.py# Índice B+ no agrupado (apunta a RID)
+│   │   ├── bplus_tree.py            # Base del índice B+ paginado (nodos internos y hojas)
+│   │   ├── bplus_tree_clustered.py  # B+ agrupado: registros completos en hojas
+│   │   ├── bplus_tree_unclustered.py# B+ no agrupado: hojas con (clave, RID)
 │   │   └── extendible_hash.py       # Índice Hash Dinámico (Extendible Hashing)
 │   │
 │   ├── query/                       # Procesamiento de consultas SQL
 │   │   ├── __init__.py
+│   │   ├── _temp_records.py         # Persistencia temporal para algoritmos externos
+│   │   ├── ast.py                   # AST inmutable del dialecto SQL
+│   │   ├── catalog.py               # Catálogo de storages e índices registrados
+│   │   ├── errors.py                # Errores SQL (sintaxis, semántica, ejecución)
+│   │   ├── executor.py              # Ejecución de planes físicos sobre storage/índices
+│   │   ├── expressions.py           # Evaluación de expresiones SQL (3-valued logic)
+│   │   ├── external_algorithms.py   # External Sort (ORDER BY), External Hash (GROUP BY/JOIN)
 │   │   ├── lexer.py                 # Tokenizador de SQL
+│   │   ├── logical_plan.py          # Construcción y validación del plan lógico
 │   │   ├── parser.py                # Parser: SELECT/INSERT/DELETE/WHERE/ORDER BY/GROUP BY
 │   │   ├── planner.py               # Decide qué índice o algoritmo usar por consulta
-│   │   ├── executor.py              # Ejecuta el plan contra storage/índices
-│   │   └── external_algorithms.py   # External Sort (ORDER BY), External Hash (GROUP BY/JOIN)
+│   │   ├── sql_executor.py          # Ejecuta planes lógicos contra storages e índices
+│   │   ├── sql_optimizer.py         # Optimizador: elige índices y algoritmos físicos
+│   │   └── statement_executor.py    # Despacho de sentencias AST con transacciones
 │   │
 │   └── concurrency/                 # Transacciones y control de concurrencia
 │       ├── __init__.py
-│       ├── lock_manager.py          # Locks compartidos/exclusivos
-│       └── transaction.py           # BEGIN/END TRANSACTION, manejo de sesiones concurrentes
+│       ├── lock_manager.py          # Locks compartidos/exclusivos + detección de deadlocks
+│       ├── transaction.py           # Clase Transaction: estado, locks, undo_log
+│       └── transaction_manager.py   # BEGIN/COMMIT/ROLLBACK, coordinación con storage
 │
 ├── frontend/                        # Interfaz gráfica con los 4 paneles requeridos
 │   ├── __init__.py
 │   ├── main.py                      # punto de entrada de la UI
+│   ├── motor.py                     # fachada del motor: catalog + managers + executors
 │   ├── panel_archivos.py            # tablas cargadas y su estructura
 │   ├── panel_consultas.py           # editor de consultas SQL
 │   ├── panel_resultados.py          # tabla de resultados de la consulta
@@ -50,29 +65,51 @@ minigestor-bd/
 │
 ├── benchmarks/                      # Comparación experimental de técnicas (Parte 1)
 │   ├── __init__.py
-│   ├── generate_datasets.py         # genera datasets sintéticos (1K/10K/100K registros)
+│   ├── generate_datasets.py         # genera datasets sintéticos (1K/5K/10K registros)
 │   ├── bench_storage.py             # Heap File vs Archivo Secuencial Paginado
 │   ├── bench_indexes.py             # B+ agrupado vs B+ no agrupado vs Hash Dinámico
-│   └── results/                     # gráficas (.png) y tablas (.csv) generadas
+│   ├── concurrency_demo.py          # simulación con hilos: race conditions, locks, deadlocks
+│   ├── plot_results.py              # genera gráficas comparativas a partir de los benchmarks
+│   └── results/                     # gráficas (.png) y datasets (.csv) generados
+│       └── .gitkeep                 # marcador para que Git mantenga la carpeta
 │
 ├── tests/                           # Tests unitarios (espeja la estructura de engine/)
+│   ├── __init__.py
+│   │
 │   ├── storage/
 │   │   ├── __init__.py
 │   │   ├── test_heap_file.py
 │   │   └── test_sequential_file.py
+│   │
 │   ├── indexes/
 │   │   ├── __init__.py
 │   │   ├── test_bplus_tree.py
-│   │   └── test_extendible_hash.py
+│   │   ├── test_bplus_clustered.py
+│   │   ├── test_bplus_unclustered.py
+│   │   ├── test_extendible_hash.py
+│   │   ├── test_extendible_hash_bulk.py
+│   │   └── test_extendible_hash_persistence.py
+│   │
 │   ├── query/
 │   │   ├── __init__.py
-│   │   └── test_parser.py
+│   │   ├── test_external_algorithms.py
+│   │   ├── test_lexer.py
+│   │   ├── test_parser.py
+│   │   ├── test_planner_executor.py
+│   │   ├── test_sql_execution.py
+│   │   ├── test_sql_optimizer.py
+│   │   └── test_temp_records.py
+│   │
 │   └── concurrency/
 │       ├── __init__.py
 │       └── test_transactions.py
 │
-└── docs/
-    └── informe.md                   # informe incremental: diseño, algoritmos, resultados
+└── docs/                            # documentación del proyecto
+    ├── README.md                    # índice de la documentación
+    ├── informe.md                   # informe incremental: diseño, algoritmos, resultados
+    ├── bplus_indexes.md             # documentación de los índices B+
+    ├── sql_grammar.ebnf             # gramática formal del dialecto SQL
+    └── sql_parser.md                # documentación del parser
 ```
 
 ---
