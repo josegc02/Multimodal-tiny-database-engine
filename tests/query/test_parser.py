@@ -4,7 +4,8 @@ import unittest
 
 from engine.query import Parser, SQLLexError, SQLParseError, parse, parse_script
 from engine.query.ast import (
-    AggregateCall, Between, BinaryOp, ColumnRef, DeleteStatement, InList,
+    AggregateCall, Between, BinaryOp, ColumnDefinition, ColumnRef,
+    CreateIndexStatement, CreateTableStatement, DeleteStatement, InList,
     InsertStatement, IsNull, Literal, SelectItem, SelectStatement, Star,
     TableRef, TransactionStatement, UnaryOp,
 )
@@ -115,6 +116,36 @@ class TestSelectParser(unittest.TestCase):
 
 
 class TestMutationAndScriptParser(unittest.TestCase):
+    def test_create_table_with_supported_column_types(self):
+        query = parse("CREATE TABLE accounts (id INT, name VARCHAR(20), balance FLOAT)")
+        self.assertEqual(query, CreateTableStatement("accounts", (
+            ColumnDefinition("id", "int"),
+            ColumnDefinition("name", "str", 20),
+            ColumnDefinition("balance", "float"),
+        )))
+
+    def test_create_index_accepts_both_using_positions(self):
+        expected = CreateIndexStatement("idx_id", "accounts", "id", "hash")
+        self.assertEqual(parse("CREATE INDEX idx_id ON accounts (id) USING HASH"), expected)
+        self.assertEqual(parse("CREATE INDEX idx_id ON accounts USING HASH (id)"), expected)
+        self.assertEqual(parse("CREATE INDEX idx_id ON accounts (id) USING BTREE").method, "btree")
+
+    def test_create_ddl_rejects_invalid_definitions(self):
+        invalid = [
+            "CREATE TABLE t ()",
+            "CREATE TABLE t (id TEXT)",
+            "CREATE TABLE t (id INT(8))",
+            "CREATE TABLE t (name STR)",
+            "CREATE TABLE t (name STR(0))",
+            "CREATE INDEX i ON t (a)",
+            "CREATE INDEX i ON t (a) USING HASH,",
+            "CREATE INDEX i ON t USING BTREE (a,b)",
+            "CREATE INDEX i ON t (a) USING TREE",
+        ]
+        for sql in invalid:
+            with self.subTest(sql=sql), self.assertRaises(SQLParseError):
+                parse(sql)
+
     def test_insert_with_columns_multiple_rows_and_signed_literals(self):
         query = parse("INSERT INTO Products (id,name,price,active) VALUES (-1,'O''Brien',+2.5,TRUE),(2,NULL,-3e2,FALSE)")
         self.assertEqual(query, InsertStatement('products', ('id', 'name', 'price', 'active'), (
@@ -158,6 +189,14 @@ class TestMutationAndScriptParser(unittest.TestCase):
         for sql in [';', 'BEGIN;;COMMIT', 'BEGIN COMMIT', 'SELECT * FROM t SELECT * FROM s']:
             with self.subTest(sql=sql), self.assertRaises(SQLParseError):
                 parse_script(sql)
+
+    def test_scripts_include_ddl_statements(self):
+        statements = parse_script(
+            "CREATE TABLE t (id INT, name STR(12));"
+            "CREATE INDEX t_id ON t (id) USING BTREE;"
+        )
+        self.assertIsInstance(statements[0], CreateTableStatement)
+        self.assertEqual(statements[1], CreateIndexStatement("t_id", "t", "id", "btree"))
 
     def test_parse_script_is_all_or_error(self):
         with self.assertRaises(SQLParseError):

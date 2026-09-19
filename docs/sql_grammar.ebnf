@@ -6,7 +6,15 @@
 single_statement = statement, [";"], EOF ;
 script = [statement, {";", statement}, [";"]], EOF ;
 
-statement = select | insert | delete | transaction ;
+statement = create_table | create_index | select | insert | delete | transaction ;
+
+create_table = "CREATE", "TABLE", identifier, "(", column_definition,
+               {",", column_definition}, ")" ;
+column_definition = identifier, ("INT" | "FLOAT")
+                  | identifier, ("STR" | "VARCHAR"), "(", integer, ")" ;
+create_index = "CREATE", "INDEX", identifier, "ON", identifier,
+               (["USING", index_method], "(", identifier, ")", ["USING", index_method]) ;
+index_method = "HASH" | "BTREE" ;
 
 select = "SELECT", ["DISTINCT"], select_item, {",", select_item},
          "FROM", table_ref, {join},

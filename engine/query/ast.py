@@ -109,6 +109,27 @@ class Statement(Node):
 
 
 @dataclass(frozen=True)
+class ColumnDefinition(Node):
+    name: str
+    type: str
+    size: int | None = None
+
+
+@dataclass(frozen=True)
+class CreateTableStatement(Statement):
+    name: str
+    columns: tuple[ColumnDefinition, ...]
+
+
+@dataclass(frozen=True)
+class CreateIndexStatement(Statement):
+    name: str
+    table: str
+    column: str
+    method: str
+
+
+@dataclass(frozen=True)
 class SelectStatement(Statement):
     columns: tuple[SelectItem, ...]
     from_table: TableRef

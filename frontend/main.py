@@ -25,17 +25,17 @@ class Aplicacion(tk.Tk):
         # Crear el motor
         self.motor = Motor()
 
-        # Layout: 2x2
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=1)
-
         # Crear los 4 paneles
         self.panel_archivos = PanelArchivos(self)
         self.panel_consultas = PanelConsultas(self, on_ejecutar=self._on_ejecutar)
         self.panel_resultados = PanelResultados(self)
         self.panel_plan = PanelPlanEjecucion(self)
+
+        # Layout: 2x2
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
 
         # Colocarlos
         self.panel_archivos.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
@@ -76,6 +76,7 @@ class Aplicacion(tk.Tk):
             self.panel_plan.mostrar_plan_objeto(resultado.plan)
         else:
             self.panel_plan.limpiar()
+        self.panel_archivos.refresh()
 
 
 def main():

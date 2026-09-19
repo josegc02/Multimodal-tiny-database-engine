@@ -95,6 +95,31 @@ class Catalog:
         self.tables[name] = binding
         return binding
 
+    def register_index(self, table_name: str, column: str, index,
+                       metadata: IndexInfo) -> RegisteredIndex:
+        """Registra y construye un índice sobre una tabla ya abierta."""
+        binding = self.table(table_name)
+        if column not in binding.storage.schema.fields:
+            raise SQLSemanticError(f"Columna de índice inexistente: {column}")
+        if column in binding.indexes:
+            raise SQLSemanticError(f"Ya existe un índice para la columna {column!r}")
+        if not isinstance(metadata, IndexInfo):
+            raise SQLSemanticError("Los metadatos del índice no son válidos")
+        if metadata.field != column or metadata.index is not index:
+            raise SQLSemanticError("El campo del índice no coincide con su registro")
+        if not all(callable(getattr(index, method, None))
+                   for method in ("search", "bulk_load_from_storage")):
+            raise SQLSemanticError("El índice requiere search() y bulk_load_from_storage()")
+
+        registered = RegisteredIndex(index, metadata=metadata)
+        binding.indexes[column] = registered
+        try:
+            binding.refresh_indexes()
+        except Exception:
+            del binding.indexes[column]
+            raise
+        return registered
+
     def table(self, name: str) -> TableBinding:
         try:
             return self.tables[name]

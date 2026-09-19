@@ -26,11 +26,13 @@ representación del resultado:
 - `INSERT INTO ... VALUES`: una o varias filas de literales, con lista opcional
   de columnas. No se admiten expresiones ni subconsultas dentro de `VALUES`.
 - `DELETE FROM ...`: con alias y filtro opcionales.
+- `CREATE TABLE ...`: columnas `INT`, `FLOAT`, `STR(n)` o `VARCHAR(n)`.
+- `CREATE INDEX ... ON ... (...) USING HASH|BTREE`: índices de una columna.
 - Transacciones: `BEGIN`, `COMMIT`, `END` y `ROLLBACK`, con `TRANSACTION` opcional.
   `END` se representa como `COMMIT` en el AST.
 
-No se admiten DDL (`CREATE`, `ALTER`, `DROP`), `UPDATE`, subconsultas, uniones de
-resultados (`UNION`), joins externos/cruzados, tablas separadas por comas,
+No se admiten `ALTER`, `DROP`, `UPDATE`, subconsultas, uniones de resultados
+(`UNION`), joins externos/cruzados, tablas separadas por comas,
 parámetros, funciones de ventana ni funciones arbitrarias. Los nombres de tabla
 tienen un componente; las columnas pueden tener uno o dos (`columna` o
 `tabla.columna`). Toda entrada fuera del dialecto produce un error.
@@ -56,7 +58,9 @@ print(query.from_table.name)  # products
 print(query.to_dict())       # Representación compatible con JSON
 ```
 
-`SelectStatement` conserva proyecciones, fuente, joins, filtro, agrupación,
+`CreateTableStatement` conserva el nombre y las definiciones de columnas;
+`CreateIndexStatement` conserva el nombre, la tabla, la columna y el método
+(`hash` o `btree`). `SelectStatement` conserva proyecciones, fuente, joins, filtro, agrupación,
 `HAVING`, orden y límites. `InsertStatement` conserva la tabla, las columnas y
 filas de nodos `Literal`. `DeleteStatement` conserva tabla y filtro, mientras
 que `TransactionStatement` conserva la acción. Los nodos de expresión retienen

@@ -1,11 +1,11 @@
-"""Panel de plan de ejecucion: visualiza como se ejecuto la consulta."""
+"""Panel de plan de ejecucion: visualiza el acceso fisico elegido."""
 
 import tkinter as tk
 from tkinter import ttk
 
 
 class PanelPlanEjecucion(ttk.LabelFrame):
-    """Panel que muestra el plan de ejecucion en formato de arbol.
+    """Panel que muestra el plan en una tabla jerarquica.
 
     Uso:
         panel.mostrar_plan_texto("Filter\\n  └── Scan (cuentas)")
@@ -18,26 +18,47 @@ class PanelPlanEjecucion(ttk.LabelFrame):
         self._construir()
 
     def _construir(self):
-        # Area de texto con scroll
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True, padx=4, pady=4)
 
-        self.texto = tk.Text(frame, height=10, width=50, state="disabled",
-                             wrap="word", font=("Consolas", 10))
-        self.texto.pack(side="left", fill="both", expand=True)
+        columnas = ("operation", "access", "index", "cost", "details")
+        self.tabla = ttk.Treeview(frame, columns=columnas, show="tree headings",
+                                  selectmode="browse")
+        self.tabla.heading("#0", text="Node")
+        self.tabla.column("#0", width=145, minwidth=100, stretch=False)
+        encabezados = {
+            "operation": "Operation",
+            "access": "Access Method",
+            "index": "Index",
+            "cost": "Cost",
+            "details": "Details",
+        }
+        anchos = {"operation": 105, "access": 145, "index": 145,
+                  "cost": 70, "details": 360}
+        for columna in columnas:
+            self.tabla.heading(columna, text=encabezados[columna])
+            self.tabla.column(columna, width=anchos[columna], minwidth=70,
+                              stretch=columna == "details")
+        self.tabla.pack(side="left", fill="both", expand=True)
 
         scroll_y = ttk.Scrollbar(frame, orient="vertical",
-                                 command=self.texto.yview)
+                                 command=self.tabla.yview)
         scroll_y.pack(side="right", fill="y")
-        self.texto.configure(yscrollcommand=scroll_y.set)
+        self.tabla.configure(yscrollcommand=scroll_y.set)
+
+        scroll_x = ttk.Scrollbar(self, orient="horizontal",
+                                 command=self.tabla.xview)
+        scroll_x.pack(side="bottom", fill="x", padx=4)
+        self.tabla.configure(xscrollcommand=scroll_x.set)
 
     def limpiar(self):
-        """Limpia el area de texto."""
-        self._set_texto("")
+        """Limpia la tabla del plan."""
+        self.tabla.delete(*self.tabla.get_children())
 
     def mostrar_plan_texto(self, texto):
-        """Muestra un texto de plan ya formateado."""
-        self._set_texto(texto)
+        """Muestra texto heredado como una fila de detalles."""
+        self.limpiar()
+        self.tabla.insert("", "end", text="Plan", values=("", "", "", "", texto))
 
     def mostrar_plan_objeto(self, plan):
         """Muestra un plan a partir de su representacion dict.
@@ -52,35 +73,26 @@ class PanelPlanEjecucion(ttk.LabelFrame):
             self._set_texto(str(plan))
             return
 
-        lineas = self._formatear_plan(data, 0)
-        self._set_texto("\n".join(lineas))
+        self.limpiar()
+        self._insertar_nodo("", data)
 
-    def _formatear_plan(self, nodo, nivel):
-        """Convierte un plan a lista de lineas con indentacion."""
-        indent = "  " * nivel
-        if isinstance(nodo, dict):
-            operacion = nodo.get("operation", "?")
-            opciones = nodo.get("options", {})
-            children = nodo.get("children", [])
+    def _insertar_nodo(self, parent, nodo):
+        """Inserta una fila y sus hijos conservando la jerarquia del plan."""
+        if not isinstance(nodo, dict):
+            self.tabla.insert(parent, "end", text=str(nodo), values=("", "", "", "", ""))
+            return
 
-            # Encabezado
-            linea = f"{indent}{operacion}"
-            if opciones:
-                partes = [f"{k}={v}" for k, v in opciones.items()]
-                linea += f" ({', '.join(partes)})"
-            lineas = [linea]
-
-            # Hijos
-            for child in children:
-                lineas.extend(self._formatear_plan(child, nivel + 1))
-            return lineas
-        else:
-            return [f"{indent}{nodo}"]
-
-    def _set_texto(self, texto):
-        """Reemplaza el contenido del area de texto."""
-        self.texto.config(state="normal")
-        self.texto.delete("1.0", tk.END)
-        if texto:
-            self.texto.insert("1.0", texto)
-        self.texto.config(state="disabled")
+        physical = nodo.get("physical") or {}
+        operation = nodo.get("operation", "?")
+        access = physical.get("algorithm", "logical")
+        index = physical.get("index") or ""
+        cost = physical.get("estimated_io", "")
+        if isinstance(cost, float):
+            cost = f"{cost:.2f}"
+        details = physical.get("reason", "")
+        item = self.tabla.insert(
+            parent, "end", text=operation,
+            values=(operation, access, index, cost, details), open=True,
+        )
+        for child in nodo.get("children", []):
+            self._insertar_nodo(item, child)

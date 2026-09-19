@@ -613,7 +613,7 @@ class BPlusTree:
             return
 
         parent_pos, parent = path[-2]
-        siblings = parent.childs[:parent.fullness + 1]
+        siblings = parent.childs[:parent.fullness + 1]     
         node_index = siblings.index(pos)
 
         left_pos = siblings[node_index - 1] if node_index > 0 else EMPTY_CHILD

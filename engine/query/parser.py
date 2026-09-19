@@ -7,7 +7,8 @@ El resultado es un AST: no se usa eval, no se consulta storage y no se ejecuta S
 from contextlib import contextmanager
 
 from engine.query.ast import (
-    AggregateCall, Between, BinaryOp, ColumnRef, DeleteStatement, InList,
+    AggregateCall, Between, BinaryOp, ColumnDefinition, ColumnRef,
+    CreateIndexStatement, CreateTableStatement, DeleteStatement, InList,
     InsertStatement, IsNull, Join, Literal, OrderByItem, SelectItem,
     SelectStatement, Star, Statement, TableRef, TransactionStatement, UnaryOp,
 )
@@ -82,6 +83,12 @@ class Parser:
         return tuple(statements)
 
     def _statement(self):
+        if self._match("CREATE"):
+            if self._match("TABLE"):
+                return self._create_table()
+            if self._match("INDEX"):
+                return self._create_index()
+            self._error("CREATE requiere TABLE o INDEX")
         if self._match("SELECT"):
             return self._select()
         if self._match("INSERT"):
@@ -91,7 +98,7 @@ class Parser:
         if token := self._match("BEGIN", "COMMIT", "END", "ROLLBACK"):
             self._match("TRANSACTION")
             return TransactionStatement("COMMIT" if token.kind == "END" else token.kind)
-        self._error("Se esperaba SELECT, INSERT, DELETE, BEGIN, COMMIT, END o ROLLBACK")
+        self._error("Se esperaba CREATE, SELECT, INSERT, DELETE, BEGIN, COMMIT, END o ROLLBACK")
 
     def _identifier(self):
         return self._expect("IDENTIFIER").value
@@ -106,6 +113,52 @@ class Parser:
     def _table(self):
         name = self._identifier()
         return TableRef(name, self._alias())
+
+    def _create_table(self):
+        name = self._identifier()
+        self._expect("(")
+        columns = self._comma_list(self._column_definition)
+        self._expect(")")
+        return CreateTableStatement(name, columns)
+
+    def _column_definition(self):
+        name = self._identifier()
+        type_token = self._match("INT", "FLOAT", "STR", "VARCHAR")
+        if type_token is None:
+            self._error("Se esperaba INT, FLOAT, STR o VARCHAR")
+        type_name = "str" if type_token.kind == "VARCHAR" else type_token.kind.lower()
+        size = None
+        if self._match("("):
+            size = self._expect("INTEGER").value
+            if size < 1:
+                self._error("El tamaño de una columna debe ser positivo")
+            self._expect(")")
+        if type_name != "str" and size is not None:
+            self._error(f"El tipo {type_name.upper()} no admite tamaño")
+        if type_name == "str" and size is None:
+            self._error("Las columnas STR/VARCHAR requieren tamaño")
+        return ColumnDefinition(name, type_name, size)
+
+    def _create_index(self):
+        name = self._identifier()
+        self._expect("ON")
+        table = self._identifier()
+        method = None
+        if self._match("USING"):
+            method = self._index_method()
+        self._expect("(")
+        column = self._identifier()
+        self._expect(")")
+        if method is None:
+            self._expect("USING")
+            method = self._index_method()
+        return CreateIndexStatement(name, table, column, method)
+
+    def _index_method(self):
+        token = self._match("HASH", "BTREE")
+        if token is None:
+            self._error("USING requiere HASH o BTREE")
+        return token.kind.lower()
 
     def _comma_list(self, parse_item):
         result = [parse_item()]
