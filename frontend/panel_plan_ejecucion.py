@@ -21,19 +21,20 @@ class PanelPlanEjecucion(ttk.LabelFrame):
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True, padx=4, pady=4)
 
-        columnas = ("operation", "access", "index", "cost", "details")
+        columnas = ("operation", "storage", "access", "index", "cost", "details")
         self.tabla = ttk.Treeview(frame, columns=columnas, show="tree headings",
                                   selectmode="browse")
         self.tabla.heading("#0", text="Node")
         self.tabla.column("#0", width=145, minwidth=100, stretch=False)
         encabezados = {
             "operation": "Operation",
+            "storage": "Storage",
             "access": "Access Method",
             "index": "Index",
             "cost": "Cost",
             "details": "Details",
         }
-        anchos = {"operation": 105, "access": 145, "index": 145,
+        anchos = {"operation": 105, "storage": 120, "access": 145, "index": 145,
                   "cost": 70, "details": 360}
         for columna in columnas:
             self.tabla.heading(columna, text=encabezados[columna])
@@ -58,7 +59,7 @@ class PanelPlanEjecucion(ttk.LabelFrame):
     def mostrar_plan_texto(self, texto):
         """Muestra texto heredado como una fila de detalles."""
         self.limpiar()
-        self.tabla.insert("", "end", text="Plan", values=("", "", "", "", texto))
+        self.tabla.insert("", "end", text="Plan", values=("", "", "", "", "", texto))
 
     def mostrar_plan_objeto(self, plan):
         """Muestra un plan a partir de su representacion dict.
@@ -79,11 +80,12 @@ class PanelPlanEjecucion(ttk.LabelFrame):
     def _insertar_nodo(self, parent, nodo):
         """Inserta una fila y sus hijos conservando la jerarquia del plan."""
         if not isinstance(nodo, dict):
-            self.tabla.insert(parent, "end", text=str(nodo), values=("", "", "", "", ""))
+            self.tabla.insert(parent, "end", text=str(nodo), values=("", "", "", "", "", ""))
             return
 
         physical = nodo.get("physical") or {}
         operation = nodo.get("operation", "?")
+        storage = nodo.get("storage", "")
         access = physical.get("algorithm", "logical")
         index = physical.get("index") or ""
         cost = physical.get("estimated_io", "")
@@ -92,7 +94,7 @@ class PanelPlanEjecucion(ttk.LabelFrame):
         details = physical.get("reason", "")
         item = self.tabla.insert(
             parent, "end", text=operation,
-            values=(operation, access, index, cost, details), open=True,
+            values=(operation, storage, access, index, cost, details), open=True,
         )
         for child in nodo.get("children", []):
             self._insertar_nodo(item, child)

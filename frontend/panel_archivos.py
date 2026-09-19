@@ -62,6 +62,13 @@ class PanelArchivos(ttk.LabelFrame):
 
         # Construir el texto del esquema
         lineas = [f"Tabla: {nombre}", ""]
+        lineas.append(f"Storage: {type(storage).__name__}")
+        if hasattr(storage, "filepath"):
+            lineas.append(f"Archivo: {storage.filepath}")
+        elif hasattr(storage, "filepath_main"):
+            lineas.append(f"Archivo main: {storage.filepath_main}")
+            lineas.append(f"Archivo aux: {storage.filepath_aux}")
+        lineas.append("")
         lineas.append("Campos:")
         for campo, tipo in zip(storage.schema.fields, storage.schema.types):
             lineas.append(f"  - {campo}: {tipo}")

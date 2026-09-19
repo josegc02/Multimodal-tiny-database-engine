@@ -9,7 +9,7 @@ script = [statement, {";", statement}, [";"]], EOF ;
 statement = create_table | create_index | select | insert | delete | transaction ;
 
 create_table = "CREATE", "TABLE", identifier, "(", column_definition,
-               {",", column_definition}, ")" ;
+               {",", column_definition}, ")", ["USING", ("HEAP" | "SEQUENTIAL")] ;
 column_definition = identifier, ("INT" | "FLOAT")
                   | identifier, ("STR" | "VARCHAR"), "(", integer, ")" ;
 create_index = "CREATE", "INDEX", identifier, "ON", identifier,

@@ -119,6 +119,7 @@ class ColumnDefinition(Node):
 class CreateTableStatement(Statement):
     name: str
     columns: tuple[ColumnDefinition, ...]
+    storage_method: str = "heap"
 
 
 @dataclass(frozen=True)

@@ -27,6 +27,8 @@ representación del resultado:
   de columnas. No se admiten expresiones ni subconsultas dentro de `VALUES`.
 - `DELETE FROM ...`: con alias y filtro opcionales.
 - `CREATE TABLE ...`: columnas `INT`, `FLOAT`, `STR(n)` o `VARCHAR(n)`.
+- `CREATE TABLE ... USING HEAP|SEQUENTIAL`: selecciona el storage físico; por
+  defecto se usa `HEAP`.
 - `CREATE INDEX ... ON ... (...) USING HASH|BTREE`: índices de una columna.
 - Transacciones: `BEGIN`, `COMMIT`, `END` y `ROLLBACK`, con `TRANSACTION` opcional.
   `END` se representa como `COMMIT` en el AST.

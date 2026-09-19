@@ -119,7 +119,13 @@ class Parser:
         self._expect("(")
         columns = self._comma_list(self._column_definition)
         self._expect(")")
-        return CreateTableStatement(name, columns)
+        storage_method = "heap"
+        if self._match("USING"):
+            token = self._match("HEAP", "SEQUENTIAL")
+            if token is None:
+                self._error("USING requiere HEAP o SEQUENTIAL")
+            storage_method = token.kind.lower()
+        return CreateTableStatement(name, columns, storage_method)
 
     def _column_definition(self):
         name = self._identifier()

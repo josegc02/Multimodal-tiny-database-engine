@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from frontend.motor import Motor
 from engine.storage.heap_file import HeapFile
+from engine.storage.sequential_file import SequentialFile
 
 
 class TestMotorDDL(unittest.TestCase):
@@ -30,6 +31,27 @@ class TestMotorDDL(unittest.TestCase):
 
         result = self.execute("SELECT id, nombre, salario FROM empleados")
         self.assertEqual(result.filas, [(1, "Ana", 100.0)])
+
+    def test_create_table_using_sequential_file(self):
+        self.execute("CREATE TABLE empleados_seq (id INT, nombre VARCHAR(20)) USING SEQUENTIAL")
+        self.assertIsInstance(self.motor.catalog.table("empleados_seq").storage, SequentialFile)
+        self.execute("INSERT INTO empleados_seq VALUES (2, 'Bob'), (1, 'Ana')")
+        result = self.execute("SELECT id, nombre FROM empleados_seq")
+        self.assertEqual(sorted(result.filas), [(1, "Ana"), (2, "Bob")])
+        self.assertEqual(
+            self.motor.ejecutar("SELECT * FROM empleados_seq").plan["children"][0]["storage"],
+            "SequentialFile",
+        )
+
+    def test_execution_plan_reports_heap_storage(self):
+        result = self.execute("SELECT * FROM cuentas")
+        self.assertEqual(result.plan["children"][0]["storage"], "HeapFile")
+
+    def test_create_table_storage_method_is_preserved_in_ast_result(self):
+        result = self.motor.ejecutar("CREATE TABLE empleados_seq_2 (id INT) USING SEQUENTIAL")
+        self.assertFalse(result.tiene_error, result.error)
+        storage = self.motor.catalog.table("empleados_seq_2").storage
+        self.assertEqual(type(storage).__name__, "SequentialFile")
 
     def test_create_hash_index_is_used_for_select(self):
         self.execute("CREATE TABLE cuentas_nuevas (id INT, saldo INT)")

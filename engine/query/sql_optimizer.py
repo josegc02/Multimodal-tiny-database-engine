@@ -76,6 +76,11 @@ class SQLOptimizer:
 
     def explain(self, plan):
         result = plan.to_dict()
+        if plan.operation == "Scan":
+            table = plan.get("table")
+            if table is not None:
+                storage = self.catalog.table(table.name).storage
+                result["storage"] = type(storage).__name__
         choice = self.choice(plan)
         if choice is not None:
             result["physical"] = choice.explain()

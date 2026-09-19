@@ -29,6 +29,7 @@ from engine.query.parser import parse_script
 from engine.indexes import ExtendibleHash
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
 from engine.storage.heap_file import HeapFile
+from engine.storage.sequential_file import SequentialFile
 
 
 # Ruta donde se guardan los archivos de demo
@@ -223,7 +224,12 @@ class Motor:
         path = os.path.join(DEMO_DIR, f"{statement.name}.db")
         if os.path.exists(path):
             raise ValueError(f"Ya existe el archivo de la tabla {statement.name!r}")
-        storage = HeapFile(path, schema)
+        if statement.storage_method == "sequential":
+            storage = SequentialFile(
+                f"{path}.main", f"{path}.aux", schema, key_field=fields[0]
+            )
+        else:
+            storage = HeapFile(path, schema)
         try:
             self.catalog.register_table(statement.name, storage)
         except Exception:

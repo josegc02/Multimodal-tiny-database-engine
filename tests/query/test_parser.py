@@ -124,6 +124,18 @@ class TestMutationAndScriptParser(unittest.TestCase):
             ColumnDefinition("balance", "float"),
         )))
 
+    def test_create_table_storage_method(self):
+        self.assertEqual(
+            parse("CREATE TABLE accounts (id INT) USING SEQUENTIAL"),
+            CreateTableStatement("accounts", (ColumnDefinition("id", "int"),), "sequential"),
+        )
+        self.assertEqual(
+            parse("CREATE TABLE accounts (id INT) USING HEAP").storage_method,
+            "heap",
+        )
+        with self.assertRaises(SQLParseError):
+            parse("CREATE TABLE accounts (id INT) USING HASH")
+
     def test_create_index_accepts_both_using_positions(self):
         expected = CreateIndexStatement("idx_id", "accounts", "id", "hash")
         self.assertEqual(parse("CREATE INDEX idx_id ON accounts (id) USING HASH"), expected)
