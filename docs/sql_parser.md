@@ -27,9 +27,14 @@ representación del resultado:
   de columnas. No se admiten expresiones ni subconsultas dentro de `VALUES`.
 - `DELETE FROM ...`: con alias y filtro opcionales.
 - `CREATE TABLE ...`: columnas `INT`, `FLOAT`, `STR(n)` o `VARCHAR(n)`.
-- `CREATE TABLE ... USING HEAP|SEQUENTIAL`: selecciona el storage físico; por
-  defecto se usa `HEAP`.
-- `CREATE INDEX ... ON ... (...) USING HASH|BTREE`: índices de una columna.
+- `CREATE TABLE ... USING HEAP|SEQUENTIAL|BTREE`: selecciona el storage físico; por
+  defecto se usa `HEAP`. `BTREE` crea una tabla organizada como **B+ agrupado**
+  (registros en las hojas, clave primaria única = primera columna) y registra
+  esa clave como índice agrupado para igualdad, rangos y `ORDER BY`.
+- `CREATE INDEX ... ON ... (...) USING HASH|BTREE`: índices secundarios de una
+  columna (`BTREE` = B+ no agrupado). El optimizador usa el hash para igualdad y
+  el B+ para igualdad, rangos (`<`, `<=`, `>`, `>=`, `BETWEEN`) y `ORDER BY`,
+  comparando su costo estimado con el de un scan secuencial.
 - Transacciones: `BEGIN`, `COMMIT`, `END` y `ROLLBACK`, con `TRANSACTION` opcional.
   `END` se representa como `COMMIT` en el AST.
 

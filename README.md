@@ -21,6 +21,7 @@ minigestor-bd/
 │   │   ├── __init__.py
 │   │   ├── heap_file.py             # Heap File: páginas slotted (4KB), reutilización de espacio
 │   │   ├── sequential_file.py       # Archivo Secuencial Paginado: orden físico, área aux y reorganización
+│   │   ├── clustered_file.py        # Tabla organizada como B+ agrupado (CREATE TABLE ... USING BTREE)
 │   │   └── record.py                # Schema y (de)serialización binaria de registros
 │   │
 │   ├── indexes/                     # Estructuras de indexación
