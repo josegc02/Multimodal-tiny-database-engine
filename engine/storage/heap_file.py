@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import functools
 import os
 import struct
+import threading
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from engine.storage.record import RID, Schema
@@ -135,11 +137,23 @@ class Page:
         return False
 
 
+def latched(method):
+    """Ejecuta el método con el latch del archivo (descriptor y páginas compartidos)."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._latch:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class HeapFile:
     def __init__(self, filepath: str, schema_def: List[Tuple[Any, ...]], page_size: int = DEFAULT_PAGE_SIZE):
         self.filepath = filepath
         self.page_size = page_size
         self.schema = Schema(schema_def)
+        # Latch físico: seek+read/write sobre un único descriptor no es atómico
+        # entre hilos. Es corto y nunca se retiene mientras se espera un lock lógico.
+        self._latch = threading.RLock()
 
         if self.schema.record_size + SLOT_SIZE > page_size - PAGE_HEADER_SIZE:
             raise ValueError("El registro es demasiado grande para el tamaño de página")
@@ -182,6 +196,7 @@ class HeapFile:
         self.free_pages.add(page.page_id)
         return page
 
+    @latched
     def insert(self, record: Dict[str, Any]) -> RID:
         data = self.schema.serialize(record)
 
@@ -199,6 +214,7 @@ class HeapFile:
         self._write_page(page)
         return RID(page.page_id, slot_id)
 
+    @latched
     def get(self, rid: RID) -> Optional[Dict[str, Any]]:
         if rid.page_id >= self.num_pages:
             return None
@@ -208,6 +224,7 @@ class HeapFile:
             return None
         return self.schema.deserialize(data)
 
+    @latched
     def delete(self, rid: RID) -> bool:
         if rid.page_id >= self.num_pages:
             return False
@@ -219,10 +236,16 @@ class HeapFile:
         return ok
 
     def scan(self) -> Generator[Tuple[RID, Dict[str, Any]], None, None]:
-        for page_id in range(self.num_pages):
-            page = self._read_page(page_id)
+        page_id = 0
+        while True:
+            # El latch cubre la lectura de cada página, no el tiempo del consumidor.
+            with self._latch:
+                if page_id >= self.num_pages:
+                    return
+                page = self._read_page(page_id)
             for slot_id, data in page.iter_active():
                 yield RID(page_id, slot_id), self.schema.deserialize(data)
+            page_id += 1
 
     def search_by_key(self, field: str, value: Any, *, unique: bool = False) -> List[Tuple[RID, Dict[str, Any]]]:
         """Scan lineal. unique=True se detiene en la primera coincidencia (clave primaria)."""
@@ -234,6 +257,7 @@ class HeapFile:
                     break
         return results
 
+    @latched
     def stats(self) -> Dict[str, Any]:
         active = 0
         deleted = 0
@@ -253,6 +277,7 @@ class HeapFile:
             "record_size": self.schema.record_size,
         }
 
+    @latched
     def close(self) -> None:
         self._fh.close()
 

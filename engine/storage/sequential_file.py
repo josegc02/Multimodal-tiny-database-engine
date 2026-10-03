@@ -3,10 +3,11 @@ from __future__ import annotations
 import heapq
 import math
 import os
+import threading
 from operator import itemgetter
 from typing import Any, Dict, Generator, Iterator, List, Optional, Tuple
 
-from engine.storage.heap_file import Page, PAGE_HEADER_SIZE, SLOT_SIZE, DEFAULT_PAGE_SIZE
+from engine.storage.heap_file import Page, PAGE_HEADER_SIZE, SLOT_SIZE, DEFAULT_PAGE_SIZE, latched
 from engine.storage.record import RID, Schema
 
 # Fracción de espacio desperdiciado (borrados en main + registros en aux)
@@ -29,6 +30,9 @@ class SequentialFile:
 
     Los RIDs NO son estables: insertar en una página de main desplaza slots y
     reorganizar reescribe el archivo. Los índices deben reconstruirse.
+
+    Las operaciones públicas toman un latch del archivo; scan() lo toma por página,
+    así que un scan concurrente con una reorganización puede ver ambos estados.
     """
 
     def __init__(
@@ -44,6 +48,7 @@ class SequentialFile:
     ):
         self.schema = Schema(schema_def)
         self.key_field = key_field
+        self._latch = threading.RLock()
         self.page_size = page_size
         self.auto_reorganize = auto_reorganize
         self.fill_factor = fill_factor
@@ -225,6 +230,7 @@ class SequentialFile:
         self._active_aux += 1
         return RID(page.page_id, slot_id, file="aux")
 
+    @latched
     def insert(self, record: Dict[str, Any]) -> RID:
         # La reorganización ocurre ANTES de insertar para que el RID devuelto
         # siga siendo válido al retornar.
@@ -257,6 +263,7 @@ class SequentialFile:
 
         return self._insert_into_aux(data)
 
+    @latched
     def get(self, rid: RID) -> Optional[Dict[str, Any]]:
         if rid.file == "main":
             if rid.page_id < 0 or rid.page_id >= self.num_pages_main:
@@ -274,6 +281,7 @@ class SequentialFile:
             return None
         return self.schema.deserialize(data)
 
+    @latched
     def delete(self, rid: RID) -> bool:
         """Eliminación lazy. Nunca reorganiza, así los RIDs de un lote siguen válidos."""
         if rid.file == "main":
@@ -322,6 +330,7 @@ class SequentialFile:
             for slot_id, data in page.iter_active():
                 yield RID(page_id, slot_id, "aux"), data
 
+    @latched
     def search_by_key(self, value: Any) -> List[Tuple[RID, Dict[str, Any]]]:
         """Todos los registros con clave == value: O(log P) en main + aux acotado."""
         results = []
@@ -334,6 +343,7 @@ class SequentialFile:
                 results.append((rid, self.schema.deserialize(data)))
         return results
 
+    @latched
     def range_search(self, lower: Any, upper: Any) -> List[Tuple[RID, Dict[str, Any]]]:
         """Registros con lower <= clave <= upper, ordenados por clave."""
         if lower > upper:
@@ -354,19 +364,24 @@ class SequentialFile:
         El recorrido no garantiza orden global. No modificar el archivo durante
         el scan; inserciones y reorganizaciones pueden invalidar RIDs anteriores.
         """
-        for file, fh, num_pages in (
-            ("main", self._fh_main, self.num_pages_main),
-            ("aux", self._fh_aux, self.num_pages_aux),
-        ):
-            for page_id in range(num_pages):
-                page = self._read_page(fh, page_id)
+        for file in ("main", "aux"):
+            page_id = 0
+            while True:
+                with self._latch:
+                    fh, num_pages = ((self._fh_main, self.num_pages_main) if file == "main"
+                                     else (self._fh_aux, self.num_pages_aux))
+                    if page_id >= num_pages:
+                        break
+                    page = self._read_page(fh, page_id)
                 for slot_id, data in page.iter_active():
                     yield RID(page_id, slot_id, file), self.schema.deserialize(data)
+                page_id += 1
 
     # ------------------------------------------------------------------
     # Reorganización
     # ------------------------------------------------------------------
 
+    @latched
     def needs_reorganization(self) -> bool:
         total = self._active_main + self._deleted_main + self._active_aux
         if total == 0:
@@ -374,6 +389,7 @@ class SequentialFile:
         wasted = (self._deleted_main + self._active_aux) / total
         return wasted > WASTE_THRESHOLD or self.num_pages_aux > self.aux_page_limit
 
+    @latched
     def reorganize(self, fill_factor: Optional[float] = None) -> None:
         """Merge de main (ordenado) con aux ordenado hacia un archivo nuevo.
 
@@ -429,6 +445,7 @@ class SequentialFile:
             for slot_id, data in page.iter_active():
                 yield RID(page_id, slot_id, "main"), self._record_key(data), data
 
+    @latched
     def stats(self) -> Dict[str, Any]:
         return {
             "num_pages_main": self.num_pages_main,
@@ -440,6 +457,7 @@ class SequentialFile:
             "disk_bytes": (self.num_pages_main + self.num_pages_aux) * self.page_size,
         }
 
+    @latched
     def close(self) -> None:
         self._fh_main.close()
         self._fh_aux.close()
