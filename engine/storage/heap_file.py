@@ -168,16 +168,11 @@ class HeapFile:
 
     def _scan_free_pages(self) -> None:
         self.free_pages.clear()
+        # Libre = cabe un slot nuevo o hay un slot borrado reutilizable.
+        record_needs = self.schema.record_size + SLOT_SIZE
         for page_id in range(self.num_pages):
-            self._fh.seek(page_id * self.page_size)
-            header = self._fh.read(PAGE_HEADER_SIZE)
-            if len(header) < PAGE_HEADER_SIZE:
-                continue
-            num_slots, data_end = struct.unpack(PAGE_HEADER_FORMAT, header)
-            slot_dir_start = self.page_size - num_slots * SLOT_SIZE
-            free = slot_dir_start - data_end
-            record_needs = self.schema.record_size + SLOT_SIZE
-            if free >= record_needs or num_slots > 0:
+            page = self._read_page(page_id)
+            if page.free_space() >= record_needs or page.has_deleted_slots():
                 self.free_pages.add(page_id)
 
     def _create_page(self) -> Page:
@@ -229,11 +224,14 @@ class HeapFile:
             for slot_id, data in page.iter_active():
                 yield RID(page_id, slot_id), self.schema.deserialize(data)
 
-    def search_by_key(self, field: str, value: Any) -> List[Tuple[RID, Dict[str, Any]]]:
+    def search_by_key(self, field: str, value: Any, *, unique: bool = False) -> List[Tuple[RID, Dict[str, Any]]]:
+        """Scan lineal. unique=True se detiene en la primera coincidencia (clave primaria)."""
         results = []
         for rid, record in self.scan():
             if record.get(field) == value:
                 results.append((rid, record))
+                if unique:
+                    break
         return results
 
     def stats(self) -> Dict[str, Any]:
