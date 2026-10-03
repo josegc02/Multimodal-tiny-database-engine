@@ -89,20 +89,28 @@ class SQLExecutor:
         if physical is None or physical.algorithm == "sequential_scan":
             for rid, record in binding.storage.scan():
                 yield _context(table, rid, record)
+        elif physical.algorithm == "index_range_scan":
+            stats.index_probes += 1
+            lower, upper, include_lower, include_upper = physical.value
+            index = physical.index.index
+            for rid, record in self._probe(binding, lambda: index.range_search(
+                    lower, upper, include_lower=include_lower, include_upper=include_upper)):
+                yield _context(table, rid, record)
         else:
             stats.index_probes += 1
-            for rid, record in self._probe(binding, physical.index.index, physical.value):
+            index = physical.index.index
+            for rid, record in self._probe(binding, lambda: index.search(physical.value)):
                 yield _context(table, rid, record)
 
     @staticmethod
-    def _probe(binding, index, value):
+    def _probe(binding, find_rids):
         """Búsqueda por índice + lectura de registros bajo el latch de la tabla.
 
         Se materializa dentro del latch para no leer un índice que otro hilo
         está reconstruyendo; los resultados se entregan fuera de él.
         """
         with binding.latch:
-            found = [(rid, binding.storage.get(rid)) for rid in index.search(value)]
+            found = [(rid, binding.storage.get(rid)) for rid in find_rids()]
         return [(rid, record) for rid, record in found if record is not None]
 
     def _ordered_source(self, source, physical):
@@ -189,7 +197,8 @@ class SQLExecutor:
                         if value is None:
                             continue
                         stats.index_probes += 1
-                        for rid, record in self._probe(binding, physical.index.index, value):
+                        index = physical.index.index
+                        for rid, record in self._probe(binding, lambda: index.search(value)):
                             row = {**left_row, **_context(table, rid, record)}
                             if truth(evaluate(plan.get("predicate"), row)) is True:
                                 yield row

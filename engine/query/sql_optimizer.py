@@ -28,26 +28,100 @@ class SQLOptimizer:
             return TableStats(rows, math.ceil(rows / self.costs.config.records_per_page))
         return left
 
+    @staticmethod
+    def _constant(expression):
+        """(True, valor) si la expresión es un literal (incluido -literal)."""
+        if isinstance(expression, ast.Literal) and type(expression.value) in (int, float, str):
+            return True, expression.value
+        if (isinstance(expression, ast.UnaryOp) and expression.operator in ("-", "+")
+                and isinstance(expression.operand, ast.Literal)
+                and type(expression.operand.value) in (int, float)):
+            value = expression.operand.value
+            return True, -value if expression.operator == "-" else value
+        return False, None
+
+    @classmethod
+    def _conjuncts(cls, expression):
+        if isinstance(expression, ast.BinaryOp) and expression.operator == "AND":
+            yield from cls._conjuncts(expression.left)
+            yield from cls._conjuncts(expression.right)
+        elif expression is not None:
+            yield expression
+
     def _equalities(self, expression, qualifier):
-        if isinstance(expression, ast.BinaryOp):
-            if expression.operator == "AND":
-                yield from self._equalities(expression.left, qualifier)
-                yield from self._equalities(expression.right, qualifier)
-            elif expression.operator == "=":
-                for col, value in ((expression.left, expression.right), (expression.right, expression.left)):
-                    if (isinstance(col, ast.ColumnRef) and col.table == qualifier
-                            and isinstance(value, ast.Literal) and type(value.value) in (int, float, str)):
-                        yield col.name, value.value
+        for term in self._conjuncts(expression):
+            if isinstance(term, ast.BinaryOp) and term.operator == "=":
+                for col, value in ((term.left, term.right), (term.right, term.left)):
+                    is_constant, constant = self._constant(value)
+                    if isinstance(col, ast.ColumnRef) and col.table == qualifier and is_constant:
+                        yield col.name, constant
+
+    _FLIP = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}
+
+    def _ranges(self, expression, qualifier):
+        """{columna: (lower, upper, include_lower, include_upper)} de los conjuntos AND."""
+        ranges = {}
+
+        def tighten(name, lower=None, upper=None, include_lower=True, include_upper=True):
+            low, high, inc_low, inc_high = ranges.get(name, (None, None, True, True))
+            try:
+                if lower is not None and (low is None or lower > low or (lower == low and not include_lower)):
+                    low, inc_low = lower, include_lower
+                if upper is not None and (high is None or upper < high or (upper == high and not include_upper)):
+                    high, inc_high = upper, include_upper
+            except TypeError:  # límites de tipos incomparables: no se usa índice
+                return
+            ranges[name] = (low, high, inc_low, inc_high)
+
+        for term in self._conjuncts(expression):
+            if isinstance(term, ast.Between) and not term.negated:
+                column = term.expression
+                ok_low, low = self._constant(term.lower)
+                ok_high, high = self._constant(term.upper)
+                if isinstance(column, ast.ColumnRef) and column.table == qualifier and ok_low and ok_high:
+                    tighten(column.name, low, high)
+            elif isinstance(term, ast.BinaryOp) and term.operator in self._FLIP:
+                operator, column, value = term.operator, term.left, term.right
+                if not isinstance(column, ast.ColumnRef):
+                    operator, column, value = self._FLIP[operator], term.right, term.left
+                is_constant, constant = self._constant(value)
+                if not (isinstance(column, ast.ColumnRef) and column.table == qualifier and is_constant):
+                    continue
+                if operator in ("<", "<="):
+                    tighten(column.name, upper=constant, include_upper=operator == "<=")
+                else:
+                    tighten(column.name, lower=constant, include_lower=operator == ">=")
+        return ranges
+
+    @staticmethod
+    def _compatible(kind, value):
+        """El valor puede compararse con las claves del índice sin convertir tipos."""
+        if value is None:
+            return True
+        if kind == "int":
+            return type(value) is int
+        if kind == "float":
+            return type(value) in (int, float)
+        return type(value) is str
 
     def choice(self, plan):
         if plan.operation == "Scan":
             table = plan.get("table")
             binding = self.catalog.table(table.name)
-            candidates = [self.costs.plan_equality(binding.statistics, field, value, binding.index_info())
-                          for field, value in self._equalities(plan.get("predicate"), table.alias or table.name)]
+            qualifier = table.alias or table.name
+            predicate = plan.get("predicate")
+            indexes = binding.index_info()
+            schema = binding.storage.schema
+            kinds = dict(zip(schema.fields, schema.types))
+            candidates = [self.costs.plan_equality(binding.statistics, field, value, indexes)
+                          for field, value in self._equalities(predicate, qualifier)]
+            for field, (lower, upper, include_lower, include_upper) in self._ranges(predicate, qualifier).items():
+                if self._compatible(kinds[field], lower) and self._compatible(kinds[field], upper):
+                    candidates.append(self.costs.plan_range(binding.statistics, field, lower, upper,
+                                                            include_lower, include_upper, indexes))
             return min(candidates, key=lambda p: p.estimated_io) if candidates else self.costs._plan(
                 "scan", "sequential_scan", binding.statistics.pages,
-                "No hay un predicado de igualdad utilizable por un índice.")
+                "No hay un predicado de igualdad o rango utilizable por un índice.")
         if plan.operation == "Join":
             right = plan.children[1]
             binding = self.catalog.table(right.get("table").name)

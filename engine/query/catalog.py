@@ -51,24 +51,36 @@ class TableBinding:
             return None
 
     def analyze(self):
-        """Estadísticas explícitas; hasta 1024 valores distintos por columna.
+        """Estadísticas explícitas; hasta 1024 valores distintos por columna y
+        (mínimo, máximo) de las columnas numéricas.
 
         El límite subestima cardinalidades grandes de forma conservadora.
         Se ejecuta al registrar/refrescar, nunca dentro de explain().
         """
-        distinct = {name: set() for name in self.storage.schema.fields}
+        schema = self.storage.schema
+        distinct = {name: set() for name in schema.fields}
+        numeric = [name for name, kind in zip(schema.fields, schema.types) if kind in ("int", "float")]
+        bounds = {}
         count = 0
         for _, row in self.storage.scan():
             count += 1
             for name, values in distinct.items():
                 if len(values) < 1024:
                     values.add(row[name])
+            for name in numeric:
+                value = row[name]
+                if name in bounds:
+                    low, high = bounds[name]
+                    bounds[name] = (min(low, value), max(high, value))
+                else:
+                    bounds[name] = (value, value)
         per_page = max(1, (self.storage.page_size - PAGE_HEADER_SIZE) // (self.storage.schema.record_size + SLOT_SIZE))
         pages = getattr(self.storage, "num_pages", None)
         if pages is None:
             pages = getattr(self.storage, "num_pages_main", 0) + getattr(self.storage, "num_pages_aux", 0)
         self.statistics = TableStats(count, max(pages, math.ceil(count / per_page)),
-                                     {name: len(values) for name, values in distinct.items()})
+                                     {name: len(values) for name, values in distinct.items()},
+                                     bounds)
 
     def index_info(self):
         from dataclasses import replace
