@@ -1,8 +1,10 @@
-"""B+ agrupado/no agrupado y hash dinámico, con sus interfaces reales.
+"""B+ agrupado, B+ no agrupado y hash dinámico sobre la misma tabla.
 
-python benchmarks/bench_indexes.py --sizes 100 1000 5000
-El agrupado guarda registros completos; los otros devuelven RIDs sintéticos.
-No se mide la recuperación posterior desde un heap, ni el snapshot del hash.
+python benchmarks/bench_indexes.py --sizes 200 1000 5000 --repetitions 1
+
+Todas las consultas devuelven REGISTROS COMPLETOS: el B+ agrupado los tiene en
+sus hojas; el no agrupado y el hash resuelven cada RID en un HeapFile real.
+Cada estructura usa el máximo de entradas que cabe en una página de 4096 B.
 """
 
 import os
@@ -16,21 +18,38 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks._common import arguments, save_results
+from benchmarks._common import (NA, arguments, plot, print_table, progress, series,
+                                summarize, write_csv, write_metadata)
 from benchmarks.generate_datasets import SCHEMA, generate_records
 from engine.indexes import BPlusTreeClustered, BPlusTreeUnclustered, ExtendibleHash
-from engine.storage.record import RID, Schema
+from engine.indexes.bplus_tree import CHILD_SIZE, NODE_HEADER_SIZE
+from engine.query.external_algorithms import external_sort
+from engine.storage.heap_file import HeapFile
+from engine.storage.record import Schema
 
-ORDER = 64  # Misma capacidad lógica; cada formato tiene diferente tamaño de entrada.
-FIELDS = ["tecnica", "n_registros", "tiempo_construccion_seg", "tiempo_igualdad_seg",
-          "tiempo_rango_seg", "espacio_disco_bytes", "espacio_adicional_disco_bytes",
-          "memoria_estimada_bytes", "tiempo_actualizaciones_seg"]
+PAGE_SIZE = 4096
+KEY_SIZE = 8  # id int64
+RECORD_SIZE = Schema(SCHEMA).record_size
+# Nodo interno: header + M*(hijo + clave) + último hijo. El no agrupado guarda el
+# RID empaquetado (8 B) donde el interno guarda el hijo, así que usa el mismo M.
+ORDER_UNCLUSTERED = (PAGE_SIZE - NODE_HEADER_SIZE - CHILD_SIZE) // (CHILD_SIZE + KEY_SIZE)
+# Hoja agrupada: header + M*(clave + registro completo).
+ORDER_CLUSTERED = min(ORDER_UNCLUSTERED, (PAGE_SIZE - NODE_HEADER_SIZE) // (KEY_SIZE + RECORD_SIZE))
+# Bucket equivalente a una página con entradas (clave, RID) de 16 B.
+HASH_BUCKET = ORDER_UNCLUSTERED
+
+TECHNIQUES = ("B+ agrupado", "B+ no agrupado", "Extendible Hash")
+METRICS = ["tiempo_construccion_seg", "tiempo_igualdad_seg", "tiempo_rango_seg", "tiempo_orden_seg",
+           "espacio_total_bytes", "espacio_adicional_bytes", "memoria_estimada_bytes",
+           "tiempo_actualizaciones_seg"]
+FIELDS = ["tecnica", "n_registros", "repeticiones"] + [
+    name for metric in METRICS for name in (metric, metric + "_std")]
+EQUALITY_QUERIES, RANGE_QUERIES, RANGE_WIDTH, UPDATE_PAIRS = 100, 20, 100, 500
 
 
 def retained_size(root):
     """Estimación del grafo Python retenido, sin duplicar referencias compartidas.
 
-    Incluye objetos de claves y RIDs aunque el dataset también los referencie.
     No es RSS ni una medición del pico de memoria del proceso.
     """
     pending, seen, size = [root], set(), 0
@@ -50,90 +69,129 @@ def retained_size(root):
     return size
 
 
-def synthetic_rid(key):
-    return RID(page_id=key // 100, slot_id=key % 100)
+def _check(condition, message):
+    if not condition:
+        raise RuntimeError(message)
 
 
-def benchmark(n, seed=42):
+def benchmark(n, seed, repetition):
     records = generate_records(n, seed)
-    entries = [(record["id"], synthetic_rid(record["id"])) for record in records]
-    keys = random.Random(seed + 1).sample(range(n), 100)
+    keys = random.Random(seed + 1).sample(range(n), EQUALITY_QUERIES)
     rng = random.Random(seed + 2)
-    ranges = [(start, min(n - 1, start + 100)) for start in (rng.randrange(n) for _ in range(20))]
-    updates = [{**record, "id": n + record["id"]} for record in generate_records(500, seed + 3)]
-    update_entries = [(record["id"], synthetic_rid(record["id"])) for record in updates]
+    ranges = [(start, min(n - 1, start + RANGE_WIDTH)) for start in (rng.randrange(n) for _ in range(RANGE_QUERIES))]
+    updates = [{**record, "id": n + record["id"]} for record in generate_records(UPDATE_PAIRS, seed + 3)]
     rows, structures = [], []
     directory = tempfile.mkdtemp(prefix="bd2-indexes-")
     try:
-        for technique in ("B+ agrupado", "B+ no agrupado", "Extendible Hash"):
-            print(f"[indexes] N={n}: {technique}", file=sys.stderr, flush=True)
-            path = os.path.join(directory, technique + ".bpt")
+        for technique in TECHNIQUES:
+            progress(f"[indexes] N={n} rep={repetition}: {technique}")
             clustered = technique == "B+ agrupado"
             hashed = technique == "Extendible Hash"
-            index = (BPlusTreeClustered(path, SCHEMA, "id", M=ORDER) if clustered else
-                     ExtendibleHash(bucket_capacity=ORDER) if hashed else
-                     BPlusTreeUnclustered(path, order=ORDER))
-            with index:
+            base = tempfile.mkdtemp(dir=directory)
+            index_path = os.path.join(base, "index")
+            heap_path = os.path.join(base, "table.heap")
+
+            # Tabla base (no cronometrada): el agrupado ES la tabla.
+            heap = None
+            if not clustered:
+                heap = HeapFile(heap_path, SCHEMA, page_size=PAGE_SIZE)
+                entries = [(record["id"], heap.insert(record)) for record in records]
+            index = (BPlusTreeClustered(index_path, SCHEMA, "id", M=ORDER_CLUSTERED, page_size=PAGE_SIZE) if clustered else
+                     ExtendibleHash(bucket_capacity=HASH_BUCKET, filepath=index_path) if hashed else
+                     BPlusTreeUnclustered(index_path, order=ORDER_UNCLUSTERED, page_size=PAGE_SIZE))
+            try:
+                fetch = (lambda rids: [heap.get(rid) for rid in rids]) if heap else None
+
+                # 1. Construcción (inserción una a una; el hash termina persistiendo su snapshot).
                 start = time.perf_counter()
                 if clustered:
                     inserted = sum(index.insert(record) for record in records)
                 else:
                     inserted = sum(index.insert(key, rid) for key, rid in entries)
+                    if hashed:
+                        index.flush()
                 construction = time.perf_counter() - start
-                if inserted != n:
-                    raise RuntimeError("No se insertaron todos los registros/pares")
-                start = time.perf_counter()
-                found = [index.search(key) for key in keys]
-                equality = time.perf_counter() - start
-                if clustered:
-                    valid = all(record is not None and record["id"] == key for key, record in zip(keys, found))
-                else:
-                    valid = all(result == [synthetic_rid(key)] for key, result in zip(keys, found))
-                if not valid:
-                    raise RuntimeError("Resultados de igualdad incorrectos")
+                _check(inserted == n, "No se insertaron todos los registros/pares")
 
-                # Extendible Hash NO soporta rangos por diseño. NA es 'no soportado', no tiempo cero.
-                range_seconds = "NA"
+                # 2. Igualdad: registro completo por clave.
+                start = time.perf_counter()
+                if clustered:
+                    found = [[index.search(key)] for key in keys]
+                else:
+                    found = [fetch(index.search(key)) for key in keys]
+                equality = time.perf_counter() - start
+                _check(all([r["id"] for r in result] == [key] for key, result in zip(keys, found)),
+                       "Resultados de igualdad incorrectos")
+
+                # 3. Rango [k, k+100]: registros completos en orden de clave.
+                range_seconds = NA
                 if not hashed:
                     start = time.perf_counter()
-                    found = [index.range_search(low, high) for low, high in ranges]
+                    found = [index.range_search(low, high) if clustered else fetch(index.range_search(low, high))
+                             for low, high in ranges]
                     range_seconds = time.perf_counter() - start
                     for (low, high), result in zip(ranges, found):
-                        actual = [r["id"] for r in result] if clustered else [r.page_id * 100 + r.slot_id for r in result]
-                        if actual != list(range(low, high + 1)):
-                            raise RuntimeError("Resultados de rango incorrectos")
+                        _check([r["id"] for r in result] == list(range(low, high + 1)),
+                               "Resultados de rango incorrectos")
 
-                # Espacio medido después de construir, antes de las actualizaciones.
+                # 4. Ordenamiento (ORDER BY id) de toda la tabla.
+                #    Hash no puede aportar orden: se mide lo que haría el motor
+                #    (scan del heap + external sort k-way), marcado en la gráfica.
+                start = time.perf_counter()
+                if clustered:
+                    ordered = list(index.scan())
+                elif hashed:
+                    ordered = list(external_sort((record for _, record in heap.scan()), "id"))
+                else:
+                    ordered = fetch(index.iter_ordered())
+                order_seconds = time.perf_counter() - start
+                _check([r["id"] for r in ordered] == list(range(n)), "ORDER BY incorrecto")
+
+                # 5. Espacio: tabla + índice, y lo que se agrega sobre un heap con los mismos datos.
+                index_bytes = os.path.getsize(index_path)
+                heap_bytes = os.path.getsize(heap_path) if heap else None
+                total = index_bytes if clustered else heap_bytes + index_bytes
+                memory = retained_size(index) if hashed else NA
                 if hashed:
-                    disk, extra, memory = "NA", "NA", retained_size(index)
                     structures.append({"tecnica": technique, "n_registros": n, **index.stats()})
                 else:
-                    disk = os.path.getsize(path)
-                    extra = disk - n * Schema(SCHEMA).record_size if clustered else disk
-                    memory = "NA"  # No equivale a cero: no se mide caché/RSS del B+.
                     tree = index if clustered else index.tree
-                    structures.append({"tecnica": technique, "n_registros": n,
+                    structures.append({"tecnica": technique, "n_registros": n, "M": tree.header.M,
                                        "allocated_node_pages": tree.header.number_pages - 1})
 
+                # 6. 500 ciclos inserción + eliminación de tabla e índice.
                 start = time.perf_counter()
-                inserted, deleted = 0, 0
-                if clustered:
-                    for record in updates:
+                inserted = deleted = 0
+                for record in updates:
+                    if clustered:
                         inserted += index.insert(record)
                         deleted += index.delete(record["id"])
-                else:
-                    for key, rid in update_entries:
-                        inserted += index.insert(key, rid)
-                        deleted += index.delete(key, rid)
+                    else:
+                        rid = heap.insert(record)
+                        inserted += index.insert(record["id"], rid)
+                        deleted += bool(index.delete(record["id"], rid))
+                        heap.delete(rid)
+                if hashed:
+                    index.flush()
                 changes = time.perf_counter() - start
-                if inserted != 500 or deleted != 500:
-                    raise RuntimeError("Falló el ciclo de 500 inserciones/eliminaciones")
-                if any(index.search(record["id"]) for record in updates):
-                    raise RuntimeError("Quedaron claves temporales después de eliminarlas")
-                if any(not index.search(key) for key in keys):
-                    raise RuntimeError("Las actualizaciones eliminaron claves originales")
-                rows.append(dict(zip(FIELDS, (technique, n, construction, equality, range_seconds,
-                                               disk, extra, memory, changes))))
+                _check(inserted == UPDATE_PAIRS and deleted == UPDATE_PAIRS, "Falló el ciclo inserción/eliminación")
+                _check(not any(index.search(record["id"]) for record in updates), "Quedaron claves temporales")
+
+                rows.append({"tecnica": technique, "n_registros": n,
+                             "tiempo_construccion_seg": construction, "tiempo_igualdad_seg": equality,
+                             "tiempo_rango_seg": range_seconds, "tiempo_orden_seg": order_seconds,
+                             "espacio_total_bytes": total, "espacio_adicional_bytes": NA,
+                             "memoria_estimada_bytes": memory, "tiempo_actualizaciones_seg": changes,
+                             "_heap_bytes": heap_bytes})
+            finally:
+                index.close()
+                if heap:
+                    heap.close()
+        # Espacio adicional respecto del heap con los mismos N registros.
+        heap_reference = next(row["_heap_bytes"] for row in rows if row["_heap_bytes"])
+        for row in rows:
+            row["espacio_adicional_bytes"] = row["espacio_total_bytes"] - heap_reference
+            del row["_heap_bytes"]
     finally:
         shutil.rmtree(directory)
     return rows, structures
@@ -141,40 +199,58 @@ def benchmark(n, seed=42):
 
 def main():
     args = arguments(__doc__)
-    start = time.perf_counter()
-    rows, structures = [], []
+    started = time.perf_counter()
+    runs, structures = [], []
     for n in args.sizes:
-        result, stats = benchmark(n, args.seed)
-        rows.extend(result)
-        structures.extend(stats)
-    save_results(rows, FIELDS, [
-        ("tiempo_construccion_seg", "tiempo_construccion", "Construcción de N entradas/registros", "Segundos"),
-        ("tiempo_igualdad_seg", "tiempo_igualdad", "Igualdad: total de 100 búsquedas", "Segundos"),
-        ("tiempo_rango_seg", "tiempo_rango", "Total de 20 rangos; Hash no soportado (NA)", "Segundos"),
-        ("espacio_disco_bytes", "espacio_disco", "Disco: agrupado incluye datos; Hash en RAM (NA)", "Bytes en disco"),
-        ("espacio_adicional_disco_bytes", "espacio_adicional", "Disco menos datos del agrupado; Hash en RAM (NA)", "Bytes adicionales"),
-        ("memoria_estimada_bytes", "memoria", "Hash: memoria Python retenida estimada (B+ no medido)", "Bytes estimados"),
-        ("tiempo_actualizaciones_seg", "tiempo_actualizaciones", "500 ciclos insert/delete (1000 operaciones)", "Segundos"),
-    ], args, "indexes", start, {"page_size": 4096, "bplus_max_keys": ORDER, "hash_bucket_capacity": ORDER,
-                               "hash_max_depth": 16, "equality_queries": 100, "range_queries": 20,
-                               "range_width": "[k, min(N-1, k+100)], hasta 101 claves", "update_pairs": 500,
-                               "space_state": "Antes de actualizaciones; agrupado incluye registros completos",
-                               "extra_disk": "Agrupado: archivo - N*36; no agrupado: archivo completo",
-                               "memory_estimate": "sys.getsizeof del grafo retenido del hash, referencias únicas; no RSS",
-                               "NA": "Rango de Hash no soportado; disco de Hash no persistido; RAM B+ no medida",
-                               "durability": "B+ escribe/flush; Hash en memoria, sin snapshot. Ninguno fuerza fsync",
-                               "structural_stats": structures})
+        for rep in range(1, args.repetitions + 1):
+            result, stats = benchmark(n, args.seed, rep)
+            runs.extend(result)
+            if rep == 1:
+                structures.extend(stats)
+    rows = summarize(runs, ("tecnica", "n_registros"), METRICS)
+    os.makedirs(args.output_dir, exist_ok=True)
+    write_csv(args.output_dir / "indexes_comparison.csv", rows, FIELDS)
+    write_csv(args.output_dir / "indexes_runs.csv", runs, ["tecnica", "n_registros"] + METRICS)
+
+    out = args.output_dir
+    all_three = lambda metric, scale=1.0: [series(rows, t, metric, scale=scale) for t in TECHNIQUES]
+    plot(out / "indexes_tiempo_construccion.png", "Construcción del índice (N inserciones)", "Segundos",
+         all_three("tiempo_construccion_seg"),
+         note="B+ escribe cada página modificada; el hash trabaja en RAM y persiste un snapshot JSON al final.")
+    plot(out / "indexes_tiempo_igualdad.png", "Búsqueda por igualdad (promedio de 100, registro completo)",
+         "Milisegundos por consulta", all_three("tiempo_igualdad_seg", 1000 / EQUALITY_QUERIES))
+    plot(out / "indexes_tiempo_rango.png", "Búsqueda por rango de 101 claves (promedio de 20, registros completos)",
+         "Milisegundos por consulta",
+         [series(rows, t, "tiempo_rango_seg", scale=1000 / RANGE_QUERIES) for t in TECHNIQUES[:2]],
+         note="Extendible Hash no soporta rangos. El no agrupado incluye leer cada RID del heap.")
+    plot(out / "indexes_tiempo_orden.png", "Ordenamiento: ORDER BY id sobre toda la tabla", "Segundos",
+         [series(rows, "B+ agrupado", "tiempo_orden_seg", "B+ agrupado (recorrido de hojas)"),
+          series(rows, "B+ no agrupado", "tiempo_orden_seg", "B+ no agrupado (hojas + lectura de RIDs)"),
+          series(rows, "Extendible Hash", "tiempo_orden_seg",
+                 "Hash: no aplica, se usa scan + external sort")])
+    plot(out / "indexes_espacio_total.png", "Espacio en disco: tabla + índice", "Bytes",
+         all_three("espacio_total_bytes"),
+         note="Agrupado: un solo archivo con los datos en las hojas. No agrupado y hash: heap + archivo del índice.")
+    plot(out / "indexes_tiempo_actualizaciones.png", "500 ciclos inserción + eliminación (tabla e índice)",
+         "Segundos", all_three("tiempo_actualizaciones_seg"))
+    for stale in ("indexes_espacio_disco.png", "indexes_espacio_adicional.png", "indexes_memoria.png"):
+        (out / stale).unlink(missing_ok=True)
+
+    elapsed = time.perf_counter() - started
+    write_metadata(args, "indexes", elapsed, {
+        "page_size": PAGE_SIZE, "bplus_clustered_M": ORDER_CLUSTERED, "bplus_unclustered_M": ORDER_UNCLUSTERED,
+        "hash_bucket_capacity": HASH_BUCKET, "hash_max_depth": 16,
+        "equality_queries": EQUALITY_QUERIES, "range_queries": RANGE_QUERIES,
+        "range_width": f"[k, min(N-1, k+{RANGE_WIDTH})]", "update_pairs": UPDATE_PAIRS,
+        "results": "todas las consultas devuelven registros completos (no agrupado y hash leen el heap)",
+        "ordering": "agrupado: hojas; no agrupado: hojas + heap.get; hash: heap.scan + external_sort",
+        "space": "espacio_total = tabla + índice; espacio_adicional = total - heap con los mismos N registros",
+        "memory_estimate": "solo hash: sys.getsizeof del grafo retenido; no RSS",
+        "durability": "B+ escribe/flush por operación; hash en RAM con snapshot JSON al terminar construcción y actualizaciones",
+        "structural_stats": structures})
+    print_table(rows, FIELDS)
+    print(f"\nResultados: {out.resolve()}\nDuración completa: {elapsed:.3f} s")
 
 
 if __name__ == "__main__":
     main()
-
-# Conclusiones medidas el 2026-09-18, semilla 42, una corrida, /tmp en tmpfs:
-# 1. N=100000: construir agrupado/no agrupado/hash tomó 698.397620 / 442.521788 /
-#    1.530415 s. B+ escribe páginas; Hash trabaja en RAM sin persistir snapshots.
-# 2. Las 100 igualdades tomaron 0.018516 / 0.018218 / 0.000952 s respectivamente;
-#    el agrupado devuelve registros, mientras los otros devuelven solo RIDs.
-# 3. Los 20 rangos tomaron 0.010128 s (agrupado) y 0.007554 s (no agrupado).
-#    Hash no soporta esta operación: NA significa no soportado, nunca cero.
-# 4. Los 500 ciclos insert/delete tomaron 10.963724 / 7.480661 / 0.023630 s.
-#    La corrida completa duró 1231.014707 s; estas cifras no miden un SSD físico.

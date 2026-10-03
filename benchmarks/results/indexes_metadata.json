@@ -1,90 +1,97 @@
 {
-  "timestamp_utc": "2026-09-18T19:06:59.221669+00:00",
-  "python": "3.14.7 (main, Aug 10 2026, 07:46:56) [GCC 16.1.1 20260728]",
-  "platform": "Linux-7.2.4-arch1-2-x86_64-with-glibc2.44",
-  "machine": "x86_64",
+  "timestamp_utc": "2026-10-03T20:02:24.016505+00:00",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "machine": "AMD64",
   "seed": 42,
   "sizes": [
     1000,
     10000,
     100000
   ],
-  "repetitions": 1,
-  "elapsed_seconds": 1231.0147070880012,
-  "matplotlib": "3.11.2",
+  "repetitions": 3,
+  "elapsed_seconds": 1242.60258289997,
+  "matplotlib": "3.10.7",
   "page_size": 4096,
-  "bplus_max_keys": 64,
-  "hash_bucket_capacity": 64,
+  "bplus_clustered_M": 92,
+  "bplus_unclustered_M": 254,
+  "hash_bucket_capacity": 254,
   "hash_max_depth": 16,
   "equality_queries": 100,
   "range_queries": 20,
-  "range_width": "[k, min(N-1, k+100)], hasta 101 claves",
+  "range_width": "[k, min(N-1, k+100)]",
   "update_pairs": 500,
-  "space_state": "Antes de actualizaciones; agrupado incluye registros completos",
-  "extra_disk": "Agrupado: archivo - N*36; no agrupado: archivo completo",
-  "memory_estimate": "sys.getsizeof del grafo retenido del hash, referencias únicas; no RSS",
-  "NA": "Rango de Hash no soportado; disco de Hash no persistido; RAM B+ no medida",
-  "durability": "B+ escribe/flush; Hash en memoria, sin snapshot. Ninguno fuerza fsync",
+  "results": "todas las consultas devuelven registros completos (no agrupado y hash leen el heap)",
+  "ordering": "agrupado: hojas; no agrupado: hojas + heap.get; hash: heap.scan + external_sort",
+  "space": "espacio_total = tabla + índice; espacio_adicional = total - heap con los mismos N registros",
+  "memory_estimate": "solo hash: sys.getsizeof del grafo retenido; no RSS",
+  "durability": "B+ escribe/flush por operación; hash en RAM con snapshot JSON al terminar construcción y actualizaciones",
   "structural_stats": [
     {
       "tecnica": "B+ agrupado",
       "n_registros": 1000,
-      "allocated_node_pages": 22
+      "M": 92,
+      "allocated_node_pages": 17
     },
     {
       "tecnica": "B+ no agrupado",
       "n_registros": 1000,
-      "allocated_node_pages": 22
+      "M": 254,
+      "allocated_node_pages": 6
     },
     {
       "tecnica": "Extendible Hash",
       "n_registros": 1000,
-      "global_depth": 5,
-      "directory_size": 32,
-      "num_buckets": 21,
+      "global_depth": 3,
+      "directory_size": 8,
+      "num_buckets": 5,
       "overflow_buckets": 0,
       "entries": 1000,
-      "load_factor": 0.7440476190476191
+      "load_factor": 0.7874015748031497
     },
     {
       "tecnica": "B+ agrupado",
       "n_registros": 10000,
-      "allocated_node_pages": 224
+      "M": 92,
+      "allocated_node_pages": 161
     },
     {
       "tecnica": "B+ no agrupado",
       "n_registros": 10000,
-      "allocated_node_pages": 224
+      "M": 254,
+      "allocated_node_pages": 64
     },
     {
       "tecnica": "Extendible Hash",
       "n_registros": 10000,
-      "global_depth": 8,
-      "directory_size": 256,
-      "num_buckets": 249,
+      "global_depth": 6,
+      "directory_size": 64,
+      "num_buckets": 64,
       "overflow_buckets": 0,
       "entries": 10000,
-      "load_factor": 0.6275100401606426
+      "load_factor": 0.6151574803149606
     },
     {
       "tecnica": "B+ agrupado",
       "n_registros": 100000,
-      "allocated_node_pages": 2303
+      "M": 92,
+      "allocated_node_pages": 1585
     },
     {
       "tecnica": "B+ no agrupado",
       "n_registros": 100000,
-      "allocated_node_pages": 2303
+      "M": 254,
+      "allocated_node_pages": 539
     },
     {
       "tecnica": "Extendible Hash",
       "n_registros": 100000,
-      "global_depth": 12,
-      "directory_size": 4096,
-      "num_buckets": 2081,
+      "global_depth": 9,
+      "directory_size": 512,
+      "num_buckets": 512,
       "overflow_buckets": 0,
       "entries": 100000,
-      "load_factor": 0.7508409418548775
+      "load_factor": 0.7689468503937008
     }
   ]
 }

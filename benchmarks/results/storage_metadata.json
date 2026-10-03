@@ -1,21 +1,24 @@
 {
-  "timestamp_utc": "2026-09-18T18:46:27.955413+00:00",
-  "python": "3.14.7 (main, Aug 10 2026, 07:46:56) [GCC 16.1.1 20260728]",
-  "platform": "Linux-7.2.4-arch1-2-x86_64-with-glibc2.44",
-  "machine": "x86_64",
+  "timestamp_utc": "2026-10-03T19:41:40.567631+00:00",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "machine": "AMD64",
   "seed": 42,
   "sizes": [
     1000,
     10000,
     100000
   ],
-  "repetitions": 1,
-  "elapsed_seconds": 1513.4807746369988,
-  "matplotlib": "3.11.2",
+  "repetitions": 3,
+  "elapsed_seconds": 250.28615540009923,
+  "matplotlib": "3.10.7",
   "page_size": 4096,
   "equality_queries": 100,
   "deleted_fraction": 0.35,
-  "search_state": "Después de insertar, antes de reorganizar; caché del SO sin vaciar",
-  "space_state": "Antes de eliminar; main + aux para SequentialFile",
-  "reorganization": "Solo reorganize(); excluye scan, borrado y verificación"
+  "sequential": "auto_reorganize=True: reorganiza si desperdicio > 30% o aux > ceil(log2(P_main+1)) páginas; fill_factor 0,9",
+  "heap_search": "search_by_key(unique=True): scan que se detiene en la primera coincidencia",
+  "search_state": "tras la carga y, en el secuencial, también tras reorganizar (65 claves sobrevivientes, escalado a 100)",
+  "space_state": "después de insertar; main + aux para SequentialFile",
+  "reorganization": "solo reorganize(); excluye scan, borrado y verificación",
+  "cache": "caché del sistema operativo sin vaciar"
 }
