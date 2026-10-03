@@ -121,9 +121,9 @@ class Parser:
         self._expect(")")
         storage_method = "heap"
         if self._match("USING"):
-            token = self._match("HEAP", "SEQUENTIAL")
+            token = self._match("HEAP", "SEQUENTIAL", "BTREE")
             if token is None:
-                self._error("USING requiere HEAP o SEQUENTIAL")
+                self._error("USING requiere HEAP, SEQUENTIAL o BTREE")
             storage_method = token.kind.lower()
         return CreateTableStatement(name, columns, storage_method)
 

@@ -28,6 +28,7 @@ from engine.query.statement_executor import StatementExecutor
 from engine.query.parser import parse_script
 from engine.indexes import ExtendibleHash
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
+from engine.storage.clustered_file import ClusteredBPlusFile
 from engine.storage.heap_file import HeapFile
 from engine.storage.sequential_file import SequentialFile
 
@@ -130,7 +131,7 @@ class Motor:
     def _eliminar_archivos_tabla(base_path):
         """Elimina archivos antiguos de una tabla demo."""
         root = base_path[:-3] if base_path.endswith(".db") else base_path
-        for path in (f"{root}.db", f"{root}.main", f"{root}.aux"):
+        for path in (f"{root}.db", f"{root}.main", f"{root}.aux", f"{root}.bpt"):
             if os.path.exists(path):
                 try:
                     os.remove(path)
@@ -230,14 +231,20 @@ class Motor:
         path = os.path.join(DEMO_DIR, f"{statement.name}.db")
         if os.path.exists(path):
             raise ValueError(f"Ya existe el archivo de la tabla {statement.name!r}")
+        indexes = None
         if statement.storage_method == "sequential":
             storage = SequentialFile(
                 f"{path}.main", f"{path}.aux", schema, key_field=fields[0]
             )
+        elif statement.storage_method == "btree":
+            # B+ agrupado: los registros viven en las hojas, ordenados por la
+            # primera columna (clave primaria). La clave queda como índice agrupado.
+            storage = ClusteredBPlusFile(f"{path[:-3]}.bpt", schema, key_field=fields[0])
+            indexes = {fields[0]: storage.primary_index_info(f"{statement.name}_pk")}
         else:
             storage = HeapFile(path, schema)
         try:
-            self.catalog.register_table(statement.name, storage)
+            self.catalog.register_table(statement.name, storage, indexes)
         except Exception:
             storage.close()
             raise
