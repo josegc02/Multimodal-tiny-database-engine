@@ -65,6 +65,23 @@ class SQLExecutor:
             return iter(({"affected_rows": self._delete(plan, stats)},))
         return self._run(plan, stats)
 
+    def matching_records(self, plan, *, stats: ExecutionStats | None = None):
+        """(RID, registro) de las filas que un plan DELETE eliminaría, sin modificar nada.
+
+        Usa el mismo plan físico que el SELECT equivalente (índices incluidos).
+        """
+        if not isinstance(plan, LogicalPlan) or plan.operation != "Delete":
+            raise TypeError("Se requiere el LogicalPlan de un DELETE")
+        table = plan.get("table")
+        qualifier = table.alias or table.name
+        fields = self.catalog.table(table.name).storage.schema.fields
+        rid_keys = _rid_keys(qualifier)
+        columns = [(name, column_key(ast.ColumnRef(name, qualifier))) for name in fields]
+        with closing(self._run(plan.children[0], stats or ExecutionStats())) as rows:
+            for row in rows:
+                yield (RID(*(row[key] for key in rid_keys)),
+                       {name: row[key] for name, key in columns})
+
     def _scan(self, plan, stats):
         table = plan.get("table")
         binding = self.catalog.table(table.name)
@@ -74,10 +91,19 @@ class SQLExecutor:
                 yield _context(table, rid, record)
         else:
             stats.index_probes += 1
-            for rid in physical.index.index.search(physical.value):
-                record = binding.storage.get(rid)
-                if record is not None:
-                    yield _context(table, rid, record)
+            for rid, record in self._probe(binding, physical.index.index, physical.value):
+                yield _context(table, rid, record)
+
+    @staticmethod
+    def _probe(binding, index, value):
+        """Búsqueda por índice + lectura de registros bajo el latch de la tabla.
+
+        Se materializa dentro del latch para no leer un índice que otro hilo
+        está reconstruyendo; los resultados se entregan fuera de él.
+        """
+        with binding.latch:
+            found = [(rid, binding.storage.get(rid)) for rid in index.search(value)]
+        return [(rid, record) for rid, record in found if record is not None]
 
     def _ordered_source(self, source, physical):
         scan = base_scan(source)
@@ -87,7 +113,9 @@ class SQLExecutor:
         while source.operation == "Filter":
             predicates.append(source.get("predicate"))
             source = source.children[0]
-        for rid in physical.index.index.iter_ordered(reverse=physical.reverse):
+        with binding.latch:
+            rids = list(physical.index.index.iter_ordered(reverse=physical.reverse))
+        for rid in rids:
             record = binding.storage.get(rid)
             if record is not None:
                 row = _context(table, rid, record)
@@ -161,12 +189,10 @@ class SQLExecutor:
                         if value is None:
                             continue
                         stats.index_probes += 1
-                        for rid in physical.index.index.search(value):
-                            record = binding.storage.get(rid)
-                            if record is not None:
-                                row = {**left_row, **_context(table, rid, record)}
-                                if truth(evaluate(plan.get("predicate"), row)) is True:
-                                    yield row
+                        for rid, record in self._probe(binding, physical.index.index, value):
+                            row = {**left_row, **_context(table, rid, record)}
+                            if truth(evaluate(plan.get("predicate"), row)) is True:
+                                yield row
                     return
                 with closing(self._run(plan.children[1], stats)) as right:
                     with closing(external_hash_join(rows, right, tuple(column_key(l) for l, _ in pairs),
@@ -182,10 +208,11 @@ class SQLExecutor:
     def _insert(self, plan):
         binding = self.catalog.table(plan.get("table"))
         records = normalize_insert(binding, plan.get("columns"), plan.get("values"))
-        binding.invalidate_indexes()
-        for record in records:
-            binding.storage.insert(record)
-        binding.refresh_indexes()
+        with binding.latch:
+            binding.invalidate_indexes()
+            for record in records:
+                binding.storage.insert(record)
+            binding.refresh_indexes()
         return len(records)
 
     def _delete(self, plan, stats):
@@ -203,10 +230,11 @@ class SQLExecutor:
                     count += 1
             fh.seek(0)
             read_header(fh)
-            binding.invalidate_indexes()
-            deleted = 0
-            for _ in range(count):
-                rid = read_record(fh)
-                deleted += bool(binding.storage.delete(RID(rid["page"], rid["slot"], rid["file"])))
-        binding.refresh_indexes()
+            with binding.latch:
+                binding.invalidate_indexes()
+                deleted = 0
+                for _ in range(count):
+                    rid = read_record(fh)
+                    deleted += bool(binding.storage.delete(RID(rid["page"], rid["slot"], rid["file"])))
+                binding.refresh_indexes()
         return deleted

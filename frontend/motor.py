@@ -3,8 +3,8 @@
 Une:
 - Catalog con tablas de demo
 - LockManager + TransactionManager
-- SQLExecutor (para SELECT)
-- StatementExecutor (para INSERT/DELETE/BEGIN/COMMIT)
+- SQLExecutor (planes y algoritmos de consulta)
+- StatementExecutor (SELECT/INSERT/DELETE/BEGIN/COMMIT con locks)
 """
 
 from __future__ import annotations
@@ -77,6 +77,8 @@ class Motor:
             transaction_manager=self.transaction_manager,
             lock_manager=self.lock_manager,
             storage=self.catalog,
+            query_executor=self.sql_executor,
+            planner=self.sql_executor.planner,
         )
         self._cargar_tablas_demo()
 
@@ -192,8 +194,9 @@ class Motor:
             # --- SELECT ---
             if isinstance(ast, SelectStatement):
                 plan = self.sql_executor.planner.plan(ast)
-                filas_iter = self.sql_executor.execute(plan)
-                filas_dict = list(filas_iter)
+                # Pasa por el StatementExecutor para tomar locks S y respetar
+                # la transacción activa de la sesión.
+                filas_dict = self.statement_executor.select(plan)
 
                 if filas_dict:
                     columnas = list(filas_dict[0].keys())

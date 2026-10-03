@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 import math
+import threading
 
 from engine.query.errors import SQLSemanticError
 from engine.query.planner import IndexInfo, TableStats
@@ -17,9 +18,37 @@ class RegisteredIndex:
 
 @dataclass
 class TableBinding:
+    """Storage + índices de una tabla.
+
+    `latch` protege la consistencia física entre storage e índices (una
+    modificación y la actualización de sus índices ocurren juntas). Es corto:
+    nunca se retiene mientras se espera un lock lógico del LockManager.
+    """
     storage: object
     indexes: dict[str, RegisteredIndex] = field(default_factory=dict)
     statistics: TableStats | None = None
+    latch: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
+
+    def locate(self, rid, record):
+        """RID actual de `record`, o None si ya no existe.
+
+        Los RIDs del SequentialFile cambian con inserciones y reorganizaciones,
+        así que si el RID guardado ya no contiene el registro se busca por clave
+        (secuencial) o por contenido (heap).
+        """
+        with self.latch:
+            storage = self.storage
+            if rid is not None and storage.get(rid) == record:
+                return rid
+            key_field = getattr(storage, "key_field", None)
+            if key_field is not None and callable(getattr(storage, "search_by_key", None)):
+                candidates = storage.search_by_key(record[key_field])
+            else:
+                candidates = storage.scan()
+            for current_rid, current in candidates:
+                if current == record:
+                    return current_rid
+            return None
 
     def analyze(self):
         """Estadísticas explícitas; hasta 1024 valores distintos por columna.
@@ -47,15 +76,17 @@ class TableBinding:
                 for binding in self.indexes.values()]
 
     def invalidate_indexes(self):
-        for binding in self.indexes.values():
-            binding.valid = False
+        with self.latch:
+            for binding in self.indexes.values():
+                binding.valid = False
 
     def refresh_indexes(self):
-        self.invalidate_indexes()
-        for name, binding in self.indexes.items():
-            binding.index.bulk_load_from_storage(self.storage, name, replace=True)
-            binding.valid = True
-        self.analyze()
+        with self.latch:
+            self.invalidate_indexes()
+            for name, binding in self.indexes.items():
+                binding.index.bulk_load_from_storage(self.storage, name, replace=True)
+                binding.valid = True
+            self.analyze()
 
 
 class Catalog:
