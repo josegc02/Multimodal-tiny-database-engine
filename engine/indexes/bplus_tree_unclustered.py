@@ -74,8 +74,8 @@ class BPlusTreeUnclustered:
             with type(self)(target_path, self.key_type, self.order,
                             key_size=self.key_size, page_size=self.page_size) as target:
                 count = target.bulk_load(entries)
-            os.replace(target_path, self.filepath)
             self.tree.close()
+            os.replace(target_path, self.filepath)
             self.tree = BPlusTree(self.filepath, self.schema_def, "key", self.order, self.page_size,
                                   is_clustered=False, allow_duplicates=True)
         return count

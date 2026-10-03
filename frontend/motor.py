@@ -130,7 +130,10 @@ class Motor:
         root = base_path[:-3] if base_path.endswith(".db") else base_path
         for path in (f"{root}.db", f"{root}.main", f"{root}.aux"):
             if os.path.exists(path):
-                os.remove(path)
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     def ejecutar(self, sql: str) -> Resultado:
         """Ejecuta SQL y devuelve un Resultado.

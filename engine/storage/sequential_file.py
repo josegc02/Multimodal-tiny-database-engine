@@ -139,9 +139,11 @@ class SequentialFile:
         return RID(page.page_id, slot_id, file="aux")
 
     def insert(self, record: Dict[str, Any]) -> RID:
+        # 1. Serializa el registro a binario y extrae el valor de la clave de ordenamiento
         data = self.schema.serialize(record)
         key = record[self.key_field]
 
+        # 2. Caso base: si main no tiene páginas, crea la primera página (página 0)
         if self.num_pages_main == 0:
             page = self._create_page_main()
             slot_id = page.insert_sorted_at(data, 0, self.schema.record_size)
@@ -149,16 +151,23 @@ class SequentialFile:
             self._page_bounds[page.page_id] = self._page_key_bounds(page)
             return RID(page.page_id, slot_id, file="main")
 
+        # 3. Búsqueda binaria en memoria (sobre _page_bounds) para hallar la página destino en main
         target_page_id = self._locate_page_for_key(key)
         page = self._read_page_main(target_page_id)
+
+        # 4. Búsqueda binaria dentro de la página para encontrar la posición ordenada del slot
         position = self._find_insert_position_in_page(page, key)
+
+        # 5. Intenta insertar en main desplazando slots para mantener el orden estricto
         slot_id = page.insert_sorted_at(data, position, self.schema.record_size)
 
+        # 6. Si hubo espacio en la página de main: guarda en disco, refresca límites y retorna RID
         if slot_id is not None:
             self._write_page_main(page)
             self._page_bounds[target_page_id] = self._page_key_bounds(page)
             return RID(target_page_id, slot_id, file="main")
 
+        # 7. Si la página de main estaba llena: desborda el registro al archivo auxiliar (aux)
         return self._insert_into_aux(data)
 
     def get(self, rid: RID) -> Optional[Dict[str, Any]]:
