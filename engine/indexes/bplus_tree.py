@@ -233,27 +233,25 @@ class BPlusTree:
         if not 1 <= page_id < self.header.number_pages:
             raise ValueError("Puntero de nodo fuera del archivo")
         self._fh.seek(self._page_offset(page_id))
-        header = self._fh.read(NODE_HEADER_SIZE)
-        if len(header) != NODE_HEADER_SIZE:
+        # Una sola lectura por nodo; luego se decodifica en memoria.
+        data = self._fh.read(self.node_size)
+        if len(data) < NODE_HEADER_SIZE:
             raise ValueError("Nodo B+ invalido: header incompleto")
-        fullness, is_leaf, next_leaf = struct.unpack(NODE_HEADER_FORMAT, header)
+        if len(data) != self.node_size:
+            raise ValueError("Nodo B+ invalido: cuerpo incompleto")
+        fullness, is_leaf, next_leaf = struct.unpack_from(NODE_HEADER_FORMAT, data)
         if not 0 <= fullness <= self.header.M:
             raise ValueError("Cantidad de claves inválida en disco")
         childs = []
         keys = []
+        offset = NODE_HEADER_SIZE
         for i in range(self.header.M):
-            child_data = self._fh.read(CHILD_SIZE)
-            key_data = self._fh.read(self.key_size)
-            if len(child_data) != CHILD_SIZE or len(key_data) != self.key_size:
-                raise ValueError("Nodo B+ invalido: cuerpo incompleto")
-            child = struct.unpack(CHILD_FORMAT, child_data)[0]
-            childs.append(child)
+            childs.append(struct.unpack_from(CHILD_FORMAT, data, offset)[0])
+            offset += CHILD_SIZE
             if i < fullness:
-                keys.append(self._deserialize_key(key_data))
-        last_child_data = self._fh.read(CHILD_SIZE)
-        if len(last_child_data) != CHILD_SIZE:
-            raise ValueError("Nodo B+ invalido: ultimo child incompleto")
-        childs.append(struct.unpack(CHILD_FORMAT, last_child_data)[0])
+                keys.append(self._deserialize_key(data[offset:offset + self.key_size]))
+            offset += self.key_size
+        childs.append(struct.unpack_from(CHILD_FORMAT, data, offset)[0])
         return BplusNode(fullness, childs, keys, is_leaf, next_leaf)
 
     def _write_node(self, page_id: int, node: BplusNode) -> None:
@@ -386,6 +384,21 @@ class BPlusTree:
                 self._refresh_internal_node(node)
                 self._write_node(pos, node)
 
+    def _propagate_first_key(self, path: List[Tuple[int, BplusNode]], child_pos: int, key: Any) -> None:
+        """Actualiza el único separador igual a la primera clave de child_pos.
+
+        Es el del ancestro más cercano donde el subárbol no es el hijo izquierdo;
+        O(altura) en lugar de recalcular cada separador con _first_key.
+        """
+        for pos, node in reversed(path):
+            index = node.childs[:node.fullness + 1].index(child_pos)
+            if index > 0:
+                if node.keys[index - 1] != key:
+                    node.keys[index - 1] = key
+                    self._write_node(pos, node)
+                return
+            child_pos = pos
+
     def _set_clean_state(self) -> None:
         self.header.overflow_state = False
         self.header.underflow_state = False
@@ -418,12 +431,14 @@ class BPlusTree:
         insert_at = children.index(left_pos) + 1
         children.insert(insert_at, right_pos)
         parent.childs = children
-        parent.keys = [self._first_key(child) for child in children[1:]]
+        # promoted_key es la primera clave del subárbol derecho; el resto de
+        # separadores no cambia con el split.
+        parent.keys = parent.keys[:parent.fullness]
+        parent.keys.insert(insert_at - 1, promoted_key)
         parent.fullness = len(parent.keys)
 
         if parent.fullness <= self.header.M:
             self._write_node(parent_pos, parent)
-            self._refresh_path(path)
             return
 
         promote_index = parent.fullness // 2
@@ -484,10 +499,13 @@ class BPlusTree:
         if leaf.fullness <= self.header.M:
             leaf.childs = leaf.childs[:leaf.fullness] + [EMPTY_CHILD]
             self._write_node(leaf_pos, leaf)
-            self._refresh_path(parent_path)
+            if index == 0:
+                self._propagate_first_key(parent_path, leaf_pos, key)
             self._set_clean_state()
             return True
 
+        if index == 0:
+            self._propagate_first_key(parent_path, leaf_pos, key)
         self.header.overflow_state = True
         self.header.exception_pos = leaf_pos
         self._write_header()
