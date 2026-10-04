@@ -40,7 +40,8 @@ Diseñado para tablas con orden físico por clave primaria o de ordenamiento, co
   - **Nivel de Archivo**: Búsqueda binaria sobre separadores en memoria (`_page_max`, el máximo de cada página de `main`). Si una página queda vacía conserva su último máximo como separador, de modo que la búsqueda binaria no se desvía.
   - **Nivel de Página**: Búsqueda binaria (*lower bound*) sobre el directorio de slots con `_find_insert_position_in_page`.
   - **Inserción ordenada eficiente**: `insert_sorted_at` desplaza únicamente las entradas del directorio de slots (5 bytes por slot), sin reubicar los datos de los registros. Si la página destino está llena, el registro se agrega **al final** de `aux` (sin recorrer `aux` buscando huecos).
-  - **Búsqueda por clave y por rango**: `search_by_key` devuelve todas las coincidencias (admite claves repetidas) recorriendo `main` desde el *lower bound* y revisando `aux`; `range_search(lower, upper)` mezcla (*merge*) el tramo ordenado de `main` con las coincidencias de `aux`.
+  - **Búsqueda por clave y por rango**: `search_by_key` devuelve todas las coincidencias (admite claves repetidas) recorriendo `main` desde el *lower bound* y revisando `aux`; `range_search(lower, upper)` mezcla (*merge*) el tramo ordenado de `main` con las coincidencias de `aux` (admite límites abiertos y exclusivos).
+  - **Uso desde SQL**: la clave de ordenamiento se registra como un índice virtual (`SequentialKeyIndex`), así que el optimizador resuelve `WHERE clave = v`, rangos y `ORDER BY clave` con esta búsqueda binaria (`EXPLAIN` muestra `Index Scan using <tabla>_pkey`) en lugar de recorrer el archivo. Sus RIDs se calculan en cada consulta y no envejecen al reorganizar.
 
 * **Eliminación Lógica**:
   - Marca `is_deleted = 1` en el slot sin compactación inmediata y actualiza los límites de la página. La eliminación nunca dispara una reorganización, así los RIDs de un lote de borrado siguen siendo válidos.

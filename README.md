@@ -79,7 +79,7 @@ Resultados, gráficas y metodología: `benchmarks/README.md` y la sección 3 de 
 
 | Sentencia | Detalle |
 | :--- | :--- |
-| `CREATE TABLE t (col INT \| FLOAT \| VARCHAR(n), ...) [USING HEAP \| SEQUENTIAL \| BTREE]` | `SEQUENTIAL` y `BTREE` se ordenan por la primera columna; `BTREE` es una tabla organizada como B+ agrupado (clave primaria única). |
+| `CREATE TABLE t (col INT \| FLOAT \| VARCHAR(n), ...) [USING HEAP \| SEQUENTIAL \| BTREE]` | `SEQUENTIAL` y `BTREE` se ordenan por la clave primaria (o la primera columna) y el optimizador usa ese orden para igualdad, rangos y ORDER BY; `BTREE` es una tabla organizada como B+ agrupado (clave única). |
 | `CREATE INDEX nombre ON t (col) USING HASH \| BTREE` | Índices secundarios: hash extensible o B+ no agrupado. |
 | `SELECT [DISTINCT] ... FROM t [JOIN t2 ON ...] [WHERE ...] [GROUP BY ... [HAVING ...]] [ORDER BY ... [ASC\|DESC]] [LIMIT n [OFFSET m]]` | `AND/OR/NOT`, comparaciones, `BETWEEN`, `IN`, `LIKE`, aritmética, `COUNT/SUM/AVG/MIN/MAX` (también con `DISTINCT`). |
 | `INSERT INTO t [(cols)] VALUES (...), (...)` | Valida tipos y columnas de todo el lote antes de escribir. |
