@@ -9,8 +9,15 @@ de psql:
             Filter: (nota >= 14)
 
 Los costos son los del modelo de este motor (páginas leídas estimadas), no los
-de PostgreSQL. Con ANALYZE se agregan los valores reales medidos por operador
-(tiempo hasta la primera fila..última fila, filas y ejecuciones).
+de PostgreSQL, pero siguen su forma `cost=arranque..total`: el arranque es lo
+que cuesta entregar la primera fila. Los operadores bloqueantes (Sort,
+HashAggregate, Hash) deben consumir toda su entrada antes de devolver algo, así
+que su arranque es igual a su costo total. Con ANALYZE se agregan los valores
+reales medidos por operador (tiempo hasta la primera fila..última fila, filas y
+ejecuciones).
+
+Además de las líneas de texto, `render` deja en `nodes` el árbol en forma de
+datos (un diccionario por operador) para que el frontend lo muestre como tabla.
 """
 
 from __future__ import annotations
@@ -36,6 +43,7 @@ class PlanNode:
     names: dict = field(default_factory=dict)  # $groupN / $aggN -> texto (para HAVING)
     consumed: tuple = ()               # condiciones ya resueltas por el índice
     is_sort: bool = False
+    startup: float = 0.0               # costo hasta entregar la primera fila
 
 
 def sql_text(expression, qualified=False, names=None):
@@ -83,6 +91,7 @@ class PlanExplainer:
         self.optimizer = optimizer
         self.costs = optimizer.costs
         self.qualified = False
+        self.nodes = []  # árbol del último render() como datos, para el frontend
 
     # ------------------------------------------------------------------
     # Construcción del árbol
@@ -111,7 +120,8 @@ class PlanExplainer:
         rows = max(0.0, child.rows - offset)
         if limit is not None:
             rows = min(rows, limit)
-        return PlanNode("Limit", child.cost, rows, children=[child], keys=[id(node)], names=child.names)
+        return PlanNode("Limit", child.cost, rows, children=[child], keys=[id(node)], names=child.names,
+                        startup=child.startup)
 
     def _build_sort(self, node, ordered):
         choice = self.optimizer.choice(node)
@@ -124,8 +134,9 @@ class PlanExplainer:
         sort_key = ", ".join(self._text(item.expression, child.names) + (" DESC" if item.direction == "DESC" else "")
                              for item in node.get("order_by"))
         cost = child.cost + (choice.estimated_io if choice else 0)
+        # Bloqueante: no entrega la primera fila sin haber leído toda su entrada.
         return PlanNode("Sort", cost, child.rows, [f"Sort Key: {sort_key}"], [child], [id(node)],
-                        names=child.names, is_sort=True)
+                        names=child.names, is_sort=True, startup=cost)
 
     def _build_aggregate(self, node, ordered):
         choice = self.optimizer.choice(node)
@@ -138,14 +149,46 @@ class PlanExplainer:
         names = {f"$group{i}": self._text(g) for i, g in enumerate(groups)}
         names.update({f"$agg{i}": self._text(a) for i, a in enumerate(aggregates)})
         details = [f"Group Key: {', '.join(self._text(g) for g in groups)}"] if groups else []
-        rows = 1.0 if not groups else max(1.0, min(child.rows, child.rows / 10 or 1))
+        rows = 1.0 if not groups else self._group_rows(node, groups, child.rows)
         cost = child.cost + (choice.estimated_io if choice else 0)
-        return PlanNode(label, cost, rows, details, [child], [id(node)], names=names)
+        # HashAggregate y Aggregate consumen toda la entrada antes de emitir;
+        # GroupAggregate recibe grupos contiguos y emite a medida que avanza.
+        startup = child.startup if label == "GroupAggregate" else cost
+        return PlanNode(label, cost, rows, details, [child], [id(node)], names=names, startup=startup)
+
+    def _group_rows(self, node, groups, input_rows):
+        """Grupos estimados: producto de los valores distintos de cada columna
+        agrupada (estadísticas de la tabla), acotado por las filas de entrada."""
+        scans = {}
+
+        def collect(plan):
+            if plan.operation == "Scan":
+                table = plan.get("table")
+                scans[table.alias or table.name] = table.name
+            for child in plan.children:
+                collect(child)
+
+        collect(node)
+        estimate = 1.0
+        for group in groups:
+            if not isinstance(group, ast.ColumnRef):
+                return max(1.0, min(input_rows, input_rows / 10 or 1))
+            names = [scans[group.table]] if group.table in scans else list(scans.values())
+            distinct = None
+            for name in names:
+                stats = self.catalog.table(name).statistics
+                if stats is not None and group.name in stats.distinct_values:
+                    distinct = stats.distinct_values[group.name]
+                    break
+            if distinct is None:
+                return max(1.0, min(input_rows, input_rows / 10 or 1))
+            estimate *= max(1, distinct)
+        return max(1.0, min(input_rows, estimate))
 
     def _build_distinct(self, node, ordered):
         child = self._build(node.children[0], ordered)
         return PlanNode("Unique", child.cost, child.rows, ["Method: external sort"], [child], [id(node)],
-                        names=child.names)
+                        names=child.names, startup=child.cost)
 
     def _build_filter(self, node, ordered):
         child = self._build(node.children[0], ordered)
@@ -260,19 +303,23 @@ class PlanExplainer:
             inner = PlanNode(f"Index Scan using {choice.index.name} on {self._table_label(right_table)}",
                              choice.index.lookup_pages, inner_rows,
                              [f"Index Cond: ({self._text(pairs[0][1])} = {self._text(pairs[0][0])})"])
-            return PlanNode("Nested Loop", left.cost + choice.estimated_io, rows, details, [left, inner], [id(node)])
+            return PlanNode("Nested Loop", left.cost + choice.estimated_io, rows, details, [left, inner], [id(node)],
+                            startup=left.startup)
         right = self._build(right_plan)
-        hashed = PlanNode("Hash", right.cost, right.rows, [], [right], list(right.keys))
+        # Hash construye la tabla con toda su entrada antes de que el join
+        # entregue la primera fila: es el costo de arranque del Hash Join.
+        hashed = PlanNode("Hash", right.cost, right.rows, [], [right], list(right.keys), startup=right.cost)
         return PlanNode("Hash Join", left.cost + right.cost + choice.estimated_io, rows,
                         [f"Hash Cond: {condition if len(conditions) == 1 else '(' + condition + ')'}"] + details,
-                        [left, hashed], [id(node)])
+                        [left, hashed], [id(node)], startup=left.startup + right.cost)
 
     def _build_insert(self, node, ordered):
         return PlanNode(f"Insert on {node.get('table')}", 0.0, 0.0)
 
     def _build_delete(self, node, ordered):
         child = self._build(node.children[0])
-        return PlanNode(f"Delete on {self._table_label(node.get('table'))}", child.cost, 0.0, children=[child])
+        return PlanNode(f"Delete on {self._table_label(node.get('table'))}", child.cost, 0.0, children=[child],
+                        startup=child.startup)
 
     # ------------------------------------------------------------------
     # Salida en texto
@@ -282,6 +329,7 @@ class PlanExplainer:
         """Líneas del QUERY PLAN. Con `profile` (EXPLAIN ANALYZE) agrega lo medido."""
         analyze = profile is not None
         lines = []
+        self.nodes = []
 
         def actual(node):
             """(medición, clave usada) del nodo; (None, None) si no se ejecutó."""
@@ -295,28 +343,40 @@ class PlanExplainer:
         def emit(node, depth):
             prefix = "" if depth == 0 else " " * (6 * (depth - 1) + 2) + "->  "
             rows = 0 if node.rows <= 0 else max(1, round(node.rows))
-            line = f"{prefix}{node.label}  (cost=0.00..{node.cost:.2f} rows={rows})"
+            startup = min(node.startup, node.cost)
+            line = f"{prefix}{node.label}  (cost={startup:.2f}..{node.cost:.2f} rows={rows})"
             measured, used_key = actual(node) if analyze else (None, None)
+            entry = {"depth": depth, "label": node.label, "startup": startup, "cost": node.cost,
+                     "rows": rows, "details": [], "actual": None}
             if analyze:
                 if measured is None:
                     line += " (never executed)"
                 else:
                     first = measured["first"] if measured["first"] is not None else measured["total"]
+                    loops = max(1, measured.get("loops", 1))
                     line += (f" (actual time={first * 1000:.3f}..{measured['total'] * 1000:.3f} "
-                             f"rows={measured['rows']} loops={max(1, measured.get('loops', 1))})")
+                             f"rows={measured['rows']} loops={loops})")
+                    entry["actual"] = {"first": first, "total": measured["total"],
+                                       "rows": measured["rows"], "loops": loops}
             lines.append(line)
+            self.nodes.append(entry)
             pad = " " * (6 * depth + 2)
+
+            def detail_line(text):
+                lines.append(pad + text)
+                entry["details"].append(text)
+
             for detail in node.details:
-                lines.append(pad + detail)
+                detail_line(detail)
                 if (analyze and detail.startswith("Filter:") and measured is not None
                         and node.input_key in profile and node.input_key != used_key):
-                    lines.append(pad + f"Rows Removed by Filter: {profile[node.input_key]['rows'] - measured['rows']}")
+                    detail_line(f"Rows Removed by Filter: {profile[node.input_key]['rows'] - measured['rows']}")
             if analyze and node.is_sort and stats is not None and measured is not None:
-                if stats.initial_runs > 1:
-                    lines.append(pad + f"Sort Method: external merge  Runs: {stats.initial_runs}  "
-                                       f"Merge passes: {stats.merge_passes}")
+                if stats.initial_runs > 0:
+                    detail_line(f"Sort Method: external merge  Runs: {stats.initial_runs}  "
+                                f"Merge passes: {stats.merge_passes}")
                 else:
-                    lines.append(pad + "Sort Method: in-memory (1 run)")
+                    detail_line("Sort Method: in-memory")
             for child in node.children:
                 emit(child, depth + 1)
 

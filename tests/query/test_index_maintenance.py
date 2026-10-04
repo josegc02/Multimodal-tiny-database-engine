@@ -90,8 +90,9 @@ class TestIncrementalIndexMaintenance(unittest.TestCase):
             with patch.object(db.binding, "refresh_indexes", side_effect=AssertionError("reconstrucción")), \
                     patch.object(db.binding, "analyze", wraps=db.binding.analyze) as analyze:
                 self.random_workload(db)
-            # Auto-analyze ocasional, no un scan completo por sentencia.
-            self.assertLess(analyze.call_count, 15)
+            # Auto-analyze ocasional, no un scan completo por sentencia: se dispara
+            # cuando los cambios alcanzan el tamaño analizado (amortizado O(1) por fila).
+            self.assertLess(analyze.call_count, 30)
             self.assertEqual(db.run("SELECT COUNT(*) AS n FROM t WHERE grupo = 99;"), [{"n": 0}])
         finally:
             db.close()

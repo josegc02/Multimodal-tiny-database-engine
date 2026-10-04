@@ -140,11 +140,23 @@ class TestExplain(MotorTestCase):
 
     def test_explain_matches_postgres_layout(self):
         plan = self.plan("EXPLAIN SELECT * FROM alumnos WHERE nota >= 14 ORDER BY id")
-        self.assertRegex(plan[0], r"^Sort  \(cost=0\.00\.\.[0-9.]+ rows=\d+\)$")
+        # Sort es bloqueante: su costo de arranque es su costo total (>= el del hijo).
+        startup, total = map(float, re.match(r"^Sort  \(cost=([0-9.]+)\.\.([0-9.]+) rows=\d+\)$", plan[0]).groups())
         self.assertEqual(plan[1], "  Sort Key: id")
-        self.assertRegex(plan[2], r"^  ->  Seq Scan on alumnos  \(cost=")
+        child = re.match(r"^  ->  Seq Scan on alumnos  \(cost=0\.00\.\.([0-9.]+) rows=\d+\)$", plan[2])
+        self.assertEqual(startup, total)
+        self.assertGreaterEqual(startup, float(child.group(1)))
         self.assertEqual(plan[3], "        Filter: (nota >= 14)")
         self.assertEqual(len(plan), 4)
+
+    def test_blocking_operators_and_group_estimates(self):
+        plan = self.plan("EXPLAIN SELECT carrera_id, COUNT(*) FROM alumnos GROUP BY carrera_id")
+        startup, total, rows = re.match(r"^HashAggregate  \(cost=([0-9.]+)\.\.([0-9.]+) rows=(\d+)\)$",
+                                        plan[0]).groups()
+        self.assertEqual(startup, total)
+        # Estimación con los valores distintos reales de la columna (estadísticas tras el INSERT).
+        distinct = len({i % 5 + 1 for i in range(1, 501)})
+        self.assertEqual(int(rows), distinct)
 
     def test_explain_shows_joins_aggregates_and_limits(self):
         plan = "\n".join(self.plan(
@@ -169,7 +181,7 @@ class TestExplain(MotorTestCase):
         plan = self.plan("EXPLAIN ANALYZE SELECT * FROM alumnos WHERE nota >= 14 ORDER BY id")
         expected = sum(1 for i in range(1, 501) if i % 21 >= 14)
         self.assertRegex(plan[0], rf"\(actual time=[0-9.]+\.\.[0-9.]+ rows={expected} loops=1\)$")
-        self.assertIn("  Sort Method: in-memory (1 run)", plan)
+        self.assertIn("  Sort Method: in-memory", plan)
         self.assertIn(f"        Rows Removed by Filter: {500 - expected}", plan)
         self.assertTrue(re.match(r"^Planning Time: [0-9.]+ ms$", plan[-2]))
         self.assertTrue(re.match(r"^Execution Time: [0-9.]+ ms$", plan[-1]))

@@ -172,10 +172,61 @@ class TestExternalGroupBy(ExternalTestCase):
         with self.assertRaises(TypeError):
             list(external_hash_group_by([{"k": 1, "v": "bad"}], "k", {"total": Aggregate("sum", "v")},
                                        config=self.config))
+        # Más grupos que (B-2)*R: obliga a particionar en disco.
         with patch("engine.query.external_algorithms.write_record", side_effect=OSError("disco lleno")):
             with self.assertRaises(OSError):
-                list(external_hash_group_by([{"k": 1}], "k", config=self.config))
+                list(external_hash_group_by([{"k": i} for i in range(10)], "k", config=self.config))
         self.assert_limits_and_cleanup()
+
+
+    def test_partial_states_after_overflow_match_in_memory_result(self):
+        rows = [{"k": i % 11, "v": (i * 7) % 23 - 5} for i in range(300)]
+        random.Random(3).shuffle(rows)
+        specs = {"n": Aggregate(), "s": Aggregate("sum", "v"), "a": Aggregate("avg", "v"),
+                 "lo": Aggregate("min", "v"), "hi": Aggregate("max", "v")}
+        expected = {}
+        for row in rows:
+            expected.setdefault(row["k"], []).append(row["v"])
+        result = list(external_hash_group_by(OnePass(rows), "k", specs, config=self.config, stats=self.stats))
+        self.assertEqual({r["k"]: (r["n"], r["s"], r["a"], r["lo"], r["hi"]) for r in result},
+                         {k: (len(v), sum(v), sum(v) / len(v), min(v), max(v)) for k, v in expected.items()})
+        self.assertGreater(self.stats.partitions, 0)
+        self.assert_limits_and_cleanup()
+
+
+class TestInMemoryWhenInputFits(unittest.TestCase):
+    """Si la entrada cabe en el buffer no se crean temporales (como PostgreSQL)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.config = BufferConfig(8, 128, temp_dir=self.tmp.name)
+        self.stats = ExecutionStats()
+
+    def assert_no_disk(self):
+        self.assertEqual(self.stats.records_written, 0)
+        self.assertEqual(list(Path(self.tmp.name).iterdir()), [])
+
+    def test_sort_group_and_join_stay_in_memory(self):
+        rows = [{"id": i, "k": i % 5} for i in range(200)]
+        ordered = list(external_sort(rows, "k", config=self.config, stats=self.stats))
+        self.assertEqual(ordered, sorted(rows, key=lambda row: row["k"]))
+        self.assertEqual((self.stats.initial_runs, self.stats.memory_sorts), (0, 1))
+        groups = list(external_hash_group_by(rows, "k", config=self.config, stats=self.stats))
+        self.assertEqual({g["k"]: g["count"] for g in groups}, {k: 40 for k in range(5)})
+        dims = [{"key": k, "name": f"d{k}"} for k in range(5)]
+        pairs = list(external_hash_join(rows, dims, "k", "key", config=self.config, stats=self.stats))
+        self.assertEqual(len(pairs), 200)
+        self.assertEqual(self.stats.partitions, 0)
+        self.assert_no_disk()
+
+    def test_sort_spills_exactly_when_input_exceeds_buffer(self):
+        fits = [{"k": i} for i in reversed(range(self.config.capacity))]
+        list(external_sort(fits, "k", config=self.config, stats=self.stats))
+        self.assert_no_disk()
+        list(external_sort(fits + [{"k": -1}], "k", config=self.config, stats=self.stats))
+        self.assertEqual(self.stats.initial_runs, 2)
+        self.assertEqual(list(Path(self.tmp.name).iterdir()), [])
 
 
 class TestExternalJoin(ExternalTestCase):

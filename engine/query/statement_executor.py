@@ -51,6 +51,20 @@ def _scanned_tables(plan: LogicalPlan):
     return tables
 
 
+class PlanLines(list):
+    """Líneas del QUERY PLAN (se comporta como lista) con el árbol en datos.
+
+    `nodes` tiene un diccionario por operador (profundidad, costos, filas
+    estimadas y, con ANALYZE, lo medido) para mostrarlo como tabla de análisis.
+    """
+
+    def __init__(self, lines, nodes, planning=None, execution=None):
+        super().__init__(lines)
+        self.nodes = nodes
+        self.planning = planning
+        self.execution = execution
+
+
 class StatementExecutor:
     """Ejecuta sentencias AST de una sesión.
 
@@ -331,7 +345,7 @@ class StatementExecutor:
         root = explainer.build(plan)
         planning = time.perf_counter() - started
         if not statement.analyze:
-            return explainer.render(root)
+            return PlanLines(explainer.render(root), explainer.nodes)
 
         stats = ExecutionStats(profile={})
         started = time.perf_counter()
@@ -344,10 +358,11 @@ class StatementExecutor:
         execution = time.perf_counter() - started
         if not isinstance(inner, SelectStatement):
             root.actual = {"rows": 0, "first": execution, "total": execution, "loops": 1}
-        return explainer.render(root, stats.profile, stats) + [
+        lines = explainer.render(root, stats.profile, stats) + [
             f"Planning Time: {planning * 1000:.3f} ms",
             f"Execution Time: {execution * 1000:.3f} ms",
         ]
+        return PlanLines(lines, explainer.nodes, planning, execution)
 
     # --- DELETE ---
 

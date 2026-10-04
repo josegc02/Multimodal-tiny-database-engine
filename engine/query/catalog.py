@@ -47,7 +47,12 @@ class TableBinding:
     foreign_keys: list = field(default_factory=list)
     # Auto-analyze (como PostgreSQL): estadísticas exactas tras
     # ANALYZE_BASE + ANALYZE_FRACTION * filas cambios desde el último analyze.
+    # Además, al terminar una sentencia que cambió al menos tantas filas como
+    # tenía la tabla en el último analyze (p. ej. un COPY sobre una tabla
+    # vacía), se recalculan: el costo sigue siendo amortizado O(1) por fila
+    # porque el tamaño analizado se duplica en cada disparo.
     _changes_since_analyze: int = field(default=0, repr=False, compare=False)
+    _rows_at_analyze: int = field(default=0, repr=False, compare=False)
 
     ANALYZE_BASE = 50
     ANALYZE_FRACTION = 0.10
@@ -138,6 +143,7 @@ class TableBinding:
             distinct_counts[self.primary_key] = count
         self.statistics = TableStats(count, self._pages(count), distinct_counts, bounds)
         self._changes_since_analyze = 0
+        self._rows_at_analyze = count
 
     def _pages(self, rows):
         per_page = max(1, (self.storage.page_size - PAGE_HEADER_SIZE) // (self.storage.schema.record_size + SLOT_SIZE))
@@ -224,6 +230,9 @@ class TableBinding:
         with self.latch:
             if self._rebuild_pending:
                 self.refresh_indexes()
+            if (self.statistics is not None and self._changes_since_analyze
+                    and self._changes_since_analyze >= self._rows_at_analyze):
+                self.analyze()
 
     def index_info(self):
         from dataclasses import replace
