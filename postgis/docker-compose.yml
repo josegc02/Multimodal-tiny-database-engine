@@ -4,7 +4,9 @@
 #   docker compose -f postgis/docker-compose.yml down        # detener
 #   docker compose -f postgis/docker-compose.yml down -v     # detener y borrar los datos
 #
-# Puerto 5433 para no chocar con un PostgreSQL local en 5432.
+# Puerto 5433 para no chocar con un PostgreSQL local en 5432. Si también está
+# ocupado: POSTGIS_PORT=5434 docker compose -f postgis/docker-compose.yml up -d
+# y pasar --postgis-dsn postgresql://bd2:bd2@localhost:5434/espacial al benchmark.
 services:
   postgis:
     image: postgis/postgis:16-3.4
@@ -14,7 +16,7 @@ services:
       POSTGRES_PASSWORD: bd2
       POSTGRES_DB: espacial
     ports:
-      - "5433:5432"
+      - "${POSTGIS_PORT:-5433}:5432"
     volumes:
       - postgis-data:/var/lib/postgresql/data
       # Se ejecuta solo la primera vez (con el volumen vacío).
