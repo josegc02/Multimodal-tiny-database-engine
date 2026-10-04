@@ -86,6 +86,7 @@ Resultados, gráficas y metodología: `benchmarks/README.md` y la sección 3 de 
 | `DELETE FROM t [WHERE ...]` | Usa índices si conviene; eliminación lógica en heap y secuencial. |
 | `BEGIN [TRANSACTION]`, `END [TRANSACTION]` / `COMMIT`, `ROLLBACK` | Fuera de una transacción cada sentencia es *autocommit*. |
 | `CREATE TABLE t (id INT PRIMARY KEY, ...)` o `PRIMARY KEY (id)` | Rechaza claves duplicadas; en un heap crea el índice `t_pkey`. |
+| `col INT REFERENCES padre(pk) [ON DELETE RESTRICT \| CASCADE]` o `FOREIGN KEY (col) REFERENCES padre` | Verifica el padre en INSERT/COPY; DELETE del padre falla (RESTRICT) o borra las hijas (CASCADE). Índice automático en la columna hija. |
 | `COPY t [(cols)] FROM 'archivo.csv' WITH (FORMAT csv, HEADER true, DELIMITER ';')` | Carga un CSV (comillas, UTF-8 con BOM, `ENCODING 'LATIN1'`); todo o nada, con la línea del error. |
 | `EXPLAIN [ANALYZE] SELECT \| INSERT \| DELETE ...` | Plan con el formato de PostgreSQL; `ANALYZE` ejecuta y muestra tiempos y filas reales. |
 

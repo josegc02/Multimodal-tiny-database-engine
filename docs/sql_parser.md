@@ -31,6 +31,14 @@ representación del resultado:
   rechaza duplicados (`llave duplicada viola la restricción de unicidad
   "t_pkey"`); en un heap crea el índice hash `t_pkey` y en `SEQUENTIAL`/`BTREE`
   es la columna de ordenamiento.
+- Llaves foráneas: `col INT REFERENCES padre(pk) [ON DELETE RESTRICT | CASCADE |
+  NO ACTION]` o `FOREIGN KEY (col) REFERENCES padre [(pk)]`. La columna padre debe
+  ser la clave primaria de su tabla y del mismo tipo. INSERT y COPY verifican que
+  el padre exista (con un lock S sobre la fila padre); DELETE en el padre falla
+  si hay hijas (`RESTRICT`, el valor por defecto) o las elimina recursivamente
+  (`CASCADE`). La columna hija recibe un índice automático `<tabla>_<col>_fkey_idx`.
+  Toda sentencia es atómica: si falla dentro de una transacción solo se deshace
+  ella.
 - `COPY t [(cols)] FROM 'archivo.csv' [WITH (FORMAT csv, HEADER true,
   DELIMITER ',', ENCODING 'UTF8')]`: carga un CSV (también acepta la forma
   clásica `CSV HEADER`). Valida todo el archivo antes de insertar, informa la
