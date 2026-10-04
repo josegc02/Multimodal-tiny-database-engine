@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Mapa espacial</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    #info { position: absolute; z-index: 1000; bottom: 12px; left: 12px; padding: 6px 10px;
+            background: white; border-radius: 4px; font: 13px sans-serif; box-shadow: 0 1px 4px #0004; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="info">Sin datos espaciales</div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // Canvas en lugar de SVG: dibuja decenas de miles de puntos sin trabarse.
+    const map = L.map("map", { preferCanvas: true }).setView([-12.0464, -77.0428], 12);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(map);
+    const layer = L.layerGroup().addTo(map);
+    const info = document.getElementById("info");
+    const POPUP_LIMIT = 5000;  // con más puntos, solo los resultados tienen popup
+    let version = -1;
+    let table = null;
+
+    function draw(state) {
+      layer.clearLayers();
+      const results = new Set(state.highlighted);
+      const interactive = state.points.length <= POPUP_LIMIT;
+      const focus = [];
+      for (const p of state.points) {
+        const hit = results.has(p.id);
+        const marker = L.circleMarker([p.lat, p.lon], {
+          radius: hit ? 7 : 3, weight: hit ? 2 : 0,
+          color: hit ? "#b91c1c" : "#2563eb", fillColor: hit ? "#ef4444" : "#2563eb",
+          fillOpacity: hit ? 0.9 : 0.5, interactive: hit || interactive,
+        });
+        if (hit || interactive) marker.bindPopup(p.label);
+        marker.addTo(layer);
+        if (hit) focus.push([p.lat, p.lon]);
+      }
+      if (state.circle) {
+        L.circle([state.circle.lat, state.circle.lon], { radius: state.circle.radius, color: "#d97706" }).addTo(layer);
+        L.circleMarker([state.circle.lat, state.circle.lon], { radius: 6, color: "#d97706" }).addTo(layer);
+        focus.push([state.circle.lat, state.circle.lon]);
+      }
+      if (state.polygon) {
+        L.polygon(state.polygon, { color: "#16a34a" }).addTo(layer);
+        focus.push(...state.polygon);
+      }
+      info.textContent = `${state.points.length} punto(s), ${results.size} en el resultado`;
+
+      // Se encuadra solo con una consulta nueva: entre consultas se respeta el zoom del usuario.
+      if (state.circle && state.circle.radius > 0) {
+        map.fitBounds(L.latLng(state.circle.lat, state.circle.lon).toBounds(2 * state.circle.radius), { padding: [20, 20] });
+      } else if (focus.length) {
+        map.fitBounds(focus, { padding: [30, 30], maxZoom: 16 });
+      } else if (state.table !== table && state.points.length) {
+        map.fitBounds(state.points.map(p => [p.lat, p.lon]), { padding: [20, 20] });
+      }
+      table = state.table;
+    }
+
+    async function poll() {
+      try {
+        const current = (await (await fetch("/api/version")).json()).version;
+        if (current !== version) {
+          version = current;
+          draw(await (await fetch("/api/state")).json());
+        }
+      } catch (error) {
+        info.textContent = "Sin conexión con el frontend";
+      }
+    }
+
+    map.on("click", event => fetch("/api/click", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(event.latlng),
+    }));
+    poll();
+    setInterval(poll, 1000);
+  </script>
+</body>
+</html>

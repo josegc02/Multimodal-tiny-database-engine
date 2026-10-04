@@ -34,8 +34,7 @@ from engine.query.planner import IndexInfo
 from engine.query.sql_executor import SQLExecutor
 from engine.query.statement_executor import StatementExecutor
 from engine.query.parser import parse_script
-from engine.query import ast as query_ast
-from engine.spatial.geometry import Point, Polygon
+from frontend import mapa_datos
 from engine.indexes import ExtendibleHash
 from engine.indexes.rtree import RTree
 from engine.indexes.bplus_tree import CHILD_SIZE, NODE_HEADER_SIZE
@@ -104,6 +103,7 @@ class Motor:
             base_dir=PROJECT_DIR,
         )
         self._cerrado = False
+        self._puntos_mapa = {}  # tabla -> puntos para el mapa
         self._limpiar_directorio_demo()
         self._cargar_tablas_demo()
 
@@ -197,6 +197,8 @@ class Motor:
 
     def _ejecutar_una(self, ast) -> Resultado:
         """Ejecuta una sola sentencia AST."""
+        if not isinstance(ast, SelectStatement):
+            self._puntos_mapa.clear()  # pudo cambiar datos: el mapa relee la tabla
         try:
             # --- Transacciones ---
             if isinstance(ast, TransactionStatement):
@@ -242,46 +244,24 @@ class Motor:
             return Resultado(error=str(e))
 
     def _mapa(self, statement, rows):
+        """Puntos de la tabla (cacheados), ids del resultado y figuras de la consulta.
+
+        Los puntos se leen una vez por tabla; cualquier sentencia que pueda
+        escribir vacía la caché. Así el mapa no agrega un scan a cada SELECT.
+        """
         binding = self.catalog.table(statement.from_table.name)
-        identifier = binding.primary_key or binding.storage.schema.fields[0]
-        points = []
-        point_field = next((name for name, kind in zip(binding.storage.schema.fields, binding.storage.schema.types)
-                            if kind == "point"), None)
-        spatial_index = binding.indexes.get(point_field) if point_field else None
-        # El mapa no debe transformar una consulta resuelta por R-Tree en un scan
-        # completo. Si el índice está vigente, ya contiene todos los puntos y sus RID.
-        if spatial_index is not None and spatial_index.valid and hasattr(spatial_index.index, "__iter__"):
-            records = ((rid, binding.storage.get(rid)) for _, rid in spatial_index.index)
-        else:
-            records = binding.storage.scan()
-        for _, record in records:
-            if record is None:
-                continue
-            for name, kind in zip(binding.storage.schema.fields, binding.storage.schema.types):
-                if kind == "point":
-                    point = record[name]
-                    points.append((record[identifier], point.lat, point.lon, f"{record[identifier]}: {name}"))
-                    break
-        ids = {value for row in rows for key, value in row.items() if key == identifier or key.endswith(identifier)}
-        circle, polygon = None, None
-        def walk(value):
-            nonlocal circle, polygon
-            if isinstance(value, query_ast.SpatialCall):
-                literals = [a.value for a in value.arguments if isinstance(a, query_ast.Literal)]
-                if value.function == "DISTANCIA":
-                    point = next((x for x in literals if isinstance(x, Point)), None)
-                    if point: circle = {"lat": point.lat, "lon": point.lon, "radius": 0}
-                if value.function == "WITHIN":
-                    shape = next((x for x in literals if isinstance(x, Polygon)), None)
-                    if shape: polygon = [(p.lat, p.lon) for p in shape.vertices]
-            elif isinstance(value, query_ast.BinaryOp):
-                walk(value.left); walk(value.right)
-        walk(statement.where)
-        if isinstance(statement.where, query_ast.BinaryOp):
-            for call, radius in ((statement.where.left, statement.where.right), (statement.where.right, statement.where.left)):
-                if isinstance(call, query_ast.SpatialCall) and call.function == "DISTANCIA" and isinstance(radius, query_ast.Literal) and type(radius.value) in (int, float) and circle:
-                    circle["radius"] = radius.value
-        return {"points": points, "result_ids": sorted(ids), "circle": circle, "polygon": polygon}
+        columna = mapa_datos.columna_punto(binding)
+        if columna is None:
+            return None
+        nombre = statement.from_table.name
+        if nombre not in self._puntos_mapa:
+            self._puntos_mapa[nombre] = mapa_datos.puntos_de_tabla(binding, columna)
+        circle, polygon = mapa_datos.figuras(statement.where)
+        return {"table": nombre,
+                "points": self._puntos_mapa[nombre],
+                "result_ids": mapa_datos.ids_resultado(rows, mapa_datos.identificador(binding)),
+                "circle": circle or mapa_datos.centro_knn(statement),
+                "polygon": polygon}
 
     def _crear_tabla(self, statement: CreateTableStatement) -> str:
         """Crea un HeapFile y lo incorpora al catálogo de la sesión."""
