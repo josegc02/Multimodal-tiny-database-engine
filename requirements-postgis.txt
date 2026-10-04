@@ -1,0 +1,2 @@
+# Dependencia opcional: solo para postgis/client.py y benchmarks con GiST.
+psycopg[binary]>=3.2
