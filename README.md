@@ -1,192 +1,156 @@
-# Motor de Base de Datos Relacional — Avance 1
+# Minigestor de Base de Datos Multimodal
 
-Proyecto de Base de Datos II para la implementación de un motor de base de datos relacional y multimodal desde cero.
+Proyecto de Base de Datos II (UTEC, 2026-2): un gestor de bases de datos construido desde cero. La **Parte 1 (base de datos relacional)** está completa: almacenamiento en disco, índices, SQL, transacciones con control de concurrencia, interfaz gráfica de 4 paneles y comparación experimental. Las partes siguientes (espacial, texto, multimedia y aplicación) se apoyan en esta base.
 
 ---
 
-## Estructura del proyecto — Avance 1 (Parte 1: Base de Datos Relacional)
+## Instalación
 
-```text
-minigestor-bd/
-├── README.md                       # este archivo: arquitectura, instalación, uso
-├── requirements.txt                 # dependencias Python del proyecto
-├── .gitignore                       # __pycache__/, *.heap, *.db, venv/, results/
-├── setup_avance1.ps1                # automatización de labels/milestone/issues (PowerShell)
-├── setup_avance1.sh                 # automatización de labels/milestone/issues (Bash)
-│
-├── engine/                          # motor de base de datos (código fuente principal)
-│   ├── __init__.py
-│   │
-│   ├── storage/                     # Gestión de archivos y almacenamiento en disco
-│   │   ├── __init__.py
-│   │   ├── heap_file.py             # Heap File: páginas slotted (4KB), reutilización de espacio
-│   │   ├── sequential_file.py       # Archivo Secuencial Paginado: orden físico, área aux y reorganización
-│   │   └── record.py                # Schema y (de)serialización binaria de registros
-│   │
-│   ├── indexes/                     # Estructuras de indexación
-│   │   ├── __init__.py
-│   │   ├── bplus_tree.py            # Árbol B+ genérico / estructura base en disco
-│   │   ├── bplus_tree_clustered.py  # Índice B+ agrupado (clustered, registros en hojas)
-│   │   ├── bplus_tree_unclustered.py# Índice B+ no agrupado (unclustered, punteros a RID)
-│   │   └── extendible_hash.py       # Índice Hash Dinámico (Extendible Hashing con directorio y buckets)
-│   │
-│   ├── query/                       # Procesamiento y ejecución de consultas SQL
-│   │   ├── __init__.py
-│   │   ├── lexer.py                 # Tokenizador léxico de sentencias SQL
-│   │   ├── parser.py                # Parser sintáctico (SELECT, INSERT, DELETE, transacciones)
-│   │   ├── ast.py                   # Nodos del árbol de sintaxis abstracta (AST)
-│   │   ├── expressions.py           # Expresiones aritméticas, booleanas y predicados (WHERE)
-│   │   ├── logical_plan.py          # Definición de operadores del plan lógico (Scan, Filter, Project, etc.)
-│   │   ├── catalog.py               # Catálogo de metadatos de tablas, esquemas e índices
-│   │   ├── planner.py               # Generación y selección de planes de ejecución
-│   │   ├── sql_optimizer.py         # Optimizador lógico y selección de rutas de acceso por índice
-│   │   ├── executor.py              # Ejecutor base de operaciones relacionales
-│   │   ├── sql_executor.py          # Ejecución de planes de consulta SELECT
-│   │   ├── statement_executor.py    # Ejecución de sentencias DML (INSERT, DELETE) y control de transacciones
-│   │   ├── external_algorithms.py   # External Sort (ORDER BY) y External Hash (GROUP BY/JOIN)
-│   │   ├── _temp_records.py         # Manejo de registros temporales para algoritmos externos
-│   │   └── errors.py                # Jerarquía de excepciones de parseo y ejecución
-│   │
-│   └── concurrency/                 # Transacciones y control de concurrencia
-│       ├── __init__.py
-│       ├── lock_manager.py          # Administrador de locks compartidos y exclusivos (2PL estricto)
-│       ├── transaction.py           # Contexto de transacción y estado transaccional
-│       └── transaction_manager.py   # Coordinador del ciclo de vida transaccional (BEGIN/COMMIT/ABORT)
-│
-├── frontend/                        # Interfaz gráfica (Tkinter)
-│   ├── __init__.py
-│   ├── main.py                      # Ventana principal y punto de entrada de la UI
-│   ├── motor.py                     # Fachada integradora del motor para la interfaz gráfica
-│   ├── panel_archivos.py            # Panel 1: tablas cargadas, esquema y estadísticas de páginas
-│   ├── panel_consultas.py           # Panel 2: editor y ejecutor de consultas SQL multilínea
-│   ├── panel_resultados.py          # Panel 3: visor tabular de resultados de consultas
-│   └── panel_plan_ejecucion.py      # Panel 4: visor de árboles y nodos del plan de ejecución
-│
-├── benchmarks/                      # Comparación experimental de técnicas (Parte 1)
-│   ├── __init__.py
-│   ├── README.md                    # Documentación y guía de benchmarks
-│   ├── _common.py                   # Utilidades de medición de tiempo, memoria y espacio en disco
-│   ├── generate_datasets.py         # Generador de datasets sintéticos (1K, 10K, 100K registros)
-│   ├── bench_storage.py             # Benchmark: Heap File vs Archivo Secuencial Paginado
-│   ├── bench_indexes.py             # Benchmark: B+ Clustered vs B+ Unclustered vs Extendible Hashing
-│   ├── concurrency_demo.py          # Demostración interactiva de transacciones concurrentes
-│   └── results/                     # Gráficas generadas (.png) y tablas de métricas (.csv)
-│
-├── tests/                           # Suite completa de pruebas unitarias
-│   ├── __init__.py
-│   ├── storage/
-│   │   ├── __init__.py
-│   │   ├── test_heap_file.py
-│   │   └── test_sequential_file.py
-│   ├── indexes/
-│   │   ├── __init__.py
-│   │   ├── test_bplus_tree.py
-│   │   ├── test_bplus_clustered.py
-│   │   ├── test_bplus_unclustered.py
-│   │   ├── test_extendible_hash.py
-│   │   ├── test_extendible_hash_bulk.py
-│   │   └── test_extendible_hash_persistence.py
-│   ├── query/
-│   │   ├── __init__.py
-│   │   ├── test_lexer.py
-│   │   ├── test_parser.py
-│   │   ├── test_sql_optimizer.py
-│   │   ├── test_planner_executor.py
-│   │   ├── test_sql_execution.py
-│   │   ├── test_external_algorithms.py
-│   │   └── test_temp_records.py
-│   └── concurrency/
-│       ├── __init__.py
-│       └── test_transactions.py
-│
-└── docs/                            # Documentación técnica y especificaciones
-    ├── informe.md                   # Informe incremental del proyecto (diseño, algoritmos, pruebas)
-    ├── README.md                    # Índice de documentación técnica
-    ├── bplus_indexes.md             # Especificación técnica de los índices B+ Tree
-    ├── sql_parser.md                # Especificación técnica del parser SQL y AST
-    └── sql_grammar.ebnf             # Gramática formal EBNF de las sentencias SQL soportadas
+Requisitos: **Python 3.12 o superior** (probado con 3.13 en Windows y Ubuntu) y Tkinter (incluido en el instalador oficial de Python para Windows).
+
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate    Linux/macOS: source .venv/bin/activate
+python -m pip install -r requirements.txt pytest
 ```
 
----
-
-## Descripción de cada componente
-
-- **`engine/storage/`**: Capa de persistencia física en disco.
-  - **Heap File (`heap_file.py`)**: Almacenamiento en páginas fijas de 4 KB con arquitectura *Slotted Page*, eliminación lógica y reutilización dinámica de espacio.
-  - **Sequential File (`sequential_file.py`)**: Almacenamiento ordenado por clave con archivo principal (`main`), área de desborde (`aux`), búsqueda binaria multinivel y reorganización automática con factor de llenado (`fill_factor`).
-  - **Record (`record.py`)**: Definición de esquemas de datos (`Schema`) y serialización/deserialización binaria compacta.
-
-- **`engine/indexes/`**: Estructuras de acceso secundario y primario.
-  - **B+ Tree (`bplus_tree.py`, `bplus_tree_clustered.py`, `bplus_tree_unclustered.py`)**: Implementación en disco de índices en árbol B+ tanto agrupados (registros en nodos hoja) como no agrupados (punteros directos `RID`), con soporte de búsquedas por igualdad y por rango.
-  - **Extendible Hashing (`extendible_hash.py`)**: Índice hash dinámico en disco con directorio de profundidad global y páginas de buckets con profundidad local.
-
-- **`engine/query/`**: Procesamiento, optimización y ejecución de consultas SQL.
-  - **Pipeline SQL**: `lexer.py` (tokenizado) $\to$ `parser.py` (análisis sintáctico) $\to$ `ast.py` (árbol de sintaxis) $\to$ `logical_plan.py` / `planner.py` (plan lógico) $\to$ `sql_optimizer.py` (selección de índices) $\to$ `sql_executor.py` / `statement_executor.py` (ejecución contra storage e índices).
-  - **Algoritmos Externos (`external_algorithms.py`)**: External Merge Sort de 2 fases (para cláusulas `ORDER BY`) y External Hash Partitioning (para agrupaciones `GROUP BY` y joins) operando bajo memoria RAM acotada.
-
-- **`engine/concurrency/`**: Control de transacciones ACID.
-  - **`lock_manager.py`**: Bloqueo estricto en dos fases (Strict 2PL) a nivel de tabla con soporte para modos compartido (`SHARED`) y exclusivo (`EXCLUSIVE`).
-  - **`transaction.py` & `transaction_manager.py`**: Gestión de identificadores de transacción, estados (`ACTIVE`, `COMMITTED`, `ABORTED`) y liberación automática de recursos.
-
-- **`frontend/`**: Aplicación de escritorio construida en Python (Tkinter).
-  - Integrada a través de `motor.py`, proporcionando los 4 paneles requeridos: catálogo de archivos y páginas, consola de consultas SQL, visualizador de resultados y árbol explicativo del plan de ejecución.
-
-- **`benchmarks/`**: Batería de pruebas de rendimiento experimental para evaluar tiempos de inserción, búsquedas exactas, escaneos por rango, consumo de memoria y tamaño en disco entre las diferentes estructuras de almacenamiento e índices.
-
-- **`tests/`**: Suite de pruebas unitarias exhaustiva con cobertura para cada submódulo del motor.
-
-- **`docs/`**: Especificaciones formales (EBNF), manuales de implementación de índices y parser, e informe académico incremental (`informe.md`).
+> En Windows, si `python` apunta a otro intérprete (p. ej. el de MSYS2), usar `py -3.13`.
 
 ---
 
-## Ejecución del Proyecto
+## Ejecución
 
-### 1. Interfaz Gráfica (Frontend)
-
-Para iniciar la aplicación visual de 4 paneles:
+### Interfaz gráfica (4 paneles)
 
 ```bash
 python -m frontend.main
 ```
 
-### 2. Pruebas Unitarias
+Paneles: **Archivos** (tablas, esquema, índices y estadísticas), **Consultas** (editor SQL; `Ctrl+Enter` ejecuta), **Resultados** y **Plan de ejecución**. Con `EXPLAIN` o `EXPLAIN ANALYZE`, Resultados muestra el `QUERY PLAN` en texto (como `psql`) y el panel de plan lo muestra como tabla por operador (costo, filas estimadas y reales, tiempos y loops), al estilo de la pestaña *Analysis* de pgAdmin.
 
-Para ejecutar la suite completa de tests:
+> **Modo demo.** Al iniciar, el frontend vacía `demo_data/` (solo los archivos que genera el motor) y crea las tablas de ejemplo `cuentas` y `productos`. Lo creado en una sesión no se conserva al cerrar la aplicación. La capa de almacenamiento sí permite reabrir sus archivos (HeapFile, SequentialFile, B+ y snapshot del hash); los tests de reapertura lo verifican.
 
-```bash
-python -m unittest discover tests -v
+**Cargar un CSV desde el frontend.** El botón **Cargar CSV...** del panel de consultas abre el explorador de archivos y escribe en el editor el SQL para cargarlo: un `CREATE TABLE` con los tipos deducidos del archivo (si la tabla todavía no existe) y el `COPY` con el delimitador y la codificación detectados. No ejecuta nada: revisa los tipos y la `PRIMARY KEY` y pulsa **Ejecutar**.
+
+Ejemplo de sesión:
+
+```sql
+CREATE TABLE alumnos (id INT PRIMARY KEY, nombre VARCHAR(100), carrera_id INT, nota INT);
+COPY alumnos FROM 'datos/alumnos.csv' WITH (FORMAT csv, HEADER true);   -- ruta relativa a la raíz del proyecto
+EXPLAIN ANALYZE SELECT * FROM alumnos WHERE nota >= 14 ORDER BY id;
+--  Sort  (cost=132.00..132.00 rows=333) (actual time=11.810..11.909 rows=324 loops=1)
+--    Sort Key: id
+--    Sort Method: in-memory
+--    ->  Seq Scan on alumnos  (cost=0.00..33.00 rows=333) (actual time=0.136..10.349 rows=324 loops=1)
+--          Filter: (nota >= 14)
+--          Rows Removed by Filter: 676
+--  Planning Time: 0.218 ms
+--  Execution Time: 12.887 ms
+
+CREATE TABLE emp (id INT, nombre VARCHAR(20), salario INT) USING BTREE;  -- B+ agrupado
+INSERT INTO emp VALUES (1, 'Ana', 3000), (2, 'Bob', 2500), (3, 'Carla', 4100);
+CREATE INDEX emp_sal ON emp (salario) USING BTREE;                      -- B+ no agrupado
+SELECT nombre FROM emp WHERE salario BETWEEN 2000 AND 3500 ORDER BY salario;
+BEGIN TRANSACTION;
+DELETE FROM emp WHERE id = 2;
+ROLLBACK;
 ```
 
-Para ejecutar una categoría específica:
+### Pruebas
 
 ```bash
-# Pruebas de almacenamiento (Heap File y Sequential File)
-python -m unittest discover tests/storage -v
-
-# Pruebas de índices (B+ Tree y Extendible Hashing)
-python -m unittest discover tests/indexes -v
-
-# Pruebas del motor de consultas (Lexer, Parser, Optimizador, Algoritmos Externos)
-python -m unittest discover tests/query -v
-
-# Pruebas de transacciones y concurrencia
-python -m unittest discover tests/concurrency -v
+python -m pytest -q                      # suite completa (también: python -m unittest discover tests)
+python -m pytest tests/concurrency -q    # una categoría: storage, indexes, query, concurrency
 ```
 
-### 3. Benchmarks Experimentales
+GitHub Actions ejecuta la suite en cada push y pull request sobre Ubuntu y Windows (`.github/workflows/tests.yml`).
 
-Para generar datasets sintéticos y ejecutar los experimentos:
+### Benchmarks y demostración de concurrencia
 
 ```bash
-# Generar datasets (1K, 10K, 100K)
-python -m benchmarks.generate_datasets
-
-# Benchmark de Almacenamiento (Heap File vs Sequential File)
-python -m benchmarks.bench_storage
-
-# Benchmark de Índices (B+ Clustered vs Unclustered vs Extendible Hashing)
-python -m benchmarks.bench_indexes
-
-# Demostración de Transacciones y Concurrencia
-python -m benchmarks.concurrency_demo
+python -m benchmarks.bench_storage       # Heap File vs Archivo Secuencial (1K, 10K, 100K; 3 repeticiones)
+python -m benchmarks.bench_indexes       # B+ agrupado vs B+ no agrupado vs Hash extensible
+python -m benchmarks.concurrency_demo    # transacciones concurrentes con hilos (enunciado 2.1.4)
 ```
+
+Resultados, gráficas y metodología: `benchmarks/README.md` y la sección 3 de `docs/informe.md`.
+
+---
+
+## SQL soportado
+
+| Sentencia | Detalle |
+| :--- | :--- |
+| `CREATE TABLE t (col INT \| FLOAT \| VARCHAR(n), ...) [USING HEAP \| SEQUENTIAL \| BTREE]` | `SEQUENTIAL` y `BTREE` se ordenan por la clave primaria (o la primera columna) y el optimizador usa ese orden para igualdad, rangos y ORDER BY; `BTREE` es una tabla organizada como B+ agrupado (clave única). |
+| `CREATE INDEX nombre ON t (col) USING HASH \| BTREE` | Índices secundarios: hash extensible o B+ no agrupado. |
+| `SELECT [DISTINCT] ... FROM t [JOIN t2 ON ...] [WHERE ...] [GROUP BY ... [HAVING ...]] [ORDER BY ... [ASC\|DESC]] [LIMIT n [OFFSET m]]` | `AND/OR/NOT`, comparaciones, `BETWEEN`, `IN`, `LIKE`, aritmética, `COUNT/SUM/AVG/MIN/MAX` (también con `DISTINCT`). |
+| `INSERT INTO t [(cols)] VALUES (...), (...)` | Valida tipos y columnas de todo el lote antes de escribir. |
+| `DELETE FROM t [WHERE ...]` | Usa índices si conviene; eliminación lógica en heap y secuencial. |
+| `BEGIN [TRANSACTION]`, `END [TRANSACTION]` / `COMMIT`, `ROLLBACK` | Fuera de una transacción cada sentencia es *autocommit*. |
+| `CREATE TABLE t (id INT PRIMARY KEY, ...)` o `PRIMARY KEY (id)` | Rechaza claves duplicadas; en un heap crea el índice `t_pkey`. |
+| `col INT REFERENCES padre(pk) [ON DELETE RESTRICT \| CASCADE]` o `FOREIGN KEY (col) REFERENCES padre` | Verifica el padre en INSERT/COPY; DELETE del padre falla (RESTRICT) o borra las hijas (CASCADE). Índice automático en la columna hija. |
+| `COPY t [(cols)] FROM 'archivo.csv' WITH (FORMAT csv, HEADER true, DELIMITER ';')` | Carga un CSV (comillas, UTF-8 con BOM, `ENCODING 'LATIN1'`); todo o nada, con la línea del error. |
+| `EXPLAIN [ANALYZE] SELECT \| INSERT \| DELETE ...` | Plan con el formato de PostgreSQL; `ANALYZE` ejecuta y muestra tiempos y filas reales. |
+
+El optimizador elige por costo estimado entre scan secuencial e índices: hash o B+ para igualdad; B+ para rangos (`<`, `<=`, `>`, `>=`, `BETWEEN`), `ORDER BY` y `GROUP BY`; hash join externo o *index nested loop* para `JOIN`. Gramática completa: `docs/sql_grammar.ebnf`.
+
+---
+
+## Arquitectura
+
+```text
+frontend (Tkinter) ──► Motor (fachada)
+                          │
+            StatementExecutor (sesión: transacción, locks S/IX/SIX/X)
+                          │
+   lexer ► parser ► AST ► LogicalPlanner ► SQLOptimizer/QueryPlanner ► SQLExecutor
+                                                                           │
+                         Catalog (tablas, índices, estadísticas, latches)  │
+                          │                    │                           │
+          storage: HeapFile / SequentialFile / ClusteredBPlusFile    algoritmos externos
+          índices: B+ no agrupado / Hash extensible                 (sort k-way, hash group by / join)
+          concurrencia: LockManager + TransactionManager (undo log, detección de deadlocks)
+```
+
+### Estructura del código
+
+```text
+engine/
+├── storage/
+│   ├── record.py               # Schema de largo fijo y (de)serialización binaria
+│   ├── heap_file.py            # Heap File: slotted pages de 4 KB, reutilización de slots, latch por archivo
+│   ├── sequential_file.py      # Archivo secuencial: main ordenado + aux, eliminación lazy, reorganización automática
+│   └── clustered_file.py       # Tabla organizada como B+ agrupado (CREATE TABLE ... USING BTREE)
+├── indexes/
+│   ├── bplus_tree.py           # B+ paginado en disco: inserción y eliminación en O(altura)
+│   ├── bplus_tree_clustered.py # Hojas con registros completos
+│   ├── bplus_tree_unclustered.py # Hojas con (clave, RID); claves duplicadas
+│   └── extendible_hash.py      # Hash extensible en memoria con snapshot JSON
+├── query/
+│   ├── lexer.py, parser.py, ast.py   # Análisis léxico y sintáctico
+│   ├── logical_plan.py         # Plan lógico (Scan, Filter, Join, Aggregate, Sort, Project, Limit...)
+│   ├── planner.py              # Modelo de costos en páginas (igualdad, rango, orden, group by, join)
+│   ├── sql_optimizer.py        # Elige rutas de acceso a partir del plan lógico
+│   ├── sql_executor.py         # Ejecución incremental de planes
+│   ├── statement_executor.py   # Sesión SQL con transacciones y locks
+│   ├── catalog.py              # Tablas, índices (mantenimiento incremental), estadísticas, latches
+│   ├── expressions.py          # Evaluación de expresiones
+│   └── external_algorithms.py  # External sort k-way, hash group by y hash join externos
+└── concurrency/
+    ├── lock_manager.py         # Locks IS/IX/S/SIX/X, upgrades y wait-for graph
+    ├── transaction.py
+    └── transaction_manager.py  # BEGIN/COMMIT/ROLLBACK, undo log robusto
+frontend/                       # main.py (ventana), motor.py (fachada) y los 4 paneles
+benchmarks/                     # bench_storage, bench_indexes, concurrency_demo y results/
+tests/                          # storage, indexes, query (incluye prueba diferencial contra SQLite), concurrency
+docs/                           # informe.md, sql_grammar.ebnf, sql_parser.md, bplus_indexes.md
+```
+
+---
+
+## Documentación
+
+- `docs/informe.md`: informe incremental (diseño, algoritmos, concurrencia y resultados experimentales).
+- `docs/sql_parser.md` y `docs/sql_grammar.ebnf`: parser y gramática.
+- `docs/bplus_indexes.md`: índices B+.
+- `benchmarks/README.md`: metodología de los experimentos.

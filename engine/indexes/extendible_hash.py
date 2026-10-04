@@ -40,6 +40,16 @@ class Bucket:
             yield from bucket.records
             bucket = bucket.overflow
 
+    def refill(self, entries: List[Entry]) -> None:
+        """Reemplaza el contenido por `entries`, encadenando overflow en O(len)."""
+        capacity = self.bucket_capacity
+        self.records = list(entries[:capacity])
+        self.overflow = None
+        tail = self
+        for start in range(capacity, len(entries), capacity):
+            tail.overflow = Bucket(capacity, self.local_depth, list(entries[start:start + capacity]))
+            tail = tail.overflow
+
     def add_record(self, entry: Entry) -> None:
         bucket = self
         while bucket.is_full():
@@ -113,10 +123,13 @@ class ExtendibleHash:
 
     def insert(self, key: Key, rid: RID) -> bool:
         """Agrega un par; retorna False si ese mismo par ya estaba indexado."""
+        return self._insert(key, rid, check_duplicate=True)
+
+    def _insert(self, key: Key, rid: RID, check_duplicate: bool) -> bool:
         hashed = self._hash_key(key)
         self._validate_rid(rid)
         bucket = self.directory[self._index(hashed)]
-        if any(k == key and r == rid for k, r in bucket.entries()):
+        if check_duplicate and any(k == key and r == rid for k, r in bucket.entries()):
             return False
 
         while True:
@@ -126,9 +139,12 @@ class ExtendibleHash:
                 break
 
             mask = (1 << self.max_depth) - 1
+            # Se hashea cada clave distinta una sola vez: con muchos duplicados
+            # (p. ej. el índice de una llave foránea) hashear cada entrada haría
+            # la carga cuadrática.
             if bucket.local_depth == self.max_depth or all(
                 (self._hash_key(k) & mask) == (hashed & mask)
-                for k, _ in bucket.entries()
+                for k in {k for k, _ in bucket.entries()}
             ):
                 # Duplicados y colisiones reales nunca se resuelven duplicando
                 # indefinidamente el directorio.
@@ -194,7 +210,17 @@ class ExtendibleHash:
         if key_field not in storage.schema.fields:
             raise ValueError(f"El campo '{key_field}' no existe en el schema")
         entries = ((record[key_field], rid) for rid, record in storage.scan())
-        return self.bulk_load(entries, replace=replace)
+        if not replace:
+            return self.bulk_load(entries, replace=False)
+        # Un scan entrega cada RID una sola vez: el índice nuevo no puede recibir
+        # pares repetidos, así que se omite esa comprobación (O(bucket) por par,
+        # cuadrática cuando una clave tiene muchos duplicados).
+        target = type(self)(self.bucket_capacity, max_depth=self.max_depth)
+        inserted = sum(target._insert(key, rid, check_duplicate=False) for key, rid in entries)
+        self.directory = target.directory
+        self.global_depth = target.global_depth
+        self._size = target._size
+        return inserted
 
     def delete(self, key: Key, rid: Optional[RID] = None) -> int:
         """Elimina un par, o todos los de la clave si rid=None; retorna su cantidad."""
@@ -208,10 +234,9 @@ class ExtendibleHash:
         if not removed:
             return 0
 
-        bucket.records.clear()
-        bucket.overflow = None
-        for entry in kept:
-            bucket.add_record(entry)
+        # Rearmar la cadena de una vez: reinsertar entrada por entrada recorría
+        # el overflow desde el inicio cada vez (cuadrático con muchos duplicados).
+        bucket.refill(kept)
         self._size -= removed
         self._merge_bucket(index)
         return removed

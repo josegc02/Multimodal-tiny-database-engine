@@ -3,6 +3,7 @@
 from contextlib import closing
 from itertools import islice
 import tempfile
+import time
 
 from engine.query import ast
 from engine.query._temp_records import read_header, read_record, write_header, write_record
@@ -65,6 +66,23 @@ class SQLExecutor:
             return iter(({"affected_rows": self._delete(plan, stats)},))
         return self._run(plan, stats)
 
+    def matching_records(self, plan, *, stats: ExecutionStats | None = None):
+        """(RID, registro) de las filas que un plan DELETE eliminaría, sin modificar nada.
+
+        Usa el mismo plan físico que el SELECT equivalente (índices incluidos).
+        """
+        if not isinstance(plan, LogicalPlan) or plan.operation != "Delete":
+            raise TypeError("Se requiere el LogicalPlan de un DELETE")
+        table = plan.get("table")
+        qualifier = table.alias or table.name
+        fields = self.catalog.table(table.name).storage.schema.fields
+        rid_keys = _rid_keys(qualifier)
+        columns = [(name, column_key(ast.ColumnRef(name, qualifier))) for name in fields]
+        with closing(self._run(plan.children[0], stats or ExecutionStats())) as rows:
+            for row in rows:
+                yield (RID(*(row[key] for key in rid_keys)),
+                       {name: row[key] for name, key in columns})
+
     def _scan(self, plan, stats):
         table = plan.get("table")
         binding = self.catalog.table(table.name)
@@ -72,12 +90,29 @@ class SQLExecutor:
         if physical is None or physical.algorithm == "sequential_scan":
             for rid, record in binding.storage.scan():
                 yield _context(table, rid, record)
+        elif physical.algorithm == "index_range_scan":
+            stats.index_probes += 1
+            lower, upper, include_lower, include_upper = physical.value
+            index = physical.index.index
+            for rid, record in self._probe(binding, lambda: index.range_search(
+                    lower, upper, include_lower=include_lower, include_upper=include_upper)):
+                yield _context(table, rid, record)
         else:
             stats.index_probes += 1
-            for rid in physical.index.index.search(physical.value):
-                record = binding.storage.get(rid)
-                if record is not None:
-                    yield _context(table, rid, record)
+            index = physical.index.index
+            for rid, record in self._probe(binding, lambda: index.search(physical.value)):
+                yield _context(table, rid, record)
+
+    @staticmethod
+    def _probe(binding, find_rids):
+        """Búsqueda por índice + lectura de registros bajo el latch de la tabla.
+
+        Se materializa dentro del latch para no leer un índice que otro hilo
+        está reconstruyendo; los resultados se entregan fuera de él.
+        """
+        with binding.latch:
+            found = [(rid, binding.storage.get(rid)) for rid in find_rids()]
+        return [(rid, record) for rid, record in found if record is not None]
 
     def _ordered_source(self, source, physical):
         scan = base_scan(source)
@@ -87,7 +122,9 @@ class SQLExecutor:
         while source.operation == "Filter":
             predicates.append(source.get("predicate"))
             source = source.children[0]
-        for rid in physical.index.index.iter_ordered(reverse=physical.reverse):
+        with binding.latch:
+            rids = list(physical.index.index.iter_ordered(reverse=physical.reverse))
+        for rid in rids:
             record = binding.storage.get(rid)
             if record is not None:
                 row = _context(table, rid, record)
@@ -95,13 +132,49 @@ class SQLExecutor:
                     yield row
 
     def _run(self, plan, stats):
+        if stats.profile is None:
+            yield from self._run_node(plan, stats)
+        else:
+            yield from self._timed(plan, self._run_node(plan, stats), stats)
+
+    @staticmethod
+    def _timed(node, rows, stats):
+        """Cuenta filas y tiempo (inclusivo, como PostgreSQL) de un operador."""
+        entry = stats.profile.setdefault(id(node), {"rows": 0, "first": None, "total": 0.0, "loops": 0})
+        entry["loops"] += 1
+        iterator = iter(rows)
+        try:
+            while True:
+                start = time.perf_counter()
+                try:
+                    row = next(iterator)
+                except StopIteration:
+                    entry["total"] += time.perf_counter() - start
+                    return
+                entry["total"] += time.perf_counter() - start
+                if entry["first"] is None:
+                    entry["first"] = entry["total"]
+                entry["rows"] += 1
+                yield row
+        finally:
+            close = getattr(iterator, "close", None)
+            if close is not None:
+                close()
+
+    def _run_node(self, plan, stats):
         operation = plan.operation
         if operation == "Scan":
             yield from self._scan(plan, stats)
             return
         physical = self.optimizer.choice(plan)
         ordered = physical is not None and physical.algorithm in ("index_order_scan", "index_group_by")
-        source = self._ordered_source(plan.children[0], physical) if ordered else self._run(plan.children[0], stats)
+        if ordered:
+            source = self._ordered_source(plan.children[0], physical)
+            if stats.profile is not None:
+                # El recorrido del índice reemplaza al subárbol: se mide como su Scan.
+                source = self._timed(base_scan(plan.children[0]), source, stats)
+        else:
+            source = self._run(plan.children[0], stats)
         with closing(source) as rows:
             if operation == "Filter":
                 for row in rows:
@@ -136,7 +209,9 @@ class SQLExecutor:
                          for i, call in enumerate(aggregates)}
                 fields = tuple(f"$group{i}" for i in range(len(groups)))
                 specs = specs or {"$unused": Aggregate()}
-                if ordered:
+                if any(call.distinct for call in aggregates):
+                    yield from self._distinct_aggregates(prepared(), fields, aggregates, specs, stats)
+                elif ordered:
                     yield from streaming_group_by(prepared(), fields, specs)
                 else:
                     yield from external_hash_group_by(prepared(), fields, specs, config=self.config, stats=stats)
@@ -161,12 +236,11 @@ class SQLExecutor:
                         if value is None:
                             continue
                         stats.index_probes += 1
-                        for rid in physical.index.index.search(value):
-                            record = binding.storage.get(rid)
-                            if record is not None:
-                                row = {**left_row, **_context(table, rid, record)}
-                                if truth(evaluate(plan.get("predicate"), row)) is True:
-                                    yield row
+                        index = physical.index.index
+                        for rid, record in self._probe(binding, lambda: index.search(value)):
+                            row = {**left_row, **_context(table, rid, record)}
+                            if truth(evaluate(plan.get("predicate"), row)) is True:
+                                yield row
                     return
                 with closing(self._run(plan.children[1], stats)) as right:
                     with closing(external_hash_join(rows, right, tuple(column_key(l) for l, _ in pairs),
@@ -179,13 +253,52 @@ class SQLExecutor:
             else:
                 raise SQLExecutionError(f"Operador lógico no soportado: {operation}")
 
+    def _distinct_aggregates(self, rows, fields, aggregates, specs, stats):
+        """GROUP BY con agregados DISTINCT (p. ej. COUNT(DISTINCT x)).
+
+        Las filas se guardan en un archivo temporal para recorrerlas varias
+        veces con memoria acotada: una pasada calcula los agregados normales y,
+        por cada agregado DISTINCT, otra elimina duplicados (grupo, valor) con
+        hash externo y luego agrega por grupo.
+        """
+        def group_by(source, keys, aggregate_specs):
+            return external_hash_group_by(source, keys, aggregate_specs, config=self.config, stats=stats)
+
+        with tempfile.TemporaryFile(dir=self.config.temp_dir) as fh:
+            write_header(fh)
+            count = 0
+            for row in rows:
+                write_record(fh, row)
+                count += 1
+
+            def replay():
+                fh.seek(0)
+                read_header(fh)
+                for _ in range(count):
+                    yield read_record(fh)
+
+            distinct = {f"$agg{i}" for i, call in enumerate(aggregates) if call.distinct}
+            plain = {name: spec for name, spec in specs.items() if name not in distinct}
+            results = {tuple(row[f] for f in fields): row
+                       for row in group_by(replay(), fields, plain or {"$unused": Aggregate()})}
+            for name in sorted(distinct):
+                value = specs[name].field
+                unique = group_by(replay(), fields + (value,), {"$unused": Aggregate()})
+                for row in group_by(unique, fields, {name: specs[name]}):
+                    results[tuple(row[f] for f in fields)][name] = row[name]
+        yield from results.values()
+
     def _insert(self, plan):
         binding = self.catalog.table(plan.get("table"))
         records = normalize_insert(binding, plan.get("columns"), plan.get("values"))
-        binding.invalidate_indexes()
-        for record in records:
-            binding.storage.insert(record)
-        binding.refresh_indexes()
+        with binding.latch:
+            try:
+                for record in records:
+                    binding.ensure_unique(record)
+                    rid = binding.storage.insert(record)
+                    binding.record_inserted(rid, binding.storage.get(rid))
+            finally:
+                binding.finish_write()
         return len(records)
 
     def _delete(self, plan, stats):
@@ -203,10 +316,16 @@ class SQLExecutor:
                     count += 1
             fh.seek(0)
             read_header(fh)
-            binding.invalidate_indexes()
-            deleted = 0
-            for _ in range(count):
-                rid = read_record(fh)
-                deleted += bool(binding.storage.delete(RID(rid["page"], rid["slot"], rid["file"])))
-        binding.refresh_indexes()
+            with binding.latch:
+                deleted = 0
+                try:
+                    for _ in range(count):
+                        rid = read_record(fh)
+                        rid = RID(rid["page"], rid["slot"], rid["file"])
+                        record = binding.storage.get(rid)
+                        if record is not None and binding.storage.delete(rid):
+                            binding.record_deleted(rid, record)
+                            deleted += 1
+                finally:
+                    binding.finish_write()
         return deleted

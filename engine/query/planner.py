@@ -21,6 +21,8 @@ class TableStats:
     rows: int
     pages: int
     distinct_values: Mapping[str, int] = dataclass_field(default_factory=dict)
+    # (mínimo, máximo) de columnas numéricas, para estimar la selectividad de rangos.
+    value_bounds: Mapping[str, tuple] = dataclass_field(default_factory=dict)
 
     def __post_init__(self):
         if (type(self.rows) is not int or self.rows < 0
@@ -63,6 +65,10 @@ class IndexInfo:
     def supports_order(self) -> bool:
         return self.valid and self.ordered and callable(getattr(self.index, "iter_ordered", None))
 
+    @property
+    def supports_range(self) -> bool:
+        return self.valid and self.ordered and callable(getattr(self.index, "range_search", None))
+
 
 @dataclass(frozen=True)
 class Plan:
@@ -82,7 +88,7 @@ class Plan:
     reverse: bool = False
 
     def explain(self) -> dict:
-        return {
+        result = {
             "operation": self.operation,
             "algorithm": self.algorithm,
             "estimated_io": self.estimated_io,
@@ -91,6 +97,16 @@ class Plan:
             "buffer_pages": self.config.buffer_pages,
             "records_per_page": self.config.records_per_page,
         }
+        if self.operation == "range" and self.field is not None:
+            lower, upper, include_lower, include_upper = self.value
+            parts = []
+            if lower is not None:
+                parts.append(f"{lower!r} {'<=' if include_lower else '<'} ")
+            parts.append(self.field)
+            if upper is not None:
+                parts.append(f" {'<=' if include_upper else '<'} {upper!r}")
+            result["range"] = "".join(parts)
+        return result
 
 
 class QueryPlanner:
@@ -213,5 +229,49 @@ class QueryPlanner:
             if cost < plan.estimated_io:
                 plan = self._plan("equality", "index_scan", cost,
                                   "La selectividad estimada reduce las lecturas usando el índice.",
+                                  index=index, field=field, value=value)
+        return plan
+
+    @staticmethod
+    def _range_fraction(stats: TableStats, field: str, lower, upper) -> float:
+        """Fracción estimada de filas en el rango.
+
+        Interpola con (mínimo, máximo) si la columna es numérica; si no, usa las
+        heurísticas de System R: 1/3 con un solo límite y 1/4 con ambos.
+        """
+        bounds = stats.value_bounds.get(field)
+        numeric = all(v is None or (type(v) in (int, float) and math.isfinite(v)) for v in (lower, upper))
+        if bounds is not None and numeric:
+            low_value, high_value = bounds
+            lo = low_value if lower is None else max(lower, low_value)
+            hi = high_value if upper is None else min(upper, high_value)
+            if hi < lo:
+                return 0.0
+            if high_value == low_value:
+                return 1.0
+            if all(type(v) is int for v in bounds):
+                # Valores discretos: BETWEEN 5 AND 5 cubre 1 de (max - min + 1) valores.
+                return min(1.0, (math.floor(hi) - math.ceil(lo) + 1) / (high_value - low_value + 1))
+            return min(1.0, (hi - lo) / (high_value - low_value))
+        return 0.25 if lower is not None and upper is not None else 1 / 3
+
+    def plan_range(self, stats: TableStats, field: str, lower: Any = None, upper: Any = None,
+                   include_lower: bool = True, include_upper: bool = True,
+                   indexes: Sequence[IndexInfo] = ()) -> Plan:
+        """Predicado lower (<|<=) field (<|<=) upper; None significa sin límite."""
+        _fields(field)
+        value = (lower, upper, include_lower, include_upper)
+        plan = self._plan("range", "sequential_scan", stats.pages,
+                          "El rango es poco selectivo o no hay un índice ordenado vigente.",
+                          field=field, value=value)
+        matches = max(1.0, stats.rows * self._range_fraction(stats, field, lower, upper)) if stats.rows else 0.0
+        for index in indexes:
+            if not index.supports_range or index.field != field:
+                continue
+            cost = index.lookup_pages + self._fetch_cost(stats, index, matches)
+            if cost < plan.estimated_io:
+                plan = self._plan("range", "index_range_scan", cost,
+                                  f"Se estiman ~{matches:.0f} filas en el rango: recorrer las hojas "
+                                  "del índice lee menos páginas que el scan completo.",
                                   index=index, field=field, value=value)
         return plan

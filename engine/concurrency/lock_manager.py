@@ -6,18 +6,55 @@ from typing import Dict, List, Optional, Set, Tuple
 
 
 class LockMode(Enum):
-    """Tipos de lock soportados."""
+    """Modos de lock con granularidad múltiple (tabla y fila).
+
+    - IS / IX: intención de leer / escribir filas de la tabla.
+    - S: lectura de toda la tabla (SELECT).
+    - SIX: lectura de toda la tabla + intención de escribir filas.
+    - X: escritura exclusiva (una fila, o la tabla completa).
+    """
+    INTENTION_SHARED = "IS"
+    INTENTION_EXCLUSIVE = "IX"
     SHARED = "S"
+    SHARED_INTENTION_EXCLUSIVE = "SIX"
     EXCLUSIVE = "X"
 
 
-# Tabla de compatibilidad: (modo_solicitado, modo_existente) -> compatible
-_COMPATIBILITY = {
-    (LockMode.SHARED, LockMode.SHARED): True,       # S con S = ok
-    (LockMode.SHARED, LockMode.EXCLUSIVE): False,   # S con X = no
-    (LockMode.EXCLUSIVE, LockMode.SHARED): False,   # X con S = no
-    (LockMode.EXCLUSIVE, LockMode.EXCLUSIVE): False # X con X = no
+_IS, _IX, _S, _SIX, _X = (LockMode.INTENTION_SHARED, LockMode.INTENTION_EXCLUSIVE, LockMode.SHARED,
+                          LockMode.SHARED_INTENTION_EXCLUSIVE, LockMode.EXCLUSIVE)
+
+# Matriz clásica de compatibilidad: modos que pueden coexistir con cada modo.
+_COMPATIBLE_WITH = {
+    _IS: {_IS, _IX, _S, _SIX},
+    _IX: {_IS, _IX},
+    _S: {_IS, _S},
+    _SIX: {_IS},
+    _X: set(),
 }
+_COMPATIBILITY = {(requested, held): held in _COMPATIBLE_WITH[requested]
+                  for requested in LockMode for held in LockMode}
+
+# Modos que quedan cubiertos por el modo que ya se tiene.
+_COVERS = {
+    _IS: {_IS},
+    _IX: {_IS, _IX},
+    _S: {_IS, _S},
+    _SIX: {_IS, _IX, _S, _SIX},
+    _X: set(LockMode),
+}
+
+
+def combine_modes(held: Optional[LockMode], requested: LockMode) -> LockMode:
+    """Modo resultante al pedir `requested` teniendo `held` (upgrade)."""
+    if held is None or requested in _COVERS[held]:
+        return held or requested
+    if held in _COVERS[requested]:
+        return requested
+    return _SIX  # S + IX (o IX + S)
+
+
+class DeadlockError(RuntimeError):
+    """El solicitante cerraría un ciclo de espera; debe abortar su transacción."""
 
 
 class LockManager:
@@ -54,7 +91,7 @@ class LockManager:
             # Si hay deadlock, abortamos al solicitante
             if self._would_deadlock(tx_id):
                 self._dequeue(tx_id, resource)
-                raise RuntimeError(
+                raise DeadlockError(
                     f"Deadlock detectado: tx {tx_id} no puede esperar por {resource}"
                 )
 
@@ -168,30 +205,26 @@ class LockManager:
 
     def _already_holds(self, tx_id: int, resource: str, mode: LockMode) -> bool:
         current = self.lock_table.get(resource, {}).get(tx_id)
-        if current is None:
-            return False
-        if current == mode:
-            return True
-        if current == LockMode.EXCLUSIVE and mode == LockMode.SHARED:
-            return True
-        return False
+        return current is not None and mode in _COVERS[current]
 
     def _can_grant(self, tx_id: int, resource: str, mode: LockMode) -> bool:
-        """Verifica si el lock puede concederse.
+        """Verifica si el lock (combinado con el que ya tiene tx_id) puede concederse.
 
         Nota: no se aplica FIFO estricto porque puede causar starvation
         en el Condition. Cualquier hilo que pueda obtener el lock lo obtiene.
         """
         holders = self.lock_table.get(resource, {})
+        wanted = combine_modes(holders.get(tx_id), mode)
         for holder_id, holder_mode in holders.items():
             if holder_id == tx_id:
                 continue
-            if not _COMPATIBILITY[(mode, holder_mode)]:
+            if not _COMPATIBILITY[(wanted, holder_mode)]:
                 return False
         return True
 
     def _grant(self, tx_id: int, resource: str, mode: LockMode) -> None:
-        self.lock_table.setdefault(resource, {})[tx_id] = mode
+        holders = self.lock_table.setdefault(resource, {})
+        holders[tx_id] = combine_modes(holders.get(tx_id), mode)
 
     def _enqueue(self, tx_id: int, resource: str) -> None:
         q = self.wait_queue.setdefault(resource, [])

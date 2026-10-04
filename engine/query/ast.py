@@ -113,6 +113,16 @@ class ColumnDefinition(Node):
     name: str
     type: str
     size: int | None = None
+    primary_key: bool = False
+
+
+@dataclass(frozen=True)
+class ForeignKeyDefinition(Node):
+    """column REFERENCES table [(ref_column)] [ON DELETE RESTRICT | CASCADE | NO ACTION]."""
+    column: str
+    ref_table: str
+    ref_column: str | None = None   # None = clave primaria de ref_table
+    on_delete: str = "RESTRICT"
 
 
 @dataclass(frozen=True)
@@ -120,6 +130,8 @@ class CreateTableStatement(Statement):
     name: str
     columns: tuple[ColumnDefinition, ...]
     storage_method: str = "heap"
+    primary_key: str | None = None
+    foreign_keys: tuple[ForeignKeyDefinition, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -160,3 +172,21 @@ class DeleteStatement(Statement):
 @dataclass(frozen=True)
 class TransactionStatement(Statement):
     action: str
+
+
+@dataclass(frozen=True)
+class CopyStatement(Statement):
+    """COPY tabla [(columnas)] FROM 'archivo' [WITH (FORMAT csv, HEADER, DELIMITER ',')]."""
+    table: str
+    columns: tuple[str, ...] | None
+    path: str
+    header: bool = False
+    delimiter: str = ","
+    encoding: str = "utf-8"
+
+
+@dataclass(frozen=True)
+class ExplainStatement(Statement):
+    """EXPLAIN [ANALYZE] <SELECT | INSERT | DELETE>."""
+    statement: Statement
+    analyze: bool = False

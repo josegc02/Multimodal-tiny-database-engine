@@ -13,9 +13,13 @@ env/
 *.db
 *.bin
 
-# Benchmarks output
-benchmarks/results/*.png
-benchmarks/results/*.csv
+# Datos generados en tiempo de ejecución (el frontend corre en modo demo
+# y limpia esta carpeta al iniciar)
+demo_data/
+generated_sql/
+
+# Pruebas
+.pytest_cache/
 
 # IDE & OS
 .vscode/

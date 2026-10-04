@@ -94,6 +94,29 @@ class TestBPlusTree(unittest.TestCase):
             self.assertTrue(tree.insert(42, 1))
             self.assertEqual(tree.search(42), 1)
 
+    def test_insert_and_delete_read_only_o_height_nodes(self):
+        tree = self.tree(M=8, page_size=512)
+        keys = list(range(3000))
+        random.Random(11).shuffle(keys)
+        for key in keys:
+            tree.insert(key, key)
+        height, node = 1, tree._read_node(tree.header.root_pos)
+        while not node.isLeaf:
+            height, node = height + 1, tree._read_node(node.childs[0])
+        # Camino de búsqueda + hermanos por nivel + hoja más a la izquierda.
+        limit = 4 * height + 2
+        with patch.object(tree, "_read_node", wraps=tree._read_node) as reads:
+            for key in keys[:1500]:
+                reads.reset_mock()
+                self.assertTrue(tree.delete(key))
+                self.assertLessEqual(reads.call_count, limit, f"delete({key}) leyó {reads.call_count} nodos")
+            for key in range(5000, 5300):
+                reads.reset_mock()
+                tree.insert(key, key)
+                self.assertLessEqual(reads.call_count, limit, f"insert({key}) leyó {reads.call_count} nodos")
+        check_tree(self, tree)
+        self.assertEqual([k for k, _ in tree.range_search()], sorted(keys[1500:]) + list(range(5000, 5300)))
+
     def test_invalid_configuration_and_truncation(self):
         for kwargs in ({"M": 1}, {"M": True}, {"page_size": 8}, {"M": 100, "page_size": 128}):
             with self.assertRaises(ValueError):

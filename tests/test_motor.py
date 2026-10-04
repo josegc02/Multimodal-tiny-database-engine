@@ -38,14 +38,16 @@ class TestMotorDDL(unittest.TestCase):
         self.execute("INSERT INTO empleados_seq VALUES (2, 'Bob'), (1, 'Ana')")
         result = self.execute("SELECT id, nombre FROM empleados_seq")
         self.assertEqual(sorted(result.filas), [(1, "Ana"), (2, "Bob")])
-        self.assertEqual(
-            self.motor.ejecutar("SELECT * FROM empleados_seq").plan["children"][0]["storage"],
-            "SequentialFile",
-        )
+        plan = self.execute("EXPLAIN SELECT * FROM empleados_seq").plan
+        self.assertTrue(plan[0].startswith("Seq Scan on empleados_seq"))
 
-    def test_execution_plan_reports_heap_storage(self):
-        result = self.execute("SELECT * FROM cuentas")
-        self.assertEqual(result.plan["children"][0]["storage"], "HeapFile")
+    def test_select_does_not_show_a_plan_but_explain_does(self):
+        self.assertIsNone(self.execute("SELECT * FROM cuentas").plan)
+        result = self.execute("EXPLAIN SELECT * FROM cuentas WHERE saldo > 600")
+        self.assertEqual(result.columnas, ["QUERY PLAN"])
+        self.assertEqual(result.plan, [fila[0] for fila in result.filas])
+        self.assertRegex(result.plan[0], r"^Seq Scan on cuentas  \(cost=0\.00\.\.[0-9.]+ rows=[0-9]+\)$")
+        self.assertEqual(result.plan[1], "  Filter: (saldo > 600)")
 
     def test_create_table_storage_method_is_preserved_in_ast_result(self):
         result = self.motor.ejecutar("CREATE TABLE empleados_seq_2 (id INT) USING SEQUENTIAL")
@@ -79,6 +81,41 @@ class TestMotorDDL(unittest.TestCase):
         self.assertTrue(self.motor.ejecutar("CREATE TABLE t (id INT)").tiene_error)
         self.execute("CREATE INDEX t_id ON t (id) USING HASH")
         self.assertTrue(self.motor.ejecutar("CREATE INDEX t_id_2 ON t (id) USING BTREE").tiene_error)
+
+    def test_demo_mode_starts_clean_after_closing_and_reopening(self):
+        # Simula usar el frontend, cerrarlo y volver a abrirlo.
+        script = [
+            "CREATE TABLE emp (id INT, nombre VARCHAR(20))",
+            "CREATE TABLE emp_seq (id INT, nombre VARCHAR(20)) USING SEQUENTIAL",
+            "CREATE TABLE emp_bt (id INT, nombre VARCHAR(20)) USING BTREE",
+            "INSERT INTO emp VALUES (1, 'Ana')",
+            "INSERT INTO emp_seq VALUES (1, 'Ana')",
+            "INSERT INTO emp_bt VALUES (1, 'Ana')",
+            "CREATE INDEX emp_hash ON emp (id) USING HASH",
+            "CREATE INDEX emp_nom ON emp (nombre) USING BTREE",
+            "INSERT INTO cuentas VALUES (99, 'Zoe', 1)",
+        ]
+        for _ in range(2):
+            for sql in script:
+                self.execute(sql)
+            self.motor.cerrar()
+            self.motor = Motor()
+            self.assertEqual(sorted(self.motor.catalog.tables), ["cuentas", "productos"])
+            self.assertEqual(self.execute("SELECT COUNT(*) AS n FROM cuentas").filas, [(3,)])
+
+    def test_close_is_idempotent(self):
+        self.motor.cerrar()
+        self.motor.cerrar()
+
+    def test_cleanup_only_removes_engine_files(self):
+        import os
+        from frontend import motor as motor_module
+        notas = os.path.join(motor_module.DEMO_DIR, "notas.txt")
+        with open(notas, "w", encoding="utf-8") as fh:
+            fh.write("no borrar")
+        self.motor.cerrar()
+        self.motor = Motor()
+        self.assertTrue(os.path.exists(notas))
 
     def test_ddl_rejects_duplicate_index_name(self):
         self.execute("CREATE TABLE first_table (id INT)")

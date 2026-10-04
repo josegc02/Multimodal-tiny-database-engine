@@ -26,10 +26,37 @@ representación del resultado:
 - `INSERT INTO ... VALUES`: una o varias filas de literales, con lista opcional
   de columnas. No se admiten expresiones ni subconsultas dentro de `VALUES`.
 - `DELETE FROM ...`: con alias y filtro opcionales.
-- `CREATE TABLE ...`: columnas `INT`, `FLOAT`, `STR(n)` o `VARCHAR(n)`.
-- `CREATE TABLE ... USING HEAP|SEQUENTIAL`: selecciona el storage físico; por
-  defecto se usa `HEAP`.
-- `CREATE INDEX ... ON ... (...) USING HASH|BTREE`: índices de una columna.
+- `CREATE TABLE ...`: columnas `INT`, `FLOAT`, `STR(n)` o `VARCHAR(n)`, y una
+  clave primaria opcional (`id INT PRIMARY KEY` o `PRIMARY KEY (id)`). La clave
+  rechaza duplicados (`llave duplicada viola la restricción de unicidad
+  "t_pkey"`); en un heap crea el índice hash `t_pkey` y en `SEQUENTIAL`/`BTREE`
+  es la columna de ordenamiento.
+- Llaves foráneas: `col INT REFERENCES padre(pk) [ON DELETE RESTRICT | CASCADE |
+  NO ACTION]` o `FOREIGN KEY (col) REFERENCES padre [(pk)]`. La columna padre debe
+  ser la clave primaria de su tabla y del mismo tipo. INSERT y COPY verifican que
+  el padre exista (con un lock S sobre la fila padre); DELETE en el padre falla
+  si hay hijas (`RESTRICT`, el valor por defecto) o las elimina recursivamente
+  (`CASCADE`). La columna hija recibe un índice automático `<tabla>_<col>_fkey_idx`.
+  Toda sentencia es atómica: si falla dentro de una transacción solo se deshace
+  ella.
+- `COPY t [(cols)] FROM 'archivo.csv' [WITH (FORMAT csv, HEADER true,
+  DELIMITER ',', ENCODING 'UTF8')]`: carga un CSV (también acepta la forma
+  clásica `CSV HEADER`). Valida todo el archivo antes de insertar, informa la
+  línea del primer error, respeta la transacción activa y responde `COPY n`.
+  Las rutas relativas se resuelven desde la raíz del proyecto.
+- `EXPLAIN [ANALYZE] <SELECT | INSERT | DELETE>`: plan con el formato de texto de
+  PostgreSQL (`Seq Scan`, `Index Scan`, `Sort`, `HashAggregate`, `Hash Join`,
+  `Nested Loop`, `Limit`, `Unique`) y costos del modelo del motor. `ANALYZE`
+  ejecuta la sentencia y agrega tiempo y filas reales por operador, `Rows
+  Removed by Filter`, `Sort Method`, `Planning Time` y `Execution Time`.
+- `CREATE TABLE ... USING HEAP|SEQUENTIAL|BTREE`: selecciona el storage físico; por
+  defecto se usa `HEAP`. `BTREE` crea una tabla organizada como **B+ agrupado**
+  (registros en las hojas, clave primaria única = primera columna) y registra
+  esa clave como índice agrupado para igualdad, rangos y `ORDER BY`.
+- `CREATE INDEX ... ON ... (...) USING HASH|BTREE`: índices secundarios de una
+  columna (`BTREE` = B+ no agrupado). El optimizador usa el hash para igualdad y
+  el B+ para igualdad, rangos (`<`, `<=`, `>`, `>=`, `BETWEEN`) y `ORDER BY`,
+  comparando su costo estimado con el de un scan secuencial.
 - Transacciones: `BEGIN`, `COMMIT`, `END` y `ROLLBACK`, con `TRANSACTION` opcional.
   `END` se representa como `COMMIT` en el AST.
 
@@ -135,18 +162,19 @@ la cantidad lógica de registros del buffer, no los bytes de objetos Python.
 `SELECT` devuelve un iterador; si se abandona una lectura antes de agotarla,
 se debe llamar a `close()` para liberar temporales. `INSERT` y `DELETE` se
 ejecutan al llamar a `execute` y devuelven un iterador con
-`{"affected_rows": cantidad}`. Las modificaciones reconstruyen los índices,
-incluyendo los RIDs que cambian en archivos secuenciales. Tras modificar el
-storage directamente, el llamador debe invalidar o reconstruir sus índices
-mediante el `TableBinding` devuelto por `register_table`.
+`{"affected_rows": cantidad}`. Las modificaciones mantienen los índices: fila
+por fila en el heap y con una reconstrucción al final de la sentencia en el
+secuencial y en el B+ agrupado, cuyos RIDs cambian. Tras modificar el storage
+directamente, el llamador debe reconstruir sus índices mediante el
+`TableBinding` devuelto por `register_table`.
 
 `INSERT` exige todas las columnas y valida el lote completo antes de escribir;
 el storage no admite valores `NULL` ni defaults. `DELETE` reúne los RIDs antes
-de modificar registros. No hay rollback ante fallos de E/S: una escritura puede
-quedar parcialmente aplicada y sus índices se mantienen inválidos hasta su
-reconstrucción. El ejecutor admite `SELECT DISTINCT` y `HAVING`; los agregados
-con argumento `DISTINCT` y las transacciones solo se reconocen en el parser y
-se rechazan durante la planificación.
+de modificar registros. `SQLExecutor` no usa transacciones: ante un fallo de
+E/S una escritura puede quedar parcialmente aplicada (los índices siguen
+consistentes con lo escrito). Para transacciones (`BEGIN`/`COMMIT`/`ROLLBACK`)
+con locks se usa `StatementExecutor`. El ejecutor admite `SELECT DISTINCT`,
+`HAVING` y agregados con `DISTINCT` (p. ej. `COUNT(DISTINCT x)`).
 
 `SQLLexError` y `SQLParseError` heredan de `SQLError`/`ValueError`. Exponen
 `message`, `offset` (desde cero), `line` y `column` (desde uno). El mensaje incluye

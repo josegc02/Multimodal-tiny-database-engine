@@ -7,8 +7,8 @@ El resultado es un AST: no se usa eval, no se consulta storage y no se ejecuta S
 from contextlib import contextmanager
 
 from engine.query.ast import (
-    AggregateCall, Between, BinaryOp, ColumnDefinition, ColumnRef,
-    CreateIndexStatement, CreateTableStatement, DeleteStatement, InList,
+    AggregateCall, Between, BinaryOp, ColumnDefinition, ColumnRef, CopyStatement,
+    CreateIndexStatement, CreateTableStatement, DeleteStatement, ExplainStatement, ForeignKeyDefinition, InList,
     InsertStatement, IsNull, Join, Literal, OrderByItem, SelectItem,
     SelectStatement, Star, Statement, TableRef, TransactionStatement, UnaryOp,
 )
@@ -98,7 +98,14 @@ class Parser:
         if token := self._match("BEGIN", "COMMIT", "END", "ROLLBACK"):
             self._match("TRANSACTION")
             return TransactionStatement("COMMIT" if token.kind == "END" else token.kind)
-        self._error("Se esperaba CREATE, SELECT, INSERT, DELETE, BEGIN, COMMIT, END o ROLLBACK")
+        if self._match("COPY"):
+            return self._copy()
+        if token := self._match("EXPLAIN"):
+            analyze = self._match("ANALYZE") is not None
+            if self._peek().kind not in {"SELECT", "INSERT", "DELETE"}:
+                self._error("EXPLAIN admite SELECT, INSERT o DELETE")
+            return ExplainStatement(self._statement(), analyze)
+        self._error("Se esperaba CREATE, SELECT, INSERT, DELETE, COPY, EXPLAIN, BEGIN, COMMIT, END o ROLLBACK")
 
     def _identifier(self):
         return self._expect("IDENTIFIER").value
@@ -117,15 +124,131 @@ class Parser:
     def _create_table(self):
         name = self._identifier()
         self._expect("(")
-        columns = self._comma_list(self._column_definition)
+        columns, primary_key, foreign_keys = [], None, []
+        while True:
+            if self._peek().kind == "FOREIGN":
+                # Restricción de tabla: FOREIGN KEY (columna) REFERENCES tabla [(columna)]
+                self._advance()
+                self._expect("KEY")
+                self._expect("(")
+                column = self._identifier()
+                if self._peek().kind == ",":
+                    self._error("Solo se admiten llaves foráneas de una columna")
+                self._expect(")")
+                foreign_keys.append(self._references(column))
+            elif self._peek().kind == "PRIMARY":
+                # Restricción de tabla: PRIMARY KEY (columna)
+                token = self._advance()
+                self._expect("KEY")
+                self._expect("(")
+                key = self._identifier()
+                if self._peek().kind == ",":
+                    self._error("Solo se admite una clave primaria de una columna")
+                self._expect(")")
+                if primary_key is not None:
+                    self._error("La tabla ya tiene una clave primaria", token)
+                primary_key = key
+            else:
+                column = self._column_definition()
+                if column.primary_key:
+                    if primary_key is not None:
+                        self._error("La tabla ya tiene una clave primaria")
+                    primary_key = column.name
+                columns.append(column)
+                if self._peek().kind == "REFERENCES":
+                    foreign_keys.append(self._references(column.name))
+            if not self._match(","):
+                break
         self._expect(")")
+        if not columns:
+            self._error("La tabla necesita al menos una columna")
+        names = {column.name for column in columns}
+        if primary_key is not None and primary_key not in names:
+            self._error(f"La clave primaria {primary_key!r} no es una columna de la tabla")
+        for foreign_key in foreign_keys:
+            if foreign_key.column not in names:
+                self._error(f"La llave foránea usa la columna inexistente {foreign_key.column!r}")
+        if len({fk.column for fk in foreign_keys}) != len(foreign_keys):
+            self._error("Una columna solo puede tener una llave foránea")
         storage_method = "heap"
         if self._match("USING"):
-            token = self._match("HEAP", "SEQUENTIAL")
+            token = self._match("HEAP", "SEQUENTIAL", "BTREE")
             if token is None:
-                self._error("USING requiere HEAP o SEQUENTIAL")
+                self._error("USING requiere HEAP, SEQUENTIAL o BTREE")
             storage_method = token.kind.lower()
-        return CreateTableStatement(name, columns, storage_method)
+        return CreateTableStatement(name, tuple(columns), storage_method, primary_key, tuple(foreign_keys))
+
+    def _references(self, column):
+        """REFERENCES tabla [(columna)] [ON DELETE RESTRICT | CASCADE | NO ACTION]."""
+        self._expect("REFERENCES")
+        ref_table = self._identifier()
+        ref_column = None
+        if self._match("("):
+            ref_column = self._identifier()
+            self._expect(")")
+        on_delete = "RESTRICT"
+        if self._match("ON"):
+            self._expect("DELETE")
+            if self._match("CASCADE"):
+                on_delete = "CASCADE"
+            elif self._match("RESTRICT"):
+                on_delete = "RESTRICT"
+            elif self._peek().lexeme.upper() == "NO" and self._peek(1).lexeme.upper() == "ACTION":
+                self._advance()
+                self._advance()
+            else:
+                self._error("ON DELETE admite RESTRICT, CASCADE o NO ACTION")
+        return ForeignKeyDefinition(column, ref_table, ref_column, on_delete)
+
+    def _copy(self):
+        """COPY t [(cols)] FROM 'archivo' [WITH] [(] opciones [)] (sintaxis de PostgreSQL)."""
+        table = self._identifier()
+        columns = None
+        if self._match("("):
+            columns = self._comma_list(self._identifier)
+            if len(set(columns)) != len(columns):
+                self._error("COPY contiene columnas repetidas")
+            self._expect(")")
+        self._expect("FROM")
+        path = self._expect("STRING").value
+        options = {"header": False, "delimiter": ",", "encoding": "utf-8"}
+        with_parentheses = self._match("WITH") is not None and self._match("(") is not None
+        while self._peek().kind not in {"EOF", ";", ")"}:
+            self._copy_option(options)
+            if with_parentheses and not self._match(","):
+                break
+        if with_parentheses:
+            self._expect(")")
+        return CopyStatement(table, columns, path, options["header"], options["delimiter"], options["encoding"])
+
+    def _copy_option(self, options):
+        token = self._advance()
+        name = token.lexeme.upper()
+        if name == "FORMAT" or name == "CSV":
+            if name == "FORMAT":
+                value = self._advance()
+                if value.lexeme.strip("'").lower() != "csv":
+                    self._error("Solo se admite FORMAT csv", value)
+        elif name == "HEADER":
+            if value := self._match("TRUE", "FALSE"):
+                options["header"] = value.kind == "TRUE"
+            elif self._peek().kind == "IDENTIFIER" and self._peek().lexeme.lower() in {"on", "off", "match"}:
+                options["header"] = self._advance().lexeme.lower() != "off"
+            else:
+                options["header"] = True
+        elif name == "DELIMITER":
+            value = self._expect("STRING").value
+            if len(value) != 1:
+                self._error("DELIMITER debe ser un solo carácter")
+            options["delimiter"] = value
+        elif name == "ENCODING":
+            value = self._expect("STRING").value.lower().replace("-", "")
+            encodings = {"utf8": "utf-8", "latin1": "latin-1", "win1252": "cp1252"}
+            if value not in encodings:
+                self._error("ENCODING admite 'UTF8', 'LATIN1' o 'WIN1252'")
+            options["encoding"] = encodings[value]
+        else:
+            self._error("Opción de COPY no soportada (FORMAT, HEADER, DELIMITER, ENCODING)", token)
 
     def _column_definition(self):
         name = self._identifier()
@@ -143,7 +266,11 @@ class Parser:
             self._error(f"El tipo {type_name.upper()} no admite tamaño")
         if type_name == "str" and size is None:
             self._error("Las columnas STR/VARCHAR requieren tamaño")
-        return ColumnDefinition(name, type_name, size)
+        primary_key = False
+        if self._match("PRIMARY"):
+            self._expect("KEY")
+            primary_key = True
+        return ColumnDefinition(name, type_name, size, primary_key)
 
     def _create_index(self):
         name = self._identifier()

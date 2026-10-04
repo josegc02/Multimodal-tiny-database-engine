@@ -1,57 +1,75 @@
 """Encapsula el motor de base de datos para el frontend.
 
+Modo demo: cada vez que se crea un Motor se vacía DEMO_DIR (solo los archivos
+que genera el motor) y se crean las tablas de ejemplo. Nada sobrevive al
+cierre de la aplicación; la capa de almacenamiento sí permite reabrir sus
+archivos (ver los tests de reapertura de HeapFile, SequentialFile y B+).
+
 Une:
 - Catalog con tablas de demo
 - LockManager + TransactionManager
-- SQLExecutor (para SELECT)
-- StatementExecutor (para INSERT/DELETE/BEGIN/COMMIT)
+- SQLExecutor (planes y algoritmos de consulta)
+- StatementExecutor (SELECT/INSERT/DELETE/BEGIN/COMMIT con locks)
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 
 from engine.concurrency.lock_manager import LockManager
 from engine.concurrency.transaction_manager import TransactionManager
 from engine.query.ast import (
+    CopyStatement,
     CreateIndexStatement,
     CreateTableStatement,
     DeleteStatement,
+    ExplainStatement,
     InsertStatement,
     SelectStatement,
     TransactionStatement,
 )
-from engine.query.catalog import Catalog
+from engine.query.catalog import Catalog, ForeignKey
 from engine.query.planner import IndexInfo
 from engine.query.sql_executor import SQLExecutor
 from engine.query.statement_executor import StatementExecutor
 from engine.query.parser import parse_script
 from engine.indexes import ExtendibleHash
+from engine.indexes.bplus_tree import CHILD_SIZE, NODE_HEADER_SIZE
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
+from engine.storage.clustered_file import ClusteredBPlusFile
 from engine.storage.heap_file import HeapFile
 from engine.storage.sequential_file import SequentialFile
 
 
-# Ruta donde se guardan los archivos de demo
-DEMO_DIR = "demo_data"
+# Raíz del proyecto: base de las rutas relativas de COPY.
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Carpeta de trabajo del modo demo (relativa a la raíz del proyecto, no al cwd).
+DEMO_DIR = os.path.join(PROJECT_DIR, "demo_data")
+
+# Archivos que genera el motor y que el modo demo elimina al iniciar.
+_EXTENSIONES_MOTOR = (".db", ".main", ".aux", ".bpt", ".hash", ".idx", ".reorg", ".tmp")
+_DIRECTORIOS_TEMPORALES = (".bplus-build-",)
 
 
 class Resultado:
     """Resultado de una ejecucion SQL.
 
     Alguno de estos campos estara lleno:
-    - columnas + filas: para SELECT
-    - mensaje: para INSERT/DELETE/BEGIN/COMMIT
+    - columnas + filas: para SELECT y EXPLAIN (columna "QUERY PLAN")
+    - mensaje: para INSERT/DELETE/COPY/BEGIN/COMMIT
     - error: si algo fallo
-    - plan: el LogicalPlan para el panel de plan
+    - plan: líneas del QUERY PLAN (solo con EXPLAIN / EXPLAIN ANALYZE)
     """
 
     def __init__(self, columnas=None, filas=None, mensaje=None,
-                 plan=None, error=None):
+                 plan=None, error=None, plan_nodos=None, tiempos=(None, None)):
         self.columnas = columnas or []
         self.filas = filas or []
         self.mensaje = mensaje
         self.plan = plan
+        self.plan_nodos = plan_nodos  # árbol del plan como datos (panel de análisis)
+        self.tiempos = tiempos        # (planificación, ejecución) en segundos, con ANALYZE
         self.error = error
 
     @property
@@ -77,63 +95,66 @@ class Motor:
             transaction_manager=self.transaction_manager,
             lock_manager=self.lock_manager,
             storage=self.catalog,
+            query_executor=self.sql_executor,
+            planner=self.sql_executor.planner,
+            base_dir=PROJECT_DIR,
         )
+        self._cerrado = False
+        self._limpiar_directorio_demo()
         self._cargar_tablas_demo()
 
     # ------------------------------------------------------------------
     # Carga de tablas de demo
     # ------------------------------------------------------------------
 
-    def _cargar_tablas_demo(self):
-        """Crea tablas de ejemplo para la demo."""
+    @staticmethod
+    def _limpiar_directorio_demo():
+        """Elimina los archivos de sesiones anteriores.
+
+        No ignora errores: en Windows un archivo abierto por otra instancia no
+        se puede borrar, y continuar reabriría datos viejos sin avisar.
+        """
         os.makedirs(DEMO_DIR, exist_ok=True)
+        errores = []
+        for nombre in os.listdir(DEMO_DIR):
+            ruta = os.path.join(DEMO_DIR, nombre)
+            try:
+                if os.path.isfile(ruta) and nombre.endswith(_EXTENSIONES_MOTOR):
+                    os.remove(ruta)
+                elif os.path.isdir(ruta) and nombre.startswith(_DIRECTORIOS_TEMPORALES):
+                    shutil.rmtree(ruta)
+            except OSError as exc:
+                errores.append(f"{nombre}: {exc}")
+        if errores:
+            raise RuntimeError(
+                "No se pudo limpiar la carpeta de la demo (¿hay otra instancia del frontend abierta?): "
+                + "; ".join(errores)
+            )
 
-        # --- Tabla cuentas ---
-        path_cuentas = os.path.join(DEMO_DIR, "cuentas.db")
-        self._eliminar_archivos_tabla(path_cuentas)
-
-        schema_cuentas = [
-            ("id", "int"),
-            ("nombre", "str", 20),
-            ("saldo", "int"),
-        ]
-        storage_cuentas = HeapFile(path_cuentas, schema_cuentas)
-        storage_cuentas.insert({"id": 1, "nombre": "Ana", "saldo": 1000})
-        storage_cuentas.insert({"id": 2, "nombre": "Bob", "saldo": 500})
-        storage_cuentas.insert({"id": 3, "nombre": "Carlos", "saldo": 750})
-
-        self.catalog.register_table("cuentas", storage_cuentas)
-
-        # --- Tabla productos ---
-        path_productos = os.path.join(DEMO_DIR, "productos.db")
-        self._eliminar_archivos_tabla(path_productos)
-
-        schema_productos = [
-            ("id", "int"),
-            ("nombre", "str", 30),
-            ("precio", "int"),
-        ]
-        storage_productos = HeapFile(path_productos, schema_productos)
-        storage_productos.insert({"id": 1, "nombre": "Laptop", "precio": 2500})
-        storage_productos.insert({"id": 2, "nombre": "Mouse", "precio": 50})
-        storage_productos.insert({"id": 3, "nombre": "Teclado", "precio": 150})
-
-        self.catalog.register_table("productos", storage_productos)
+    def _cargar_tablas_demo(self):
+        """Crea las tablas de ejemplo de la demo."""
+        tablas = {
+            "cuentas": ([("id", "int"), ("nombre", "str", 20), ("saldo", "int")],
+                        [(1, "Ana", 1000), (2, "Bob", 500), (3, "Carlos", 750)]),
+            "productos": ([("id", "int"), ("nombre", "str", 30), ("precio", "int")],
+                          [(1, "Laptop", 2500), (2, "Mouse", 50), (3, "Teclado", 150)]),
+        }
+        for nombre, (schema, filas) in tablas.items():
+            storage = HeapFile(os.path.join(DEMO_DIR, f"{nombre}.db"), schema)
+            campos = [campo[0] for campo in schema]
+            for fila in filas:
+                storage.insert(dict(zip(campos, fila)))
+            self.catalog.register_table(nombre, storage)
 
     # ------------------------------------------------------------------
     # Ejecucion
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _eliminar_archivos_tabla(base_path):
-        """Elimina archivos antiguos de una tabla demo."""
-        root = base_path[:-3] if base_path.endswith(".db") else base_path
-        for path in (f"{root}.db", f"{root}.main", f"{root}.aux"):
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
+    def _archivos_tabla(nombre):
+        """Archivos que usaría una tabla según su método de almacenamiento."""
+        base = os.path.join(DEMO_DIR, nombre)
+        return (f"{base}.db", f"{base}.db.main", f"{base}.db.aux", f"{base}.bpt")
 
     def ejecutar(self, sql: str) -> Resultado:
         """Ejecuta SQL y devuelve un Resultado.
@@ -184,16 +205,24 @@ class Motor:
             if isinstance(ast, CreateIndexStatement):
                 return Resultado(mensaje=self._crear_indice(ast))
 
-            # --- INSERT / DELETE ---
-            if isinstance(ast, (InsertStatement, DeleteStatement)):
+            # --- INSERT / DELETE / COPY ---
+            if isinstance(ast, (InsertStatement, DeleteStatement, CopyStatement)):
                 mensaje = self.statement_executor.execute(ast)
                 return Resultado(mensaje=mensaje)
+
+            # --- EXPLAIN [ANALYZE]: el plan se muestra solo cuando se pide ---
+            if isinstance(ast, ExplainStatement):
+                lineas = self.statement_executor.execute(ast)
+                return Resultado(columnas=["QUERY PLAN"], filas=[(linea,) for linea in lineas],
+                                 plan=lineas, plan_nodos=getattr(lineas, "nodes", None),
+                                 tiempos=(getattr(lineas, "planning", None), getattr(lineas, "execution", None)))
 
             # --- SELECT ---
             if isinstance(ast, SelectStatement):
                 plan = self.sql_executor.planner.plan(ast)
-                filas_iter = self.sql_executor.execute(plan)
-                filas_dict = list(filas_iter)
+                # Pasa por el StatementExecutor para tomar locks S y respetar
+                # la transacción activa de la sesión.
+                filas_dict = self.statement_executor.select(plan)
 
                 if filas_dict:
                     columnas = list(filas_dict[0].keys())
@@ -201,9 +230,7 @@ class Motor:
                 else:
                     columnas = self._columnas_del_plan(plan)
                     filas = []
-
-                plan_explicado = self.sql_executor.optimizer.explain(plan)
-                return Resultado(columnas=columnas, filas=filas, plan=plan_explicado)
+                return Resultado(columnas=columnas, filas=filas)
 
             return Resultado(error=f"Sentencia no soportada: {type(ast).__name__}")
 
@@ -225,20 +252,70 @@ class Motor:
             schema.append(definition)
 
         path = os.path.join(DEMO_DIR, f"{statement.name}.db")
-        if os.path.exists(path):
-            raise ValueError(f"Ya existe el archivo de la tabla {statement.name!r}")
+        existentes = [ruta for ruta in self._archivos_tabla(statement.name) if os.path.exists(ruta)]
+        if existentes:
+            raise ValueError(f"Ya existe el archivo de la tabla {statement.name!r}: {existentes[0]}")
+        indexes = None
+        primary_key = statement.primary_key
+        # SEQUENTIAL y BTREE se ordenan por la clave primaria (o por la primera columna).
+        key_field = primary_key or fields[0]
+        constraint = f"{statement.name}_pkey"
         if statement.storage_method == "sequential":
             storage = SequentialFile(
-                f"{path}.main", f"{path}.aux", schema, key_field=fields[0]
+                f"{path}.main", f"{path}.aux", schema, key_field=key_field
             )
+            # La clave de ordenamiento queda como índice: búsqueda binaria del archivo.
+            nombre_clave = constraint if primary_key else f"{statement.name}_{key_field}_seq"
+            indexes = {key_field: storage.primary_index_info(nombre_clave)}
+        elif statement.storage_method == "btree":
+            # B+ agrupado: los registros viven en las hojas ordenados por la clave,
+            # que es única y queda registrada como índice agrupado.
+            storage = ClusteredBPlusFile(os.path.join(DEMO_DIR, f"{statement.name}.bpt"), schema,
+                                         key_field=key_field)
+            indexes = {key_field: storage.primary_index_info(constraint)}
+            primary_key = key_field
         else:
             storage = HeapFile(path, schema)
+            if primary_key is not None:
+                # Índice implícito de la clave primaria, como en PostgreSQL.
+                index = ExtendibleHash()
+                indexes = {primary_key: IndexInfo(constraint, primary_key, index)}
         try:
-            self.catalog.register_table(statement.name, storage)
+            self.catalog.register_table(statement.name, storage, indexes, primary_key=primary_key)
         except Exception:
             storage.close()
             raise
+        try:
+            self._registrar_llaves_foraneas(statement)
+        except Exception:
+            # La tabla no queda a medias: se quita del catálogo y se borran sus archivos.
+            del self.catalog.tables[statement.name]
+            storage.close()
+            for ruta in self._archivos_tabla(statement.name):
+                if os.path.exists(ruta):
+                    os.remove(ruta)
+            raise
         return f"Tabla {statement.name} creada"
+
+    def _registrar_llaves_foraneas(self, statement: CreateTableStatement) -> None:
+        """Registra cada REFERENCES y crea un índice sobre la columna hija.
+
+        El índice (como recomienda PostgreSQL) evita recorrer la tabla hija en
+        cada DELETE del padre para aplicar RESTRICT o CASCADE.
+        """
+        for definition in statement.foreign_keys:
+            padre = self.catalog.table(definition.ref_table)
+            columna_padre = definition.ref_column or padre.primary_key
+            if columna_padre is None:
+                raise ValueError(f"La tabla {definition.ref_table!r} no tiene clave primaria para referenciar")
+            nombre = f"{statement.name}_{definition.column}_fkey"
+            self.catalog.add_foreign_key(ForeignKey(
+                nombre, statement.name, definition.column, definition.ref_table,
+                columna_padre, definition.on_delete))
+            if definition.column not in self.catalog.table(statement.name).indexes:
+                indice = ExtendibleHash()
+                self.catalog.register_index(statement.name, definition.column, indice,
+                                            IndexInfo(f"{nombre}_idx", definition.column, indice))
 
     def _crear_indice(self, statement: CreateIndexStatement) -> str:
         """Crea, carga y registra un índice SQL sobre una tabla."""
@@ -255,13 +332,18 @@ class Motor:
         position = binding.storage.schema.fields.index(statement.column)
         key_type = binding.storage.schema.types[position]
         index_path = os.path.join(DEMO_DIR, f"{statement.table}_{statement.name}")
+        index_file = f"{index_path}.hash" if statement.method == "hash" else f"{index_path}.bpt"
+        if os.path.exists(index_file):
+            raise ValueError(f"Ya existe el archivo {index_file!r}; usa otro nombre de índice")
         if statement.method == "hash":
-            index = ExtendibleHash(filepath=f"{index_path}.hash")
+            index = ExtendibleHash(filepath=index_file)
             metadata = IndexInfo(statement.name, statement.column, index)
         else:
-            key_size = binding.storage.schema.sizes[position] if key_type == "str" else 64
+            key_size = binding.storage.schema.sizes[position]
+            # Nodos que llenan una página de 4 KB (M = 254 para claves enteras).
+            order = (4096 - NODE_HEADER_SIZE - CHILD_SIZE) // (CHILD_SIZE + key_size)
             index = BPlusTreeUnclustered(
-                f"{index_path}.bpt", key_type=key_type, key_size=key_size
+                index_file, key_type=key_type, order=order, key_size=key_size
             )
             metadata = IndexInfo(statement.name, statement.column, index, ordered=True)
 
@@ -288,19 +370,25 @@ class Motor:
     # ------------------------------------------------------------------
 
     def cerrar(self):
-        """Cierra todos los storages e indices abiertos."""
-        for nombre, binding in self.catalog.tables.items():
-            # Cerrar storage
+        """Cierra índices y storages (necesario en Windows antes de borrar archivos).
+
+        Es idempotente. Intenta cerrar todo y reporta el primer error al final.
+        """
+        if self._cerrado:
+            return
+        self._cerrado = True
+        errores = []
+        for binding in self.catalog.tables.values():
+            for registro in binding.indexes.values():
+                try:
+                    if hasattr(registro.index, "close"):
+                        registro.index.close()
+                except Exception as exc:
+                    errores.append(exc)
             try:
                 if hasattr(binding.storage, "close"):
                     binding.storage.close()
-            except Exception:
-                pass
-
-            # Cerrar indices
-            for campo, reg in binding.indexes.items():
-                try:
-                    if hasattr(reg.index, "close"):
-                        reg.index.close()
-                except Exception:
-                    pass
+            except Exception as exc:
+                errores.append(exc)
+        if errores:
+            raise RuntimeError(f"Error al cerrar el motor: {errores[0]}") from errores[0]

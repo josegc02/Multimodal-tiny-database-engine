@@ -10,56 +10,102 @@ python -m venv .venv
 ```
 
 También admiten `python -m benchmarks.bench_storage` / `benchmarks.bench_indexes`.
-Por defecto usan **1.000, 10.000 y 100.000 registros**, semilla **42** y escriben
-en `benchmarks/results/`. Para validar con menos datos sin pisar la corrida oficial:
+Por defecto usan **1.000, 10.000 y 100.000 registros**, **3 repeticiones** por
+tamaño, semilla **42**, y escriben en `benchmarks/results/`. Para validar con
+menos datos sin pisar la corrida oficial:
 
 ```bash
-.venv/bin/python benchmarks/bench_storage.py --sizes 100 1000 5000 --output-dir benchmarks/results/smoke
-.venv/bin/python benchmarks/bench_indexes.py --sizes 100 1000 5000 --output-dir benchmarks/results/smoke
+.venv/bin/python benchmarks/bench_storage.py --sizes 200 1000 5000 --repetitions 1 --output-dir benchmarks/results/smoke
+.venv/bin/python benchmarks/bench_indexes.py --sizes 200 1000 5000 --repetitions 1 --output-dir benchmarks/results/smoke
 ```
 
-Los CSV contienen tiempos totales en segundos, no promedios por operación.
-Cada consulta verifica sus resultados fuera de la región cronometrada. Las
-tablas se imprimen al terminar; los mensajes de avance van a stderr. Los archivos
-de datos se crean con `tempfile.mkdtemp()` y se limpian al terminar, incluso si
-falla una comprobación. No se cambian los motores ni sus algoritmos.
+Salidas por suite (`storage_*` e `indexes_*`):
+
+- `*_comparison.csv`: media y desviación estándar (`<métrica>_std`) de las repeticiones.
+- `*_runs.csv`: cada repetición por separado.
+- `*_metadata.json`: entorno, configuración, estadísticas estructurales y duración.
+- PNG en escala **log-log** con barras de error (± 1 desviación estándar).
+  Inserción, construcción de índices y actualizaciones se grafican **por
+  operación** (total ÷ cantidad de operaciones): una curva plana es O(1) u
+  O(log N) y una pendiente 1 es O(N). Los CSV guardan los totales.
+
+Para redibujar las gráficas desde los `*_comparison.csv` existentes, sin volver
+a medir:
+
+```bash
+.venv/bin/python benchmarks/bench_storage.py --solo-graficas
+.venv/bin/python benchmarks/bench_indexes.py --solo-graficas
+```
+
+Para contrastar la complejidad teórica con la medida:
+
+```bash
+.venv/bin/python benchmarks/complexity.py
+```
+
+Imprime una tabla markdown con la pendiente log-log de cada curva entre tamaños
+consecutivos y su veredicto (usa el último tramo, el asintótico). Termina con
+código 1 si alguna curva no coincide con la teoría.
+
+Cada consulta verifica sus resultados fuera de la región cronometrada. Los
+archivos de datos se crean con `tempfile.mkdtemp()` y se borran al terminar.
 
 ## Metodología
 
-- Dataset: IDs únicos desordenados, nombres ASCII de 20 caracteres y precios;
-  todas las técnicas reciben el mismo orden y las mismas claves de consulta.
-- Storage: inserción de N registros y 100 búsquedas existentes. El espacio se
-  mide antes de borrar. En secuencial se eliminan 35% de claves usando RIDs
-  actuales y se comprueba `needs_reorganization()`. Solo `reorganize()` está
-  cronometrado; scan, borrado y verificación se excluyen. El overflow puede haber
-  activado ya el umbral antes de las eliminaciones.
-- Índices: páginas B+ de 4096 B, máximo **64 claves por nodo**; hash con **64
-  entradas por bucket**, profundidad máxima 16. Se usan las APIs existentes.
-  El agrupado recibe registros completos; los otros reciben RIDs sintéticos,
-  sin leer un heap. La búsqueda mide 100 igualdades y 20 rangos inclusivos
-  `[k, min(N-1, k+100)]`, de hasta 101 entradas.
-- Actualizaciones: 500 claves nuevas mayores que las originales, en orden
-  aleatorio; cada inserción va seguida de su eliminación (1000 operaciones).
-  No se borran registros originales. El espacio se mide antes de esta fase.
-- B+ usa archivos y flush; el hash opera en memoria y no persiste snapshots
-  durante el experimento. Ninguno fuerza fsync. No se vacía la caché del SO.
-- Se realiza **una corrida por tamaño**: es un experimento descriptivo, sin
-  intervalos de confianza ni garantías de repetibilidad de los tiempos. La
-  semilla reproduce datos y consultas, no el ruido del sistema.
+- **Dataset**: IDs únicos 0..N-1 en orden aleatorio, nombres ASCII de 20
+  caracteres y precios (36 B por registro); todas las técnicas reciben el mismo
+  orden y las mismas claves de consulta.
+- **Variación del entorno**: en Windows, la misma corrida puede variar ±25–30%
+  entre repeticiones (frecuencia del CPU, antivirus, procesos de fondo). Por
+  eso se repite 3 veces y se grafica la desviación estándar. El recolector de
+  basura queda activo: un experimento alternando encendido/apagado en la misma
+  sesión no mostró diferencias mayores que esa variación.
 
-## Espacio y valores NA
+### Storage (`bench_storage.py`)
 
-No se mezcla RAM con disco en una sola curva:
+- **Inserción** de N registros. En el secuencial incluye las reorganizaciones
+  automáticas que dispara la propia carga (`reorganizaciones_automaticas`).
+- **Búsqueda PK**: 100 claves existentes. El heap usa
+  `search_by_key(..., unique=True)`, que se detiene en la primera coincidencia,
+  para no penalizarlo con un scan completo innecesario.
+- **Espacio** tras la carga (`main + aux` en el secuencial).
+- **Reorganización**: se borra el 35% de las claves (no cronometrado), se
+  comprueba el umbral del 30% y se mide solo `reorganize()`. Después se repiten
+  las búsquedas de las claves sobrevivientes (escaladas a 100 consultas).
+- `paginas_aux_tras_carga`: páginas de `aux` al terminar la carga. La búsqueda
+  no las recorre: las claves de `aux` se ubican con un índice en memoria.
 
-| Columna | Interpretación |
+### Índices (`bench_indexes.py`)
+
+- **Mismo tamaño de página (4096 B) y nodos llenos**: el B+ agrupado usa
+  M = 92 (clave + registro de 36 B por entrada de hoja), el no agrupado M = 254
+  (clave + RID de 8 B) y el hash buckets de 254 entradas.
+- **Todas las consultas devuelven registros completos**: el agrupado los tiene en
+  sus hojas; el no agrupado y el hash leen cada RID de un `HeapFile` real.
+- **Igualdad**: 100 claves. **Rango**: 20 rangos `[k, k+100]`. El hash no
+  soporta rangos (NA).
+- **Ordenamiento** (`ORDER BY id` de toda la tabla): agrupado recorre hojas, no
+  agrupado recorre hojas y lee cada RID, y el hash, que no aporta orden, usa
+  lo que haría el motor: `heap.scan()` + `external_sort`.
+- **Espacio**: `espacio_total_bytes` = tabla + índice (el agrupado es un solo
+  archivo). `espacio_adicional_bytes` = total − heap con los mismos N registros.
+  `memoria_estimada_bytes` solo aplica al hash (`sys.getsizeof` del grafo).
+- **Actualizaciones**: 500 claves nuevas, cada inserción seguida de su
+  eliminación, en tabla e índice (1000 operaciones).
+- **Durabilidad**: el B+ escribe y hace `flush` de cada página modificada; el
+  hash trabaja en RAM y persiste un snapshot JSON completo, que es O(N). Ese
+  snapshot se mide aparte (`tiempo_snapshot_seg`) y queda fuera de la
+  construcción y de las actualizaciones, para no mezclarlo con su costo O(1)
+  por operación. Ninguno fuerza `fsync`.
+
+## Valores NA
+
+| Columna | Significado |
 | --- | --- |
-| `espacio_disco_bytes` | Archivo B+ completo; incluye registros en el agrupado. Hash: NA (no persistido). |
-| `espacio_adicional_disco_bytes` | Agrupado: archivo menos N × 36 B de registros; no agrupado: archivo completo. Incluye páginas, claves, punteros y holgura. |
-| `memoria_estimada_bytes` | Grafo Python retenido por el hash, con `sys.getsizeof` y referencias contadas una vez. Incluye claves y RIDs; no equivale a RSS ni memoria pico. B+: NA (no medida). |
-| `tiempo_rango_seg` | Hash: NA porque no soporta rangos; no representa tiempo cero. |
-| `tiempo_reorganizacion_seg` | Heap: NA porque no tiene esa operación. |
+| `tiempo_rango_seg` | Hash: no soporta rangos; no equivale a tiempo cero. |
+| `memoria_estimada_bytes` | B+: no medida (trabaja sobre archivo). |
+| `tiempo_snapshot_seg` | B+: no tiene snapshot (persiste página a página). |
+| `paginas_aux_tras_carga` | Heap: no tiene área de desborde. |
+| `tiempo_reorganizacion_seg`, `*_post_reorg_*`, `reorganizaciones_automaticas` | Heap: no tiene reorganización. |
 
-`*_metadata.json` registra entorno, versión de Python/matplotlib, configuración,
-cantidad de operaciones, estadísticas estructurales y duración completa. Los PNG
-usan X logarítmico; los tiempos también usan Y logarítmico para mostrar técnicas
-con diferencias grandes. Las conclusiones reales se recogen en `docs/informe.md`.
+Las conclusiones se recogen en `docs/informe.md`.

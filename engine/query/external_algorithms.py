@@ -1,7 +1,9 @@
 """Operadores externos con temporales privados y buffers de registros limitados.
 
 El modelo de la PPT se simula con B páginas de R registros cada una: no es una
-cuota de bytes del proceso Python. La entrada y la salida son iterables; quien
+cuota de bytes del proceso Python. Como en PostgreSQL, si la entrada cabe en el
+buffer el operador trabaja en memoria y no crea temporales; solo escribe a disco
+(runs o particiones) cuando la entrada excede el buffer. La entrada y la salida son iterables; quien
 consuma parcialmente un resultado debe cerrar su generador (close()). Los
 temporales usan un formato binario explícito con struct (ver _temp_records).
 """
@@ -12,9 +14,10 @@ from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass
 import heapq
 import hashlib
-from itertools import islice
+from itertools import chain, islice
 import math
 from pathlib import Path
+import shutil
 import tempfile
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
@@ -66,6 +69,9 @@ class ExecutionStats:
     peak_buffered_records: int = 0
     peak_open_files: int = 0
     index_probes: int = 0
+    memory_sorts: int = 0  # ordenamientos resueltos en memoria (sin runs en disco)
+    # EXPLAIN ANALYZE: {id(nodo del plan): {"rows", "first", "total"}}; None = sin medir.
+    profile: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -121,16 +127,26 @@ class _Run:
 
 
 class _Workspace:
-    def __init__(self, directory: str, config: BufferConfig, stats: ExecutionStats):
-        self.directory = Path(directory)
+    """Directorio temporal privado, creado recién al primer derrame a disco."""
+
+    def __init__(self, prefix: str, config: BufferConfig, stats: ExecutionStats):
+        self.prefix = prefix
+        self.directory: Path | None = None
         self.config = config
         self.stats = stats
         self._counter = 0
         self._open_files = 0
 
     def path(self) -> Path:
+        if self.directory is None:
+            self.directory = Path(tempfile.mkdtemp(prefix=self.prefix, dir=self.config.temp_dir))
         self._counter += 1
         return self.directory / f"part-{self._counter}.bin"
+
+    def close(self) -> None:
+        if self.directory is not None:
+            shutil.rmtree(self.directory, ignore_errors=True)
+            self.directory = None
 
     def observe(self, records: int) -> None:
         if records > self.config.capacity:
@@ -192,18 +208,23 @@ def _sort(rows: Iterable[Row], order: tuple[OrderKey, ...], ws: _Workspace) -> I
     runs = []
     chunk = []
     for row in rows:
-        # Tomar una copia: algunos productores reutilizan un mismo diccionario.
-        chunk.append(dict(row))
-        ws.observe(len(chunk))
+        # El run se escribe recién cuando llega un registro que no cabe: si la
+        # entrada completa cabe en B*R registros, se ordena en memoria.
         if len(chunk) == ws.config.capacity:
             chunk.sort(key=lambda item: _SortKey(item, order))
             runs.append(ws.write(chunk))
             chunk.clear()
-    if chunk:
-        chunk.sort(key=lambda item: _SortKey(item, order))
-        runs.append(ws.write(chunk))
-        chunk.clear()
+        # Tomar una copia: algunos productores reutilizan un mismo diccionario.
+        chunk.append(dict(row))
+        ws.observe(len(chunk))
     row = None  # No retener el último registro de entrada durante las mezclas.
+    chunk.sort(key=lambda item: _SortKey(item, order))
+    if not runs:
+        ws.stats.memory_sorts += 1
+        yield from chunk
+        return
+    runs.append(ws.write(chunk))
+    chunk.clear()
     ws.stats.initial_runs += len(runs)
 
     while len(runs) > 1:
@@ -236,8 +257,11 @@ def external_sort(
     config = config or BufferConfig()
     stats = stats if stats is not None else ExecutionStats()
     order = _order_keys(order_by)
-    with tempfile.TemporaryDirectory(prefix="external-sort-", dir=config.temp_dir) as directory:
-        yield from _sort(rows, order, _Workspace(directory, config, stats))
+    ws = _Workspace("external-sort-", config, stats)
+    try:
+        yield from _sort(rows, order, ws)
+    finally:
+        ws.close()
 
 
 @dataclass(frozen=True)
@@ -279,7 +303,42 @@ def _new_state(specs: Mapping[str, Aggregate]) -> list:
     return [[0, None] for _ in specs]
 
 
+# Un grupo que estaba en memoria al desbordar se escribe en su partición como
+# estado parcial (cantidad y acumulado por agregado) y se combina al releerlo.
+_PARTIAL = "\x00partial"
+
+
+def _partial_record(key: tuple, state: list, fields: tuple) -> dict:
+    record = dict(zip(fields, key))
+    record[_PARTIAL] = 1
+    for i, (count, value) in enumerate(state):
+        record[f"\x00n{i}"] = count
+        record[f"\x00v{i}"] = value
+    return record
+
+
+def _combine(state: list, row: Row, specs: Mapping[str, Aggregate]) -> None:
+    for i, (slot, spec) in enumerate(zip(state, specs.values())):
+        count, value = row[f"\x00n{i}"], row[f"\x00v{i}"]
+        if not count:
+            continue
+        slot[0] += count
+        if spec.function == "count":
+            continue
+        if slot[1] is None:
+            slot[1] = value
+        elif spec.function in {"sum", "avg"}:
+            slot[1] += value
+        elif spec.function == "min":
+            slot[1] = min(slot[1], value)
+        else:
+            slot[1] = max(slot[1], value)
+
+
 def _accumulate(state: list, row: Row, specs: Mapping[str, Aggregate]) -> None:
+    if _PARTIAL in row:
+        _combine(state, row, specs)
+        return
     for slot, spec in zip(state, specs.values()):
         value = 1 if spec.field is None else row[spec.field]
         if value is None:
@@ -439,13 +498,37 @@ def external_hash_group_by(
         stats.peak_buffered_records = max(stats.peak_buffered_records, 2)
         yield from _ordered_groups(rows, fields, specs)
         return
-    with tempfile.TemporaryDirectory(prefix="external-group-", dir=config.temp_dir) as directory:
-        ws = _Workspace(directory, config, stats)
-        partitions = _partition(rows, fields, ws, 0)
+    ws = _Workspace("external-group-", config, stats)
+    try:
+        # Agregación en memoria mientras los grupos quepan en (B-2)*R estados.
+        table = {}
+        rows = iter(rows)
+        overflow = None
+        for row in rows:
+            key = _key(row, fields)
+            if key not in table:
+                if len(table) == config.hash_capacity:
+                    overflow = row
+                    break
+                table[key] = _new_state(specs)
+            _accumulate(table[key], row, specs)
+            ws.observe(len(table) + 1)
+        if overflow is None:
+            for key, state in table.items():
+                yield _group_result(key, state, fields, specs)
+            return
+        # Desborde: los grupos en memoria van a su partición como estados
+        # parciales y el resto de la entrada se particiona como en Grace.
+        partials = [_partial_record(key, state, fields) for key, state in table.items()]
+        table.clear()
+        partitions = _partition(chain(partials, [overflow], rows), fields, ws, 0)
+        partials = overflow = None
         for run in partitions:
             if run.count:
                 yield from _group_partition(run, fields, specs, ws, 0)
             run.path.unlink(missing_ok=True)
+    finally:
+        ws.close()
 
 
 def _probe_join(table: dict, probe: _Run, fields: tuple, swapped: bool, ws: _Workspace):
@@ -535,11 +618,33 @@ def external_hash_join(
     left_fields, right_fields = _fields(left_on), _fields(right_on)
     if len(left_fields) != len(right_fields):
         raise ValueError("JOIN requiere igual cantidad de campos en ambos lados")
-    with tempfile.TemporaryDirectory(prefix="external-join-", dir=config.temp_dir) as directory:
-        ws = _Workspace(directory, config, stats)
+    ws = _Workspace("external-join-", config, stats)
+    try:
+        # Como el nodo Hash de PostgreSQL: si la entrada derecha cabe en
+        # (B-2)*R registros, se construye la tabla en memoria y la izquierda
+        # se sondea en streaming, sin escribir a disco.
+        right_rows = iter(right_rows)
+        buffered = []
+        for row in right_rows:
+            if any(value is None for value in _key(row, right_fields)):
+                continue
+            buffered.append(row)
+            ws.observe(len(buffered))
+            if len(buffered) > config.hash_capacity:
+                break
+        if len(buffered) <= config.hash_capacity:
+            table = _build_join_table(buffered, right_fields, ws)
+            buffered = None
+            for row in left_rows:
+                for match in table.get(_key(row, left_fields), ()):
+                    yield row, match
+            return
+        right_parts = _partition(chain(buffered, right_rows), right_fields, ws, 0, skip_nulls=True)
+        buffered = None
         left_parts = _partition(left_rows, left_fields, ws, 0, skip_nulls=True)
-        right_parts = _partition(right_rows, right_fields, ws, 0, skip_nulls=True)
         for left, right in zip(left_parts, right_parts):
             yield from _join_partition(left, right, left_fields, right_fields, ws, 0)
             left.path.unlink(missing_ok=True)
             right.path.unlink(missing_ok=True)
+    finally:
+        ws.close()

@@ -6,12 +6,25 @@
 single_statement = statement, [";"], EOF ;
 script = [statement, {";", statement}, [";"]], EOF ;
 
-statement = create_table | create_index | select | insert | delete | transaction ;
+statement = create_table | create_index | select | insert | delete | transaction
+          | copy | explain ;
 
-create_table = "CREATE", "TABLE", identifier, "(", column_definition,
-               {",", column_definition}, ")", ["USING", ("HEAP" | "SEQUENTIAL")] ;
-column_definition = identifier, ("INT" | "FLOAT")
-                  | identifier, ("STR" | "VARCHAR"), "(", integer, ")" ;
+create_table = "CREATE", "TABLE", identifier, "(", table_element,
+               {",", table_element}, ")", ["USING", ("HEAP" | "SEQUENTIAL" | "BTREE")] ;
+table_element = column_definition | "PRIMARY", "KEY", "(", identifier, ")"
+              | "FOREIGN", "KEY", "(", identifier, ")", references ;
+column_definition = (identifier, ("INT" | "FLOAT")
+                  | identifier, ("STR" | "VARCHAR"), "(", integer, ")"), ["PRIMARY", "KEY"], [references] ;
+references = "REFERENCES", identifier, ["(", identifier, ")"],
+             ["ON", "DELETE", ("RESTRICT" | "CASCADE" | "NO", "ACTION")] ;
+
+(* Carga de CSV con la sintaxis de PostgreSQL. *)
+copy = "COPY", identifier, ["(", identifier, {",", identifier}, ")"], "FROM", string,
+       [["WITH"], ("(", copy_option, {",", copy_option}, ")" | copy_option, {copy_option})] ;
+copy_option = "FORMAT", "csv" | "CSV" | "HEADER", ["TRUE" | "FALSE"]
+            | "DELIMITER", string | "ENCODING", string ;
+
+explain = "EXPLAIN", ["ANALYZE"], (select | insert | delete) ;
 create_index = "CREATE", "INDEX", identifier, "ON", identifier,
                (["USING", index_method], "(", identifier, ")", ["USING", index_method]) ;
 index_method = "HASH" | "BTREE" ;

@@ -1,9 +1,27 @@
-[indexes] N=1000: B+ agrupado
-[indexes] N=1000: B+ no agrupado
-[indexes] N=1000: Extendible Hash
-[indexes] N=10000: B+ agrupado
-[indexes] N=10000: B+ no agrupado
-[indexes] N=10000: Extendible Hash
-[indexes] N=100000: B+ agrupado
-[indexes] N=100000: B+ no agrupado
-[indexes] N=100000: Extendible Hash
+[indexes] N=1000 rep=1: B+ agrupado
+[indexes] N=1000 rep=1: B+ no agrupado
+[indexes] N=1000 rep=1: Extendible Hash
+[indexes] N=1000 rep=2: B+ agrupado
+[indexes] N=1000 rep=2: B+ no agrupado
+[indexes] N=1000 rep=2: Extendible Hash
+[indexes] N=1000 rep=3: B+ agrupado
+[indexes] N=1000 rep=3: B+ no agrupado
+[indexes] N=1000 rep=3: Extendible Hash
+[indexes] N=10000 rep=1: B+ agrupado
+[indexes] N=10000 rep=1: B+ no agrupado
+[indexes] N=10000 rep=1: Extendible Hash
+[indexes] N=10000 rep=2: B+ agrupado
+[indexes] N=10000 rep=2: B+ no agrupado
+[indexes] N=10000 rep=2: Extendible Hash
+[indexes] N=10000 rep=3: B+ agrupado
+[indexes] N=10000 rep=3: B+ no agrupado
+[indexes] N=10000 rep=3: Extendible Hash
+[indexes] N=100000 rep=1: B+ agrupado
+[indexes] N=100000 rep=1: B+ no agrupado
+[indexes] N=100000 rep=1: Extendible Hash
+[indexes] N=100000 rep=2: B+ agrupado
+[indexes] N=100000 rep=2: B+ no agrupado
+[indexes] N=100000 rep=2: Extendible Hash
+[indexes] N=100000 rep=3: B+ agrupado
+[indexes] N=100000 rep=3: B+ no agrupado
+[indexes] N=100000 rep=3: Extendible Hash

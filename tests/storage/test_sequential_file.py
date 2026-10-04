@@ -18,7 +18,9 @@ class TestSequentialFile(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp()
         self.main_path = os.path.join(self.tmpdir, "test.seq.main")
         self.aux_path = os.path.join(self.tmpdir, "test.seq.aux")
-        self.sf = SequentialFile(self.main_path, self.aux_path, SCHEMA, key_field="id", page_size=256)
+        # Mecánica manual: sin reorganización automática los RIDs del test no cambian.
+        self.sf = SequentialFile(self.main_path, self.aux_path, SCHEMA, key_field="id",
+                                 page_size=256, auto_reorganize=False)
 
     def tearDown(self):
         self.sf.close()
@@ -255,6 +257,23 @@ class TestSequentialFile(unittest.TestCase):
         self.assertEqual(rid.file, "aux")
         self.assertEqual(rec["id"], 99)
 
+    def test_aux_key_index_survives_reopen_delete_and_duplicates(self):
+        for i in range(6):
+            self.sf.insert({"id": i * 10, "name": f"main{i}", "price": 0.0})
+        for key in (99, 77, 77):
+            self.assertEqual(self.sf.insert({"id": key, "name": "aux", "price": 1.0}).file, "aux")
+        self.sf.close()
+        self.sf = SequentialFile(self.main_path, self.aux_path, SCHEMA, key_field="id",
+                                 page_size=256, auto_reorganize=False)
+        self.assertEqual(len(self.sf.search_by_key(77)), 2)
+        rid = self.sf.search_by_key(99)[0][0]
+        self.assertTrue(self.sf.delete(rid))
+        self.assertEqual(self.sf.search_by_key(99), [])
+        self.assertEqual(len(self.sf.search_by_key(77)), 2)
+        self.sf.reorganize()
+        self.assertEqual([r["id"] for _, r in self.sf.search_by_key(77)], [77, 77])
+        self.assertEqual(self.sf.search_by_key(77)[0][0].file, "main")
+
     def test_search_by_key_deleted_returns_empty(self):
         rid = self.sf.insert({"id": 50, "name": "ToDelete", "price": 50.0})
         self.assertEqual(len(self.sf.search_by_key(50)), 1)
@@ -266,6 +285,107 @@ class TestSequentialFile(unittest.TestCase):
         self.sf.insert({"id": 10, "name": "A", "price": 1.0})
         self.sf.insert({"id": 20, "name": "B", "price": 2.0})
         self.assertEqual(self.sf.search_by_key(999), [])
+
+
+class TestSequentialFileAutoReorganize(unittest.TestCase):
+    """Comportamiento por defecto: main crece y aux queda acotado."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.paths = (os.path.join(self.tmpdir, "auto.main"), os.path.join(self.tmpdir, "auto.aux"))
+        self.sf = SequentialFile(*self.paths, SCHEMA, key_field="id", page_size=256)
+
+    def tearDown(self):
+        self.sf.close()
+
+    def _insert_shuffled(self, n, seed=7):
+        keys = list(range(n))
+        random.Random(seed).shuffle(keys)
+        for k in keys:
+            self.sf.insert({"id": k, "name": f"item{k}", "price": float(k)})
+        return keys
+
+    def _main_keys(self):
+        return [key for _, key, _ in self.sf._iter_main_all()]
+
+    def test_random_inserts_grow_main_and_bound_aux(self):
+        self._insert_shuffled(500)
+        self.assertGreater(self.sf.num_pages_main, 50)
+        self.assertLessEqual(self.sf.num_pages_aux, self.sf.aux_page_limit + 1)
+        self.assertGreater(self.sf.reorganizations, 0)
+        self.assertEqual(self._main_keys(), sorted(self._main_keys()))
+        self.assertEqual(sorted(r["id"] for _, r in self.sf.scan()), list(range(500)))
+
+    def test_search_finds_every_key_main_or_aux(self):
+        self._insert_shuffled(300)
+        for k in range(300):
+            result = self.sf.search_by_key(k)
+            self.assertEqual([r["id"] for _, r in result], [k])
+            self.assertEqual(self.sf.get(result[0][0])["id"], k)
+        self.assertEqual(self.sf.search_by_key(1000), [])
+
+    def test_returned_rid_is_valid_after_auto_reorganization(self):
+        for k in random.Random(3).sample(range(1000), 200):
+            rid = self.sf.insert({"id": k, "name": "x", "price": 0.0})
+            self.assertEqual(self.sf.get(rid)["id"], k)
+
+    def test_range_search_merges_main_and_aux(self):
+        self._insert_shuffled(300)
+        self.assertEqual([r["id"] for _, r in self.sf.range_search(40, 120)], list(range(40, 121)))
+        self.assertEqual(self.sf.range_search(5, 4), [])
+
+    def test_range_search_open_and_exclusive_bounds(self):
+        self._insert_shuffled(100)
+        ids = lambda **kw: [r["id"] for _, r in self.sf.range_search(**kw)]
+        self.assertEqual(ids(), list(range(100)))
+        self.assertEqual(ids(lower=95), list(range(95, 100)))
+        self.assertEqual(ids(upper=3), [0, 1, 2, 3])
+        self.assertEqual(ids(lower=10, upper=14, include_lower=False, include_upper=False), [11, 12, 13])
+
+    def test_key_index_view_uses_current_rids(self):
+        index = self.sf.primary_index_info("t_key").index
+        self._insert_shuffled(200)
+        self.sf.reorganize()
+        self.assertEqual([self.sf.get(rid)["id"] for rid in index.search(150)], [150])
+        self.assertEqual([self.sf.get(rid)["id"] for rid in index.range_search(10, 12)], [10, 11, 12])
+        self.assertEqual([self.sf.get(rid)["id"] for rid in index.iter_ordered(reverse=True)][:2], [199, 198])
+
+    def test_duplicate_keys_are_all_returned(self):
+        for i in range(20):
+            self.sf.insert({"id": 7, "name": f"dup{i}", "price": float(i)})
+            self.sf.insert({"id": i * 3, "name": "other", "price": 0.0})
+        self.assertEqual(len(self.sf.search_by_key(7)), 20)
+
+    def test_routing_survives_empty_middle_page(self):
+        self._insert_shuffled(200)
+        self.sf.reorganize()
+        middle = self.sf.num_pages_main // 2
+        page = self.sf._read_page_main(middle)
+        for slot_id, _ in list(page.iter_active()):
+            self.assertTrue(self.sf.delete(RID(middle, slot_id, "main")))
+        self.assertIsNone(self.sf._page_bounds[middle])
+        self.sf.auto_reorganize = False
+        for k in range(1000, 1010):
+            self.sf.insert({"id": k, "name": "tail", "price": 0.0})
+        self.assertEqual(self._main_keys(), sorted(self._main_keys()))
+        for k in range(1000, 1010):
+            self.assertEqual(len(self.sf.search_by_key(k)), 1)
+
+    def test_delete_threshold_triggers_on_next_insert_and_counters_persist(self):
+        self._insert_shuffled(200)
+        self.sf.reorganize()
+        victims = [rid for rid, r in self.sf.scan() if r["id"] % 3 == 0]
+        for rid in victims:
+            self.assertTrue(self.sf.delete(rid))
+        self.assertTrue(self.sf.needs_reorganization())
+        self.sf.close()
+        self.sf = SequentialFile(*self.paths, SCHEMA, key_field="id", page_size=256)
+        self.assertTrue(self.sf.needs_reorganization())
+        before = self.sf.reorganizations
+        self.sf.insert({"id": 999, "name": "new", "price": 0.0})
+        self.assertEqual(self.sf.reorganizations, before + 1)
+        self.assertEqual(sorted(r["id"] for _, r in self.sf.scan()),
+                         sorted([k for k in range(200) if k % 3] + [999]))
 
 
 if __name__ == "__main__":

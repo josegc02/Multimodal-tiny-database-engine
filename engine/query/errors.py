@@ -26,3 +26,7 @@ class SQLSemanticError(ValueError):
 
 class SQLExecutionError(RuntimeError):
     """Una expresión no puede evaluarse sobre los datos actuales."""
+
+
+class SQLIntegrityError(ValueError):
+    """Se viola una restricción (p. ej. clave primaria duplicada)."""

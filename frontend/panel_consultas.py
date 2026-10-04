@@ -1,7 +1,9 @@
 """Panel de consultas: editor donde el usuario escribe SQL."""
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, ttk
+
+from frontend.csv_sql import sql_para_csv
 
 
 SQL_EJEMPLO = """-- Escribe tu consulta aqui
@@ -12,9 +14,12 @@ SELECT * FROM cuentas;
 class PanelConsultas(ttk.LabelFrame):
     """Panel con un editor de texto para escribir SQL."""
 
-    def __init__(self, master, on_ejecutar=None):
+    def __init__(self, master, on_ejecutar=None, base_dir=None):
         super().__init__(master, text="Consultas")
         self.on_ejecutar = on_ejecutar
+        self.base_dir = base_dir
+        self.obtener_tablas = set
+        self.on_error = None
         self._construir()
         self._actualizar_botones()
 
@@ -44,6 +49,10 @@ class PanelConsultas(ttk.LabelFrame):
                                          command=self.ejecutar)
         self.boton_ejecutar.pack(side="right")
 
+        self.boton_csv = ttk.Button(frame_botones, text="Cargar CSV...",
+                                    command=self.cargar_csv)
+        self.boton_csv.pack(side="left")
+
         self.editor.bind("<Control-Return>", lambda e: self.ejecutar())
 
     def set_on_ejecutar(self, callback):
@@ -62,6 +71,25 @@ class PanelConsultas(ttk.LabelFrame):
     def set_sql(self, sql: str):
         self.editor.delete("1.0", tk.END)
         self.editor.insert("1.0", sql)
+
+    def cargar_csv(self):
+        """Elige un CSV y escribe en el editor el SQL para cargarlo.
+
+        No ejecuta: el usuario revisa el CREATE TABLE sugerido y pulsa Ejecutar.
+        """
+        path = filedialog.askopenfilename(
+            title="Cargar CSV", initialdir=self.base_dir,
+            filetypes=[("Archivos CSV", "*.csv *.txt"), ("Todos los archivos", "*.*")])
+        if not path:
+            return
+        try:
+            sql = sql_para_csv(path, self.obtener_tablas(), self.base_dir)
+        except (OSError, ValueError) as error:
+            if self.on_error:
+                self.on_error(f"No se pudo leer el CSV: {error}")
+            return
+        self.set_sql(sql)
+        self.editor.focus_set()
 
     def limpiar(self):
         self.editor.delete("1.0", tk.END)

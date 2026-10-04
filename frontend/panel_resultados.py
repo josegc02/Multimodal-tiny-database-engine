@@ -18,6 +18,10 @@ class PanelResultados(ttk.LabelFrame):
         self._construir()
 
     def _construir(self):
+        # Estilo monoespaciado para el QUERY PLAN: conserva la sangría del árbol.
+        style = ttk.Style(self)
+        style.configure("Plan.Treeview", font=("Consolas", 10))
+
         # Treeview con scroll vertical y horizontal
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True, padx=4, pady=4)
@@ -61,9 +65,16 @@ class PanelResultados(ttk.LabelFrame):
             return
 
         self.tree["columns"] = list(columnas)
+        es_plan = list(columnas) == ["QUERY PLAN"]
+        self.tree.configure(style="Plan.Treeview" if es_plan else "Treeview")
         for col in columnas:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=100, anchor="w")
+            if es_plan:
+                # Ancho según la línea más larga para que no se corte el plan.
+                largo = max((len(str(fila[0])) for fila in filas), default=40)
+                self.tree.column(col, width=max(400, largo * 8), stretch=True, anchor="w")
+            else:
+                self.tree.column(col, width=100, anchor="w")
 
         for fila in filas:
             self.tree.insert("", tk.END, values=tuple(fila))

@@ -112,13 +112,20 @@ class TestLogicalPlanner(SQLTestCase):
             "SELECT id, COUNT(*) FROM productos", "SELECT * FROM productos GROUP BY categoria",
             "SELECT id FROM productos WHERE COUNT(*) > 0",
             "SELECT id FROM productos GROUP BY SUM(precio)",
-            "SELECT id FROM productos ORDER BY 2", "SELECT COUNT(DISTINCT id) FROM productos",
+            "SELECT id FROM productos ORDER BY 2", "SELECT COUNT(DISTINCT inexistente) FROM productos",
             "SELECT a.id FROM productos a JOIN productos b ON a.id > b.id",
             "SELECT id FROM productos a JOIN productos b ON a.id=b.id", "BEGIN",
         ]
         for sql in queries:
             with self.subTest(sql=sql), self.assertRaises(SQLSemanticError):
                 planner.plan(parse(sql))
+
+    def test_distinct_aggregates_are_planned(self):
+        _, catalog, executor = self.database()
+        LogicalPlanner(catalog).plan(parse("SELECT COUNT(DISTINCT categoria) FROM productos"))
+        rows = list(executor.execute("SELECT COUNT(DISTINCT categoria) AS n, COUNT(*) AS t FROM productos"))
+        self.assertEqual(len(rows), 1)
+        self.assertLessEqual(rows[0]["n"], rows[0]["t"])
 
 
 class TestSQLStorageIntegration(SQLTestCase):
@@ -179,7 +186,9 @@ class TestSQLStorageIntegration(SQLTestCase):
             executor.execute("DELETE FROM productos WHERE id=1 OR 1/(id-2)>0")
         self.assertEqual(list(storage.scan()), before)
 
-    def test_failed_insert_leaves_index_invalid_and_scan_available(self):
+    def test_failed_insert_keeps_index_consistent_with_storage(self):
+        # Los índices se mantienen fila por fila: la fila 9 queda guardada e
+        # indexada y la 10, que falló en el storage, no aparece en ninguno.
         storage, catalog, executor = self.database(indexed=True)
         original = storage.insert
         calls = 0
@@ -192,10 +201,20 @@ class TestSQLStorageIntegration(SQLTestCase):
         with patch.object(storage, "insert", side_effect=fail_second), self.assertRaises(OSError):
             executor.execute("INSERT INTO productos VALUES (9,'nueve','tech',9),(10,'diez','tech',10)")
         binding = catalog.table("productos")
-        self.assertFalse(binding.indexes["id"].valid)
-        self.assertEqual(list(executor.execute("SELECT id FROM productos WHERE id=9")), [{"id": 9}])
-        binding.refresh_indexes()
         self.assertTrue(binding.indexes["id"].valid)
+        self.assertEqual(len(binding.indexes["id"].index.search(9)), 1)
+        self.assertEqual(binding.indexes["id"].index.search(10), [])
+        self.assertEqual(list(executor.execute("SELECT id FROM productos WHERE id=9")), [{"id": 9}])
+        self.assertEqual(list(executor.execute("SELECT id FROM productos WHERE id=10")), [])
+
+    def test_index_failure_falls_back_to_rebuild_at_end_of_statement(self):
+        storage, catalog, executor = self.database(indexed=True)
+        binding = catalog.table("productos")
+        index = binding.indexes["id"].index
+        with patch.object(index, "insert", side_effect=RuntimeError("índice dañado")):
+            executor.execute("INSERT INTO productos VALUES (11,'once','tech',11)")
+        self.assertTrue(binding.indexes["id"].valid)
+        self.assertEqual(len(index.search(11)), 1)
 
     def test_indexes_use_serialized_values_after_truncation(self):
         storage, catalog, executor = self.database(indexed=True)

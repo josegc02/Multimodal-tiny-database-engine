@@ -105,6 +105,24 @@ class TestHeapFile(unittest.TestCase):
         self.assertEqual(record["id"], 42)
         hf2.close()
 
+    def test_reopen_marks_only_pages_with_room_as_free(self):
+        rids = [self.hf.insert({"id": i, "name": "x", "price": 0.0}) for i in range(28)]
+        self.hf.delete(rids[0])
+        self.hf.close()
+
+        self.hf = HeapFile(self.filepath, SCHEMA, page_size=256)
+        last_page = self.hf.num_pages - 1
+        # 28 registros, 6 por página: páginas 0-3 llenas (0 con un hueco) y 4 parcial.
+        self.assertEqual(self.hf.free_pages, {0, last_page})
+        self.assertEqual(self.hf.insert({"id": 99, "name": "y", "price": 0.0}), rids[0])
+
+    def test_search_by_key_unique_stops_at_first_match(self):
+        self.hf.insert({"id": 5, "name": "first", "price": 0.0})
+        self.hf.insert({"id": 5, "name": "second", "price": 0.0})
+        self.assertEqual(len(self.hf.search_by_key("id", 5)), 2)
+        result = self.hf.search_by_key("id", 5, unique=True)
+        self.assertEqual([r["name"] for _, r in result], ["first"])
+
 
 if __name__ == "__main__":
     unittest.main()

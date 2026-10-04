@@ -35,16 +35,26 @@ class PanelArchivos(ttk.LabelFrame):
         self.refresh()
 
     def refresh(self):
-        """Recarga la lista de tablas desde el catalogo."""
+        """Recarga la lista de tablas conservando la tabla seleccionada."""
+        seleccion = self.lista.curselection()
+        anterior = self.lista.get(seleccion[0]) if seleccion else None
         self.lista.delete(0, tk.END)
 
         if self.catalog is None:
             return
 
-        for nombre in sorted(self.catalog.tables.keys()):
+        nombres = sorted(self.catalog.tables.keys())
+        for nombre in nombres:
             self.lista.insert(tk.END, nombre)
 
-        self._mostrar_esquema("")
+        if not nombres:
+            self._mostrar_esquema("")
+            return
+        # Conserva la selección; si no había (inicio o tabla borrada), muestra la primera.
+        posicion = nombres.index(anterior) if anterior in nombres else 0
+        self.lista.selection_set(posicion)
+        self.lista.see(posicion)
+        self._on_seleccion(None)
 
     def _on_seleccion(self, event):
         """Muestra el esquema de la tabla seleccionada."""
@@ -72,6 +82,36 @@ class PanelArchivos(ttk.LabelFrame):
         lineas.append("Campos:")
         for campo, tipo in zip(storage.schema.fields, storage.schema.types):
             lineas.append(f"  - {campo}: {tipo}")
+
+        if binding.indexes:
+            lineas.append("")
+            lineas.append("Indices:")
+            for campo, registro in binding.indexes.items():
+                info = registro.metadata
+                tipo = type(registro.index).__name__
+                if info is not None and info.clustered:
+                    tipo = "B+ agrupado (la tabla)"
+                elif info is not None and info.ordered:
+                    tipo = "B+ no agrupado"
+                elif "Hash" in tipo:
+                    tipo = "Hash extensible"
+                nombre_indice = info.name if info is not None else campo
+                lineas.append(f"  - {nombre_indice} ({campo}): {tipo}")
+
+        if binding.primary_key:
+            lineas.append("")
+            lineas.append(f"Clave primaria: {binding.primary_key} ({binding.primary_key_name})")
+        if binding.foreign_keys:
+            lineas.append("")
+            lineas.append("Llaves foraneas:")
+            for fk in binding.foreign_keys:
+                lineas.append(f"  - {fk.column} -> {fk.ref_table}({fk.ref_column}) ON DELETE {fk.on_delete}")
+        referencias = self.catalog.referencing(nombre) if hasattr(self.catalog, "referencing") else []
+        if referencias:
+            lineas.append("")
+            lineas.append("Referenciada por:")
+            for fk in referencias:
+                lineas.append(f"  - {fk.table}.{fk.column} ({fk.on_delete})")
 
         # Info adicional de estadisticas
         stats = binding.statistics

@@ -1,90 +1,97 @@
 {
-  "timestamp_utc": "2026-09-18T18:20:44.960130+00:00",
-  "python": "3.14.7 (main, Aug 10 2026, 07:46:56) [GCC 16.1.1 20260728]",
-  "platform": "Linux-7.2.4-arch1-2-x86_64-with-glibc2.44",
-  "machine": "x86_64",
+  "timestamp_utc": "2026-10-04T10:47:44.536981+00:00",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "machine": "AMD64",
   "seed": 42,
   "sizes": [
-    100,
+    200,
     1000,
     5000
   ],
   "repetitions": 1,
-  "elapsed_seconds": 37.90151605599931,
-  "matplotlib": "3.11.2",
+  "elapsed_seconds": 20.842594099929556,
+  "matplotlib": "3.10.7",
   "page_size": 4096,
-  "bplus_max_keys": 64,
-  "hash_bucket_capacity": 64,
+  "bplus_clustered_M": 92,
+  "bplus_unclustered_M": 254,
+  "hash_bucket_capacity": 254,
   "hash_max_depth": 16,
   "equality_queries": 100,
   "range_queries": 20,
-  "range_width": "[k, min(N-1, k+100)], hasta 101 claves",
+  "range_width": "[k, min(N-1, k+100)]",
   "update_pairs": 500,
-  "space_state": "Antes de actualizaciones; agrupado incluye registros completos",
-  "extra_disk": "Agrupado: archivo - N*36; no agrupado: archivo completo",
-  "memory_estimate": "sys.getsizeof del grafo retenido del hash, referencias únicas; no RSS",
-  "NA": "Rango de Hash no soportado; disco de Hash no persistido; RAM B+ no medida",
-  "durability": "B+ escribe/flush; Hash en memoria, sin snapshot. Ninguno fuerza fsync",
+  "results": "todas las consultas devuelven registros completos (no agrupado y hash leen el heap)",
+  "ordering": "agrupado: hojas; no agrupado: hojas + heap.get; hash: heap.scan + external_sort",
+  "space": "espacio_total = tabla + índice; espacio_adicional = total - heap con los mismos N registros",
+  "memory_estimate": "solo hash: sys.getsizeof del grafo retenido; no RSS",
+  "durability": "B+ escribe/flush por operación; hash en RAM, su snapshot JSON se mide aparte (tiempo_snapshot_seg)",
   "structural_stats": [
     {
       "tecnica": "B+ agrupado",
-      "n_registros": 100,
-      "allocated_node_pages": 3
+      "n_registros": 200,
+      "M": 92,
+      "allocated_node_pages": 5
     },
     {
       "tecnica": "B+ no agrupado",
-      "n_registros": 100,
-      "allocated_node_pages": 3
+      "n_registros": 200,
+      "M": 254,
+      "allocated_node_pages": 1
     },
     {
       "tecnica": "Extendible Hash",
-      "n_registros": 100,
+      "n_registros": 200,
       "global_depth": 1,
       "directory_size": 2,
       "num_buckets": 2,
       "overflow_buckets": 0,
-      "entries": 100,
-      "load_factor": 0.78125
+      "entries": 200,
+      "load_factor": 0.3937007874015748
     },
     {
       "tecnica": "B+ agrupado",
       "n_registros": 1000,
-      "allocated_node_pages": 22
+      "M": 92,
+      "allocated_node_pages": 17
     },
     {
       "tecnica": "B+ no agrupado",
       "n_registros": 1000,
-      "allocated_node_pages": 22
+      "M": 254,
+      "allocated_node_pages": 6
     },
     {
       "tecnica": "Extendible Hash",
       "n_registros": 1000,
-      "global_depth": 5,
-      "directory_size": 32,
-      "num_buckets": 21,
+      "global_depth": 3,
+      "directory_size": 8,
+      "num_buckets": 5,
       "overflow_buckets": 0,
       "entries": 1000,
-      "load_factor": 0.7440476190476191
+      "load_factor": 0.7874015748031497
     },
     {
       "tecnica": "B+ agrupado",
       "n_registros": 5000,
-      "allocated_node_pages": 118
+      "M": 92,
+      "allocated_node_pages": 77
     },
     {
       "tecnica": "B+ no agrupado",
       "n_registros": 5000,
-      "allocated_node_pages": 118
+      "M": 254,
+      "allocated_node_pages": 32
     },
     {
       "tecnica": "Extendible Hash",
       "n_registros": 5000,
-      "global_depth": 7,
-      "directory_size": 128,
-      "num_buckets": 122,
+      "global_depth": 5,
+      "directory_size": 32,
+      "num_buckets": 32,
       "overflow_buckets": 0,
       "entries": 5000,
-      "load_factor": 0.6403688524590164
+      "load_factor": 0.6151574803149606
     }
   ]
 }
