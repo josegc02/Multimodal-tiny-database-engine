@@ -6,6 +6,7 @@ La documentación e informe técnico del proyecto se encuentran organizados en e
 * [**`sql_grammar.ebnf`**](sql_grammar.ebnf): Gramática formal del dialecto SQL soportado.
 * [**`sql_parser.md`**](sql_parser.md): Diseño del parser, contrato del AST y límites del análisis sintáctico.
 * [**`bplus_indexes.md`**](bplus_indexes.md): Índices B+ agrupado y no agrupado.
+* [**`parte2_espacial.md`**](parte2_espacial.md): Parte 2 (base de datos espacial): estructura, issues, orden de trabajo y decisiones pendientes.
 * [**`../benchmarks/README.md`**](../benchmarks/README.md): Metodología de los experimentos.
 
 ---

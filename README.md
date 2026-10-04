@@ -125,7 +125,9 @@ engine/
 │   ├── bplus_tree.py           # B+ paginado en disco: inserción y eliminación en O(altura)
 │   ├── bplus_tree_clustered.py # Hojas con registros completos
 │   ├── bplus_tree_unclustered.py # Hojas con (clave, RID); claves duplicadas
-│   └── extendible_hash.py      # Hash extensible en memoria con snapshot JSON
+│   ├── extendible_hash.py      # Hash extensible en memoria con snapshot JSON
+│   └── rtree.py                # Parte 2: R-Tree en disco (rango, k-NN, polígonos) — en desarrollo
+├── spatial/                    # Parte 2: Point, MBR, Polygon y métricas Euclidiana/Haversine — en desarrollo
 ├── query/
 │   ├── lexer.py, parser.py, ast.py   # Análisis léxico y sintáctico
 │   ├── logical_plan.py         # Plan lógico (Scan, Filter, Join, Aggregate, Sort, Project, Limit...)
@@ -140,10 +142,12 @@ engine/
     ├── lock_manager.py         # Locks IS/IX/S/SIX/X, upgrades y wait-for graph
     ├── transaction.py
     └── transaction_manager.py  # BEGIN/COMMIT/ROLLBACK, undo log robusto
-frontend/                       # main.py (ventana), motor.py (fachada) y los 4 paneles
-benchmarks/                     # bench_storage, bench_indexes, concurrency_demo y results/
-tests/                          # storage, indexes, query (incluye prueba diferencial contra SQLite), concurrency
-docs/                           # informe.md, sql_grammar.ebnf, sql_parser.md, bplus_indexes.md
+frontend/                       # main.py (ventana), motor.py (fachada), los 4 paneles y panel_mapa.py (Parte 2)
+benchmarks/                     # bench_storage, bench_indexes, concurrency_demo, bench_spatial (Parte 2) y results/
+datasets/spatial/               # Parte 2: puntos generados y polígonos de distritos
+postgis/                        # Parte 2: PostgreSQL + PostGIS (GiST) con Docker
+tests/                          # storage, indexes, query (incluye prueba diferencial contra SQLite), concurrency, spatial
+docs/                           # informe.md, sql_grammar.ebnf, sql_parser.md, bplus_indexes.md, parte2_espacial.md
 ```
 
 ---

@@ -1,0 +1,29 @@
+# PostgreSQL + PostGIS para comparar el R-Tree propio con GiST (issue #26).
+#
+#   docker compose -f postgis/docker-compose.yml up -d
+#   docker compose -f postgis/docker-compose.yml down        # detener
+#   docker compose -f postgis/docker-compose.yml down -v     # detener y borrar los datos
+#
+# Puerto 5433 para no chocar con un PostgreSQL local en 5432.
+services:
+  postgis:
+    image: postgis/postgis:16-3.4
+    container_name: bd2-postgis
+    environment:
+      POSTGRES_USER: bd2
+      POSTGRES_PASSWORD: bd2
+      POSTGRES_DB: espacial
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgis-data:/var/lib/postgresql/data
+      # Se ejecuta solo la primera vez (con el volumen vacío).
+      - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bd2 -d espacial"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgis-data:

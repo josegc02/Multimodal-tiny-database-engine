@@ -18,6 +18,10 @@ env/
 demo_data/
 generated_sql/
 
+# Datasets espaciales generados (Parte 2): se regeneran con
+# benchmarks/generate_spatial_datasets.py
+datasets/spatial/generated/
+
 # Pruebas
 .pytest_cache/
 
