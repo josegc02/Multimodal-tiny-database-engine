@@ -117,11 +117,21 @@ class ColumnDefinition(Node):
 
 
 @dataclass(frozen=True)
+class ForeignKeyDefinition(Node):
+    """column REFERENCES table [(ref_column)] [ON DELETE RESTRICT | CASCADE | NO ACTION]."""
+    column: str
+    ref_table: str
+    ref_column: str | None = None   # None = clave primaria de ref_table
+    on_delete: str = "RESTRICT"
+
+
+@dataclass(frozen=True)
 class CreateTableStatement(Statement):
     name: str
     columns: tuple[ColumnDefinition, ...]
     storage_method: str = "heap"
     primary_key: str | None = None
+    foreign_keys: tuple[ForeignKeyDefinition, ...] = ()
 
 
 @dataclass(frozen=True)

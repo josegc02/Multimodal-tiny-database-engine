@@ -34,7 +34,7 @@ from typing import Optional
 from engine.concurrency.lock_manager import DeadlockError, LockMode
 from engine.query.ast import (CopyStatement, DeleteStatement, ExplainStatement, InsertStatement,
                               Literal, SelectStatement, TransactionStatement)
-from engine.query.errors import SQLExecutionError, SQLSemanticError
+from engine.query.errors import SQLExecutionError, SQLIntegrityError, SQLSemanticError
 from engine.query.external_algorithms import ExecutionStats
 from engine.query.logical_plan import LogicalPlan, LogicalPlanner, normalize_insert
 
@@ -159,11 +159,15 @@ class StatementExecutor:
         if autocommit:
             self._begin()
         tx = self.tm.get_transaction(self.current_tx_id)
+        mark = len(tx.undo_log)
         try:
             result = work(tx)
         except Exception:
             if autocommit and self.current_tx_id is not None:
                 self._rollback()
+            elif self.current_tx_id is not None and len(tx.undo_log) > mark:
+                # La sentencia es atómica: se deshace solo lo que ella hizo.
+                self.tm.rollback_to(tx.tx_id, mark)
             raise
         if autocommit:
             self._commit()
@@ -216,6 +220,7 @@ class StatementExecutor:
             try:
                 for record in records:
                     self._lock(tx, f"{table}:{record[key_field]}", LockMode.EXCLUSIVE)
+                    self._check_references(tx, table, binding, record)
                     with binding.latch:
                         binding.ensure_unique(record)
                         rid = storage.insert(record)
@@ -232,6 +237,25 @@ class StatementExecutor:
             return len(records)
 
         return self._run_in_transaction(work)
+
+    def _check_references(self, tx, table, binding, record):
+        """Cada llave foránea de `record` debe existir en su tabla padre.
+
+        Toma un lock S sobre la fila padre: nadie puede borrarla hasta que
+        termine esta transacción. Se verifica antes del latch de la tabla hija.
+        """
+        for foreign_key in binding.foreign_keys:
+            value = record[foreign_key.column]
+            parent = self.storage.table(foreign_key.ref_table)
+            if foreign_key.ref_table == table and value == record[foreign_key.ref_column]:
+                continue  # fila que se referencia a sí misma
+            self._lock(tx, foreign_key.ref_table, LockMode.INTENTION_SHARED)
+            self._lock(tx, f"{foreign_key.ref_table}:{value}", LockMode.SHARED)
+            if not parent._key_exists(value):
+                raise SQLIntegrityError(
+                    f'inserción en la tabla "{table}" viola la llave foránea "{foreign_key.name}": '
+                    f'la llave ({foreign_key.column})=({value}) no está presente en la tabla '
+                    f'"{foreign_key.ref_table}"')
 
     # --- COPY ---
 
@@ -340,25 +364,57 @@ class StatementExecutor:
             # Candidatas según el plan (usa índices si conviene); no se modifica nada aún.
             candidates = list(self.query_executor.matching_records(plan, stats=stats))
             deleted = 0
+            touched = {table_name: binding}
             try:
                 for rid, record in candidates:
                     self._lock(tx, f"{table_name}:{record[key_field]}", LockMode.EXCLUSIVE)
-                    with binding.latch:
-                        # Otra transacción pudo moverla o eliminarla mientras se esperaba el lock.
-                        current = binding.locate(rid, record)
-                        if current is None:
-                            continue
-                        if storage.delete(current):
-                            binding.record_deleted(current, record)
-                            tx.add_operation({
-                                "op": "DELETE",
-                                "table": table_name,
-                                "rid": current,
-                                "old": record,
-                            })
-                            deleted += 1
+                    deleted += self._delete_row(tx, table_name, binding, rid, record, touched, set())
             finally:
-                binding.finish_write()
+                for touched_binding in touched.values():
+                    touched_binding.finish_write()
             return f"{deleted} registro(s) eliminado(s)"
 
         return self._run_in_transaction(work)
+
+    def _delete_row(self, tx, table, binding, rid, record, touched, visiting):
+        """Elimina una fila aplicando las llaves foráneas que la referencian.
+
+        RESTRICT: falla si hay filas hijas. CASCADE: elimina primero las hijas
+        (recursivamente), así un ROLLBACK restaura el padre antes que sus hijas.
+        Devuelve 1 si la fila existía y se eliminó.
+        """
+        # Solo una fila con clave primaria puede ser referenciada y, por lo tanto,
+        # formar un ciclo (p. ej. una fila que se referencia a sí misma).
+        if binding.primary_key is not None:
+            identity = (table, record[binding.primary_key])
+            if identity in visiting:
+                return 0
+            visiting.add(identity)
+        for foreign_key in self.storage.referencing(table):
+            child = self.storage.table(foreign_key.table)
+            children = [(child_rid, child_record)
+                        for child_rid, child_record in child.rows_with(foreign_key.column,
+                                                                      record[foreign_key.ref_column])
+                        if not (foreign_key.table == table and child_record == record)]
+            if not children:
+                continue
+            if foreign_key.on_delete != "CASCADE":
+                raise SQLIntegrityError(
+                    f'eliminar en la tabla "{table}" viola la llave foránea "{foreign_key.name}" '
+                    f'de la tabla "{foreign_key.table}": la llave ({foreign_key.ref_column})='
+                    f'({record[foreign_key.ref_column]}) todavía es referida desde la tabla '
+                    f'"{foreign_key.table}"')
+            self._lock(tx, foreign_key.table, LockMode.SHARED_INTENTION_EXCLUSIVE)
+            touched.setdefault(foreign_key.table, child)
+            child_key = self._key_field(child)
+            for child_rid, child_record in children:
+                self._lock(tx, f"{foreign_key.table}:{child_record[child_key]}", LockMode.EXCLUSIVE)
+                self._delete_row(tx, foreign_key.table, child, child_rid, child_record, touched, visiting)
+        with binding.latch:
+            # Otra transacción pudo moverla o eliminarla mientras se esperaba el lock.
+            current = binding.locate(rid, record)
+            if current is None or not binding.storage.delete(current):
+                return 0
+            binding.record_deleted(current, record)
+            tx.add_operation({"op": "DELETE", "table": table, "rid": current, "old": record})
+        return 1

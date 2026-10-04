@@ -63,6 +63,21 @@ class TransactionManager:
             raise RuntimeError(f"Rollback de la transacción {tx_id} incompleto: {errors[0]}") from errors[0]
         return True
 
+    def rollback_to(self, tx_id: int, mark: int) -> None:
+        """Deshace las operaciones registradas después de `mark` (savepoint implícito).
+
+        Se usa para que una sentencia que falla dentro de una transacción no
+        deje cambios parciales. Los locks se conservan hasta COMMIT/ROLLBACK.
+        """
+        tx = self._get_active(tx_id)
+        touched = []
+        for op in reversed(tx.undo_log[mark:]):
+            self._undo_operation(op)
+            if op.get("table") not in touched:
+                touched.append(op.get("table"))
+        del tx.undo_log[mark:]
+        self._refresh_indexes(touched)
+
     def get_transaction(self, tx_id: int) -> Optional[Transaction]:
         with self._mutex:
             return self.active.get(tx_id)

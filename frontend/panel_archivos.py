@@ -97,6 +97,21 @@ class PanelArchivos(ttk.LabelFrame):
                 nombre_indice = info.name if info is not None else campo
                 lineas.append(f"  - {nombre_indice} ({campo}): {tipo}")
 
+        if binding.primary_key:
+            lineas.append("")
+            lineas.append(f"Clave primaria: {binding.primary_key} ({binding.primary_key_name})")
+        if binding.foreign_keys:
+            lineas.append("")
+            lineas.append("Llaves foraneas:")
+            for fk in binding.foreign_keys:
+                lineas.append(f"  - {fk.column} -> {fk.ref_table}({fk.ref_column}) ON DELETE {fk.on_delete}")
+        referencias = self.catalog.referencing(nombre) if hasattr(self.catalog, "referencing") else []
+        if referencias:
+            lineas.append("")
+            lineas.append("Referenciada por:")
+            for fk in referencias:
+                lineas.append(f"  - {fk.table}.{fk.column} ({fk.on_delete})")
+
         # Info adicional de estadisticas
         stats = binding.statistics
         if stats is not None:

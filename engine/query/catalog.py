@@ -9,6 +9,17 @@ from engine.query.planner import IndexInfo, TableStats
 from engine.storage.heap_file import PAGE_HEADER_SIZE, SLOT_SIZE
 
 
+@dataclass(frozen=True)
+class ForeignKey:
+    """Llave foránea de una columna hacia la clave primaria de otra tabla."""
+    name: str          # p. ej. "alumnos_carrera_id_fkey"
+    table: str         # tabla hija
+    column: str
+    ref_table: str     # tabla padre
+    ref_column: str    # su clave primaria
+    on_delete: str = "RESTRICT"
+
+
 @dataclass
 class RegisteredIndex:
     index: object
@@ -33,6 +44,7 @@ class TableBinding:
     # Clave primaria (una columna) y nombre de su restricción, p. ej. "alumnos_pkey".
     primary_key: str | None = None
     primary_key_name: str | None = None
+    foreign_keys: list = field(default_factory=list)
     # Auto-analyze (como PostgreSQL): estadísticas exactas tras
     # ANALYZE_BASE + ANALYZE_FRACTION * filas cambios desde el último analyze.
     _changes_since_analyze: int = field(default=0, repr=False, compare=False)
@@ -85,6 +97,16 @@ class TableBinding:
                     getattr(self.storage, "search_by_key", None)):
                 return bool(self.storage.search_by_key(value))
             return any(record[column] == value for _, record in self.storage.scan())
+
+    def rows_with(self, column, value):
+        """(RID, registro) con `column == value`, usando un índice vigente si existe."""
+        with self.latch:
+            registered = self.indexes.get(column)
+            if registered is not None and registered.valid:
+                found = [(rid, self.storage.get(rid)) for rid in registered.index.search(value)]
+                return [(rid, record) for rid, record in found
+                        if record is not None and record[column] == value]
+            return [(rid, record) for rid, record in self.storage.scan() if record[column] == value]
 
     def analyze(self):
         """Estadísticas explícitas; hasta 1024 valores distintos por columna y
@@ -290,6 +312,27 @@ class Catalog:
             del binding.indexes[column]
             raise
         return registered
+
+    def add_foreign_key(self, foreign_key: ForeignKey) -> None:
+        """Valida y registra una llave foránea (la columna padre debe ser su PRIMARY KEY)."""
+        child = self.table(foreign_key.table)
+        parent = self.table(foreign_key.ref_table)
+        if parent.primary_key != foreign_key.ref_column:
+            raise SQLSemanticError(
+                f"La columna referenciada {foreign_key.ref_table}.{foreign_key.ref_column} "
+                "debe ser la clave primaria de su tabla")
+        child_types = dict(zip(child.storage.schema.fields, child.storage.schema.types))
+        parent_types = dict(zip(parent.storage.schema.fields, parent.storage.schema.types))
+        if child_types.get(foreign_key.column) != parent_types[foreign_key.ref_column]:
+            raise SQLSemanticError(
+                f"La llave foránea {foreign_key.name} une tipos distintos: "
+                f"{child_types.get(foreign_key.column)} y {parent_types[foreign_key.ref_column]}")
+        child.foreign_keys.append(foreign_key)
+
+    def referencing(self, table: str) -> list:
+        """Llaves foráneas (de cualquier tabla) que apuntan a `table`."""
+        return [foreign_key for binding in self.tables.values()
+                for foreign_key in binding.foreign_keys if foreign_key.ref_table == table]
 
     def table(self, name: str) -> TableBinding:
         try:

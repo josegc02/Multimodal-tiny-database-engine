@@ -8,7 +8,7 @@ from contextlib import contextmanager
 
 from engine.query.ast import (
     AggregateCall, Between, BinaryOp, ColumnDefinition, ColumnRef, CopyStatement,
-    CreateIndexStatement, CreateTableStatement, DeleteStatement, ExplainStatement, InList,
+    CreateIndexStatement, CreateTableStatement, DeleteStatement, ExplainStatement, ForeignKeyDefinition, InList,
     InsertStatement, IsNull, Join, Literal, OrderByItem, SelectItem,
     SelectStatement, Star, Statement, TableRef, TransactionStatement, UnaryOp,
 )
@@ -124,9 +124,19 @@ class Parser:
     def _create_table(self):
         name = self._identifier()
         self._expect("(")
-        columns, primary_key = [], None
+        columns, primary_key, foreign_keys = [], None, []
         while True:
-            if self._peek().kind == "PRIMARY":
+            if self._peek().kind == "FOREIGN":
+                # Restricción de tabla: FOREIGN KEY (columna) REFERENCES tabla [(columna)]
+                self._advance()
+                self._expect("KEY")
+                self._expect("(")
+                column = self._identifier()
+                if self._peek().kind == ",":
+                    self._error("Solo se admiten llaves foráneas de una columna")
+                self._expect(")")
+                foreign_keys.append(self._references(column))
+            elif self._peek().kind == "PRIMARY":
                 # Restricción de tabla: PRIMARY KEY (columna)
                 token = self._advance()
                 self._expect("KEY")
@@ -145,20 +155,50 @@ class Parser:
                         self._error("La tabla ya tiene una clave primaria")
                     primary_key = column.name
                 columns.append(column)
+                if self._peek().kind == "REFERENCES":
+                    foreign_keys.append(self._references(column.name))
             if not self._match(","):
                 break
         self._expect(")")
         if not columns:
             self._error("La tabla necesita al menos una columna")
-        if primary_key is not None and primary_key not in {column.name for column in columns}:
+        names = {column.name for column in columns}
+        if primary_key is not None and primary_key not in names:
             self._error(f"La clave primaria {primary_key!r} no es una columna de la tabla")
+        for foreign_key in foreign_keys:
+            if foreign_key.column not in names:
+                self._error(f"La llave foránea usa la columna inexistente {foreign_key.column!r}")
+        if len({fk.column for fk in foreign_keys}) != len(foreign_keys):
+            self._error("Una columna solo puede tener una llave foránea")
         storage_method = "heap"
         if self._match("USING"):
             token = self._match("HEAP", "SEQUENTIAL", "BTREE")
             if token is None:
                 self._error("USING requiere HEAP, SEQUENTIAL o BTREE")
             storage_method = token.kind.lower()
-        return CreateTableStatement(name, tuple(columns), storage_method, primary_key)
+        return CreateTableStatement(name, tuple(columns), storage_method, primary_key, tuple(foreign_keys))
+
+    def _references(self, column):
+        """REFERENCES tabla [(columna)] [ON DELETE RESTRICT | CASCADE | NO ACTION]."""
+        self._expect("REFERENCES")
+        ref_table = self._identifier()
+        ref_column = None
+        if self._match("("):
+            ref_column = self._identifier()
+            self._expect(")")
+        on_delete = "RESTRICT"
+        if self._match("ON"):
+            self._expect("DELETE")
+            if self._match("CASCADE"):
+                on_delete = "CASCADE"
+            elif self._match("RESTRICT"):
+                on_delete = "RESTRICT"
+            elif self._peek().lexeme.upper() == "NO" and self._peek(1).lexeme.upper() == "ACTION":
+                self._advance()
+                self._advance()
+            else:
+                self._error("ON DELETE admite RESTRICT, CASCADE o NO ACTION")
+        return ForeignKeyDefinition(column, ref_table, ref_column, on_delete)
 
     def _copy(self):
         """COPY t [(cols)] FROM 'archivo' [WITH] [(] opciones [)] (sintaxis de PostgreSQL)."""

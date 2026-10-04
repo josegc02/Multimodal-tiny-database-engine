@@ -29,7 +29,7 @@ from engine.query.ast import (
     SelectStatement,
     TransactionStatement,
 )
-from engine.query.catalog import Catalog
+from engine.query.catalog import Catalog, ForeignKey
 from engine.query.planner import IndexInfo
 from engine.query.sql_executor import SQLExecutor
 from engine.query.statement_executor import StatementExecutor
@@ -279,7 +279,37 @@ class Motor:
         except Exception:
             storage.close()
             raise
+        try:
+            self._registrar_llaves_foraneas(statement)
+        except Exception:
+            # La tabla no queda a medias: se quita del catálogo y se borran sus archivos.
+            del self.catalog.tables[statement.name]
+            storage.close()
+            for ruta in self._archivos_tabla(statement.name):
+                if os.path.exists(ruta):
+                    os.remove(ruta)
+            raise
         return f"Tabla {statement.name} creada"
+
+    def _registrar_llaves_foraneas(self, statement: CreateTableStatement) -> None:
+        """Registra cada REFERENCES y crea un índice sobre la columna hija.
+
+        El índice (como recomienda PostgreSQL) evita recorrer la tabla hija en
+        cada DELETE del padre para aplicar RESTRICT o CASCADE.
+        """
+        for definition in statement.foreign_keys:
+            padre = self.catalog.table(definition.ref_table)
+            columna_padre = definition.ref_column or padre.primary_key
+            if columna_padre is None:
+                raise ValueError(f"La tabla {definition.ref_table!r} no tiene clave primaria para referenciar")
+            nombre = f"{statement.name}_{definition.column}_fkey"
+            self.catalog.add_foreign_key(ForeignKey(
+                nombre, statement.name, definition.column, definition.ref_table,
+                columna_padre, definition.on_delete))
+            if definition.column not in self.catalog.table(statement.name).indexes:
+                indice = ExtendibleHash()
+                self.catalog.register_index(statement.name, definition.column, indice,
+                                            IndexInfo(f"{nombre}_idx", definition.column, indice))
 
     def _crear_indice(self, statement: CreateIndexStatement) -> str:
         """Crea, carga y registra un índice SQL sobre una tabla."""
