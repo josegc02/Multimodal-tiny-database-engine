@@ -6,10 +6,11 @@
 El índice R-Tree vive con el resto de índices en engine/indexes/rtree.py.
 """
 
-from engine.spatial.distance import EARTH_RADIUS_M, Metric, distance, euclidean, haversine, mindist, radius_to_mbr
+from engine.spatial.distance import (EARTH_RADIUS_M, METERS_PER_DEGREE, Metric, distance, euclidean, haversine,
+                                     mindist, radius_to_mbr)
 from engine.spatial.geometry import MBR, Point, Polygon
 
 __all__ = [
-    "EARTH_RADIUS_M", "MBR", "Metric", "Point", "Polygon",
+    "EARTH_RADIUS_M", "MBR", "METERS_PER_DEGREE", "Metric", "Point", "Polygon",
     "distance", "euclidean", "haversine", "mindist", "radius_to_mbr",
 ]
