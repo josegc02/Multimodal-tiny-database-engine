@@ -1,0 +1,1 @@
+{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"nombre":"Distrito de prueba"},"geometry":{"type":"MultiPolygon","coordinates":[[[[-77.1,-12.1],[-77,-12.1],[-77,-12],[-77.1,-12],[-77.1,-12.1]]],[[[-76.9,-12.1],[-76.8,-12.1],[-76.8,-12],[-76.9,-12],[-76.9,-12.1]]]]}}]}

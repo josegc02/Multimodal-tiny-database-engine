@@ -495,7 +495,18 @@ class RTree:
         return results
 
     def within_polygon(self, polygon: Polygon) -> List[Tuple[Point, RID]]:
-        raise NotImplementedError("Pendiente: issue #22")
+        """Filtro MBR y ray casting, incluyendo puntos sobre el borde."""
+        if not isinstance(polygon, Polygon):
+            raise TypeError("Se esperaba un Polygon")
+        candidates = self.search_mbr(polygon.mbr())
+        results = []
+        for point, rid in candidates:
+            self.last_stats.refined += 1
+            if polygon.contains(point):
+                results.append((point, rid))
+        results.sort(key=lambda row: _rid_key(row[1]))
+        self.last_stats.results = len(results)
+        return results
 
     # --- Información y ciclo de vida -----------------------------------------------
 

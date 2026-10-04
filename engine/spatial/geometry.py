@@ -7,6 +7,7 @@ usan (lon, lat).
 from __future__ import annotations
 
 import math
+import json
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
@@ -90,18 +91,109 @@ class MBR:
 
 @dataclass(frozen=True)
 class Polygon:
-    """Polígono simple (sin agujeros), vértices en orden y sin repetir el primero."""
+    """Anillos planos en lat/lon, con bordes incluidos y agujeros opcionales.
+
+    No interpreta cruces del antimeridiano. Se normalizan los anillos cerrados
+    a tuplas sin repetir el primer vértice, independientes del sentido de giro.
+    """
 
     vertices: Sequence[Point]
+    holes: tuple = ()
+
+    def __post_init__(self):
+        def ring(values):
+            values = tuple(values)
+            if values and values[0] == values[-1]:
+                values = values[:-1]
+            if any(not isinstance(p, Point) for p in values):
+                raise ValueError("Los vértices deben ser Point")
+            if len(values) < 3 or len(set(values)) != len(values):
+                raise ValueError("Un anillo necesita al menos tres vértices distintos")
+            origin = values[0]
+            area = sum((a.lon - origin.lon) * (b.lat - origin.lat)
+                       - (b.lon - origin.lon) * (a.lat - origin.lat)
+                       for a, b in zip(values, values[1:] + values[:1]))
+            if area == 0:
+                raise ValueError("El anillo tiene área cero")
+            return values
+        object.__setattr__(self, "vertices", ring(self.vertices))
+        object.__setattr__(self, "holes", tuple(ring(hole) for hole in self.holes))
 
     def mbr(self) -> MBR:
-        raise NotImplementedError("Pendiente: issue #22")
+        return MBR.of_points(self.vertices)
+
+    @staticmethod
+    def _ring_location(vertices, point):
+        """0 fuera, 1 dentro, 2 borde. Ray casting con intervalos semiabiertos."""
+        inside = False
+        x, y = point.lon, point.lat
+        for a, b in zip(vertices, vertices[1:] + vertices[:1]):
+            dx, dy = b.lon - a.lon, b.lat - a.lat
+            cross = dx * (y - a.lat) - dy * (x - a.lon)
+            if (abs(cross) <= 1e-12 * max(abs(dx), abs(dy))
+                    and min(a.lon, b.lon) <= x <= max(a.lon, b.lon)
+                    and min(a.lat, b.lat) <= y <= max(a.lat, b.lat)):
+                return 2
+            if (a.lat > y) != (b.lat > y) and x < a.lon + (y - a.lat) * dx / dy:
+                inside = not inside
+        return int(inside)
 
     def contains(self, point: Point) -> bool:
-        """Point-in-polygon por ray casting."""
-        raise NotImplementedError("Pendiente: issue #22")
+        """Incluye el contorno exterior y bordes de agujeros; excluye su interior."""
+        if not self.mbr().contains_point(point):
+            return False
+        outer = self._ring_location(self.vertices, point)
+        if outer != 1:
+            return outer == 2
+        for hole in self.holes:
+            location = self._ring_location(hole, point)
+            if location == 2:
+                return True
+            if location == 1:
+                return False
+        return True
 
     @classmethod
     def from_geojson(cls, geometry: dict) -> list[Polygon]:
-        """Polygon o MultiPolygon de GeoJSON ([lon, lat])."""
-        raise NotImplementedError("Pendiente: issue #22")
+        """Polygon/MultiPolygon, Feature o FeatureCollection ([lon, lat])."""
+        if not isinstance(geometry, dict):
+            raise ValueError("Se esperaba un objeto GeoJSON")
+        kind = geometry.get("type")
+        if kind == "Feature":
+            return cls.from_geojson(geometry.get("geometry"))
+        if kind == "FeatureCollection":
+            return [polygon for feature in geometry.get("features", [])
+                    for polygon in cls.from_geojson(feature)]
+        if kind not in ("Polygon", "MultiPolygon"):
+            raise ValueError(f"Geometría GeoJSON no soportada: {kind!r}")
+        try:
+            coordinates = geometry["coordinates"]
+            polygons = [coordinates] if kind == "Polygon" else coordinates
+            result = []
+            for rings in polygons:
+                converted = [tuple(Point(position[1], position[0]) for position in ring) for ring in rings]
+                if not converted:
+                    raise ValueError("Polígono GeoJSON vacío")
+                result.append(cls(converted[0], tuple(converted[1:])))
+            return result
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError("Coordenadas GeoJSON inválidas") from exc
+
+
+def load_districts(path, name_field="nombre") -> dict[str, tuple[Polygon, ...]]:
+    """Carga una FeatureCollection y agrupa polígonos por nombre de distrito.
+
+    `name_field` permite usar propiedades de datasets reales como NOMB_DIST.
+    Conserva componentes de MultiPolygon y agujeros, sin intercambiar lat/lon.
+    """
+    with open(path, encoding="utf-8-sig") as stream:
+        data = json.load(stream)
+    if not isinstance(data, dict) or data.get("type") != "FeatureCollection":
+        raise ValueError("Se esperaba una FeatureCollection de distritos")
+    districts = {}
+    for feature in data.get("features", []):
+        name = (feature.get("properties") or {}).get(name_field)
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"Falta el nombre del distrito en {name_field!r}")
+        districts[name] = districts.get(name, ()) + tuple(Polygon.from_geojson(feature))
+    return districts
