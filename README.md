@@ -26,13 +26,25 @@ python -m pip install -r requirements.txt pytest
 python -m frontend.main
 ```
 
-Paneles: **Archivos** (tablas, esquema, índices y estadísticas), **Consultas** (editor SQL; `Ctrl+Enter` ejecuta), **Resultados** y **Plan de ejecución** (operadores, índice elegido, rango usado y costo estimado).
+Paneles: **Archivos** (tablas, esquema, índices y estadísticas), **Consultas** (editor SQL; `Ctrl+Enter` ejecuta), **Resultados** y **Plan de ejecución**, que muestra el `QUERY PLAN` cuando se ejecuta `EXPLAIN` o `EXPLAIN ANALYZE` (como en `psql`).
 
 > **Modo demo.** Al iniciar, el frontend vacía `demo_data/` (solo los archivos que genera el motor) y crea las tablas de ejemplo `cuentas` y `productos`. Lo creado en una sesión no se conserva al cerrar la aplicación. La capa de almacenamiento sí permite reabrir sus archivos (HeapFile, SequentialFile, B+ y snapshot del hash); los tests de reapertura lo verifican.
 
 Ejemplo de sesión:
 
 ```sql
+CREATE TABLE alumnos (id INT PRIMARY KEY, nombre VARCHAR(100), carrera_id INT, nota INT);
+COPY alumnos FROM 'datos/alumnos.csv' WITH (FORMAT csv, HEADER true);   -- ruta relativa a la raíz del proyecto
+EXPLAIN ANALYZE SELECT * FROM alumnos WHERE nota >= 14 ORDER BY id;
+--  Sort  (cost=0.00..132.00 rows=333) (actual time=33.554..37.603 rows=355 loops=1)
+--    Sort Key: id
+--    Sort Method: in-memory (1 run)
+--    ->  Seq Scan on alumnos  (cost=0.00..33.00 rows=333) (actual time=0.148..16.519 rows=355 loops=1)
+--          Filter: (nota >= 14)
+--          Rows Removed by Filter: 645
+--  Planning Time: 0.179 ms
+--  Execution Time: 38.938 ms
+
 CREATE TABLE emp (id INT, nombre VARCHAR(20), salario INT) USING BTREE;  -- B+ agrupado
 INSERT INTO emp VALUES (1, 'Ana', 3000), (2, 'Bob', 2500), (3, 'Carla', 4100);
 CREATE INDEX emp_sal ON emp (salario) USING BTREE;                      -- B+ no agrupado
@@ -73,6 +85,9 @@ Resultados, gráficas y metodología: `benchmarks/README.md` y la sección 3 de 
 | `INSERT INTO t [(cols)] VALUES (...), (...)` | Valida tipos y columnas de todo el lote antes de escribir. |
 | `DELETE FROM t [WHERE ...]` | Usa índices si conviene; eliminación lógica en heap y secuencial. |
 | `BEGIN [TRANSACTION]`, `END [TRANSACTION]` / `COMMIT`, `ROLLBACK` | Fuera de una transacción cada sentencia es *autocommit*. |
+| `CREATE TABLE t (id INT PRIMARY KEY, ...)` o `PRIMARY KEY (id)` | Rechaza claves duplicadas; en un heap crea el índice `t_pkey`. |
+| `COPY t [(cols)] FROM 'archivo.csv' WITH (FORMAT csv, HEADER true, DELIMITER ';')` | Carga un CSV (comillas, UTF-8 con BOM, `ENCODING 'LATIN1'`); todo o nada, con la línea del error. |
+| `EXPLAIN [ANALYZE] SELECT \| INSERT \| DELETE ...` | Plan con el formato de PostgreSQL; `ANALYZE` ejecuta y muestra tiempos y filas reales. |
 
 El optimizador elige por costo estimado entre scan secuencial e índices: hash o B+ para igualdad; B+ para rangos (`<`, `<=`, `>`, `>=`, `BETWEEN`), `ORDER BY` y `GROUP BY`; hash join externo o *index nested loop* para `JOIN`. Gramática completa: `docs/sql_grammar.ebnf`.
 

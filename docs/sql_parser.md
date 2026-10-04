@@ -26,7 +26,21 @@ representación del resultado:
 - `INSERT INTO ... VALUES`: una o varias filas de literales, con lista opcional
   de columnas. No se admiten expresiones ni subconsultas dentro de `VALUES`.
 - `DELETE FROM ...`: con alias y filtro opcionales.
-- `CREATE TABLE ...`: columnas `INT`, `FLOAT`, `STR(n)` o `VARCHAR(n)`.
+- `CREATE TABLE ...`: columnas `INT`, `FLOAT`, `STR(n)` o `VARCHAR(n)`, y una
+  clave primaria opcional (`id INT PRIMARY KEY` o `PRIMARY KEY (id)`). La clave
+  rechaza duplicados (`llave duplicada viola la restricción de unicidad
+  "t_pkey"`); en un heap crea el índice hash `t_pkey` y en `SEQUENTIAL`/`BTREE`
+  es la columna de ordenamiento.
+- `COPY t [(cols)] FROM 'archivo.csv' [WITH (FORMAT csv, HEADER true,
+  DELIMITER ',', ENCODING 'UTF8')]`: carga un CSV (también acepta la forma
+  clásica `CSV HEADER`). Valida todo el archivo antes de insertar, informa la
+  línea del primer error, respeta la transacción activa y responde `COPY n`.
+  Las rutas relativas se resuelven desde la raíz del proyecto.
+- `EXPLAIN [ANALYZE] <SELECT | INSERT | DELETE>`: plan con el formato de texto de
+  PostgreSQL (`Seq Scan`, `Index Scan`, `Sort`, `HashAggregate`, `Hash Join`,
+  `Nested Loop`, `Limit`, `Unique`) y costos del modelo del motor. `ANALYZE`
+  ejecuta la sentencia y agrega tiempo y filas reales por operador, `Rows
+  Removed by Filter`, `Sort Method`, `Planning Time` y `Execution Time`.
 - `CREATE TABLE ... USING HEAP|SEQUENTIAL|BTREE`: selecciona el storage físico; por
   defecto se usa `HEAP`. `BTREE` crea una tabla organizada como **B+ agrupado**
   (registros en las hojas, clave primaria única = primera columna) y registra
