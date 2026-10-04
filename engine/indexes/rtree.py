@@ -18,7 +18,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Iterable, Iterator, List, Optional, Tuple
 
-from engine.spatial.distance import Metric
+from engine.spatial.distance import Metric, distance, radius_to_mbr
 from engine.spatial.geometry import MBR, Point, Polygon
 from engine.storage.record import RID
 
@@ -98,6 +98,7 @@ class RTreeStats:
     nodes_visited: int = 0
     leaves_visited: int = 0
     candidates: int = 0
+    refined: int = 0
     results: int = 0
 
 
@@ -427,7 +428,24 @@ class RTree:
 
     def range_query(self, center: Point, radius_m: float,
                     metric: Metric = Metric.HAVERSINE) -> List[Tuple[Point, RID, float]]:
-        raise NotImplementedError("Pendiente: issue #20")
+        """Radio inclusivo en metros: MBR conservador y refinamiento exacto.
+
+        Orden determinista por distancia y RID. `candidates` cuenta entradas de
+        hojas inspeccionadas; `refined` cuenta distancias calculadas tras el MBR.
+        """
+        if not isinstance(center, Point):
+            raise TypeError("El centro debe ser un Point")
+        window = radius_to_mbr(center, radius_m, metric)
+        candidates = self.search_mbr(window)
+        results = []
+        for point, rid in candidates:
+            self.last_stats.refined += 1
+            meters = distance(center, point, metric)
+            if meters <= radius_m:
+                results.append((point, rid, meters))
+        results.sort(key=lambda row: (row[2], _rid_key(row[1])))
+        self.last_stats.results = len(results)
+        return results
 
     def knn(self, center: Point, k: int, metric: Metric = Metric.HAVERSINE) -> List[Tuple[Point, RID, float]]:
         raise NotImplementedError("Pendiente: issue #21")
