@@ -33,7 +33,7 @@ class TestAnalisisDelPlan(unittest.TestCase):
         filas = filas_analisis(nodos)
         incl = [float(f[2][5]) for f in filas]
         excl = [float(f[2][4]) for f in filas]
-        self.assertAlmostEqual(excl[0], max(0.0, incl[0] - incl[1]), places=3)
+        self.assertAlmostEqual(excl[0], max(0.0, incl[0] - incl[1]), delta=0.002)  # valores ya redondeados
         self.assertEqual(filas[2][3], "")  # estimación exacta: sin resaltar
 
     def test_explain_sin_analyze_no_tiene_valores_reales(self):
