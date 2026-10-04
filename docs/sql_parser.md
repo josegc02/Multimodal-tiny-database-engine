@@ -140,18 +140,19 @@ la cantidad lógica de registros del buffer, no los bytes de objetos Python.
 `SELECT` devuelve un iterador; si se abandona una lectura antes de agotarla,
 se debe llamar a `close()` para liberar temporales. `INSERT` y `DELETE` se
 ejecutan al llamar a `execute` y devuelven un iterador con
-`{"affected_rows": cantidad}`. Las modificaciones reconstruyen los índices,
-incluyendo los RIDs que cambian en archivos secuenciales. Tras modificar el
-storage directamente, el llamador debe invalidar o reconstruir sus índices
-mediante el `TableBinding` devuelto por `register_table`.
+`{"affected_rows": cantidad}`. Las modificaciones mantienen los índices: fila
+por fila en el heap y con una reconstrucción al final de la sentencia en el
+secuencial y en el B+ agrupado, cuyos RIDs cambian. Tras modificar el storage
+directamente, el llamador debe reconstruir sus índices mediante el
+`TableBinding` devuelto por `register_table`.
 
 `INSERT` exige todas las columnas y valida el lote completo antes de escribir;
 el storage no admite valores `NULL` ni defaults. `DELETE` reúne los RIDs antes
-de modificar registros. No hay rollback ante fallos de E/S: una escritura puede
-quedar parcialmente aplicada y sus índices se mantienen inválidos hasta su
-reconstrucción. El ejecutor admite `SELECT DISTINCT` y `HAVING`; los agregados
-con argumento `DISTINCT` y las transacciones solo se reconocen en el parser y
-se rechazan durante la planificación.
+de modificar registros. `SQLExecutor` no usa transacciones: ante un fallo de
+E/S una escritura puede quedar parcialmente aplicada (los índices siguen
+consistentes con lo escrito). Para transacciones (`BEGIN`/`COMMIT`/`ROLLBACK`)
+con locks se usa `StatementExecutor`. El ejecutor admite `SELECT DISTINCT`,
+`HAVING` y agregados con `DISTINCT` (p. ej. `COUNT(DISTINCT x)`).
 
 `SQLLexError` y `SQLParseError` heredan de `SQLError`/`ValueError`. Exponen
 `message`, `offset` (desde cero), `line` y `column` (desde uno). El mensaje incluye

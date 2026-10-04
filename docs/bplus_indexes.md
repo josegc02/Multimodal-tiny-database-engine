@@ -39,7 +39,9 @@ Pruebas: `python -m unittest discover -s tests -v`.
 
 `BPlusTreeUnclustered(filepath, key_type="int", order=4, key_size=64,
 page_size=4096)` usa la misma estructura y rebalanceo, pero guarda **clave y RID**
-en las hojas. `order` es el máximo de claves `M`; `key_size` se usa para strings.
+en las hojas. `order` es el máximo de claves `M` (el valor por defecto 4 es para
+pruebas; el frontend y los benchmarks usan nodos que llenan la página, M = 254
+para claves enteras); `key_size` se usa para strings.
 Los RIDs codifican página y slot (31 bits cada uno) y archivo `main`/`aux`.
 Admite claves repetidas, incluso si ocupan varias hojas; no repite el mismo par.
 
@@ -65,8 +67,13 @@ con `bulk_load_from_storage`.
 
 Para SQL se registra con
 `IndexInfo("nombre", "campo", indice, ordered=True)` en `Catalog`. El optimizador
-puede usarlo para igualdad, ORDER BY, GROUP BY y joins, según costo. El catálogo
-reconstruye el índice después de INSERT/DELETE para actualizar los RIDs.
+puede usarlo para igualdad, rangos, ORDER BY, GROUP BY y joins, según costo.
+Tras un INSERT/DELETE el catálogo actualiza el índice fila por fila si la tabla es
+un heap (RIDs estables) y lo reconstruye al final de la sentencia si es un archivo
+secuencial o un B+ agrupado, cuyos RIDs se mueven.
+
+Inserción y eliminación cuestan O(altura): los splits, redistribuciones y fusiones
+actualizan solo los separadores afectados, sin releer subárboles.
 
 La rama #4 se basa en la implementación de #3. Integrar primero #3 en main y
 después #4 evita duplicar cambios del motor compartido.
