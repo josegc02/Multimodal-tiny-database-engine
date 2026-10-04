@@ -362,33 +362,11 @@ class BPlusTree:
     def _min_internal_keys(self) -> int:
         return self.header.M // 2
 
-    def _first_key(self, page_id: int) -> Any:
-        node = self._read_node(page_id)
-        while not node.isLeaf:
-            node = self._read_node(node.childs[0])
-        if not node.keys:
-            return None
-        return node.keys[0]
-
-    def _refresh_internal_node(self, node: BplusNode) -> None:
-        if node.isLeaf:
-            return
-        children = [child for child in node.childs if child != EMPTY_CHILD]
-        node.keys = [self._first_key(child) for child in children[1:]]
-        node.fullness = len(node.keys)
-        node.childs = children
-
-    def _refresh_path(self, path: List[Tuple[int, BplusNode]]) -> None:
-        for pos, node in reversed(path):
-            if not node.isLeaf:
-                self._refresh_internal_node(node)
-                self._write_node(pos, node)
-
     def _propagate_first_key(self, path: List[Tuple[int, BplusNode]], child_pos: int, key: Any) -> None:
         """Actualiza el único separador igual a la primera clave de child_pos.
 
         Es el del ancestro más cercano donde el subárbol no es el hijo izquierdo;
-        O(altura) en lugar de recalcular cada separador con _first_key.
+        O(altura): no relee subárboles para recalcular separadores.
         """
         for pos, node in reversed(path):
             index = node.childs[:node.fullness + 1].index(child_pos)
@@ -610,6 +588,13 @@ class BPlusTree:
         self._fh.flush()
 
     def _rebalance_after_delete(self, path: List[Tuple[int, BplusNode]]) -> None:
+        """Corrige el underflow del último nodo de `path` con operaciones locales.
+
+        Mantiene el invariante separador == primera clave del subárbol derecho
+        sin releer subárboles: redistribuir hojas solo cambia el separador del
+        hermano; en nodos internos el separador del padre rota (baja al nodo y
+        sube la clave del hermano) o baja al fusionar. Costo O(altura).
+        """
         if not path:
             return
 
@@ -627,12 +612,12 @@ class BPlusTree:
         min_keys = self._min_leaf_keys() if node.isLeaf else self._min_internal_keys()
         if node.fullness >= min_keys:
             self._write_node(pos, node)
-            self._refresh_path(path[:-1])
             return
 
         parent_pos, parent = path[-2]
-        siblings = parent.childs[:parent.fullness + 1]     
+        siblings = parent.childs[:parent.fullness + 1]
         node_index = siblings.index(pos)
+        was_empty_leaf = node.isLeaf and node.fullness == 0
 
         left_pos = siblings[node_index - 1] if node_index > 0 else EMPTY_CHILD
         right_pos = siblings[node_index + 1] if node_index + 1 < len(siblings) else EMPTY_CHILD
@@ -647,18 +632,17 @@ class BPlusTree:
                 node.fullness += 1
                 left.childs = left.childs[:left.fullness] + [EMPTY_CHILD]
                 node.childs = node.childs[:node.fullness] + [EMPTY_CHILD]
+                parent.keys[node_index - 1] = node.keys[0]
             else:
                 left_children = left.childs[:left.fullness + 1]
-                node_children = node.childs[:node.fullness + 1]
-                moved_child = left_children.pop()
-                node_children.insert(0, moved_child)
+                node.childs = [left_children.pop()] + node.childs[:node.fullness + 1]
+                node.keys = [parent.keys[node_index - 1]] + node.keys
+                parent.keys[node_index - 1] = left.keys.pop()
                 left.childs = left_children
-                node.childs = node_children
-                self._refresh_internal_node(left)
-                self._refresh_internal_node(node)
+                left.fullness, node.fullness = len(left.keys), len(node.keys)
             self._write_node(left_pos, left)
             self._write_node(pos, node)
-            self._refresh_path(path[:-1])
+            self._write_node(parent_pos, parent)
             return
 
         if right is not None and right.fullness > min_keys:
@@ -669,25 +653,27 @@ class BPlusTree:
                 node.fullness += 1
                 right.childs = right.childs[:right.fullness] + [EMPTY_CHILD]
                 node.childs = node.childs[:node.fullness] + [EMPTY_CHILD]
+                parent.keys[node_index] = right.keys[0]
             else:
                 right_children = right.childs[:right.fullness + 1]
-                node_children = node.childs[:node.fullness + 1]
-                moved_child = right_children.pop(0)
-                node_children.append(moved_child)
+                node.childs = node.childs[:node.fullness + 1] + [right_children.pop(0)]
+                node.keys = node.keys + [parent.keys[node_index]]
+                parent.keys[node_index] = right.keys.pop(0)
                 right.childs = right_children
-                node.childs = node_children
-                self._refresh_internal_node(right)
-                self._refresh_internal_node(node)
+                right.fullness, node.fullness = len(right.keys), len(node.keys)
             self._write_node(right_pos, right)
             self._write_node(pos, node)
-            self._refresh_path(path[:-1])
+            self._write_node(parent_pos, parent)
+            if was_empty_leaf:
+                # La hoja vacía recibió una nueva primera clave.
+                self._propagate_first_key(path[:-1], pos, node.keys[0])
             return
 
         if left is not None:
-            target_pos, target, source_pos, source = left_pos, left, pos, node
+            target_pos, target, source = left_pos, left, node
             remove_index = node_index
         else:
-            target_pos, target, source_pos, source = pos, node, right_pos, right
+            target_pos, target, source = pos, node, right
             remove_index = node_index + 1
 
         if target.isLeaf:
@@ -696,15 +682,18 @@ class BPlusTree:
             target.fullness = len(target.keys)
             target.nextLeaf = source.nextLeaf
         else:
+            separator = parent.keys[remove_index - 1]
             target.childs = target.childs[:target.fullness + 1] + source.childs[:source.fullness + 1]
-            self._refresh_internal_node(target)
+            target.keys = target.keys + [separator] + source.keys
+            target.fullness = len(target.keys)
         self._write_node(target_pos, target)
+        if was_empty_leaf and target is node:
+            # Hoja vacía más a la izquierda que absorbió a su hermano derecho.
+            self._propagate_first_key(path[:-1], pos, node.keys[0])
 
-        parent_children = parent.childs[:parent.fullness + 1]
-        parent_children.pop(remove_index)
-        parent.childs = parent_children
-        self._refresh_internal_node(parent)
-        self._write_node(parent_pos, parent)
+        parent.childs = siblings[:remove_index] + siblings[remove_index + 1:]
+        del parent.keys[remove_index - 1]
+        parent.fullness = len(parent.keys)
         path[-2] = (parent_pos, parent)
         self._rebalance_after_delete(path[:-1])
 
@@ -724,6 +713,8 @@ class BPlusTree:
         self.header.exception_pos = pos
         self._write_header()
         self._write_node(pos, leaf)
+        if index == 0 and leaf.fullness > 0:
+            self._propagate_first_key(path[:-1], pos, leaf.keys[0])
         self._rebalance_after_delete(path)
         self.header.min_node_pos = self._leftmost_leaf_pos()
         self._set_clean_state()
