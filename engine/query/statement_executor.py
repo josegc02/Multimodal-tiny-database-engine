@@ -326,6 +326,15 @@ class StatementExecutor:
             raise SQLExecutionError(
                 f"COPY {table}, línea {line}: valor vacío en {column!r} (el storage no admite NULL)")
         try:
+            if kind == "point":
+                from engine.query.parser import Parser
+                from engine.spatial.geometry import Point
+                parser = Parser(value)
+                literal = parser._literal()
+                parser._expect("EOF")
+                if not isinstance(literal.value, Point):
+                    raise ValueError("Se esperaba POINT(lat, lon)")
+                return literal.value
             return int(value) if kind == "int" else float(value)
         except ValueError:
             raise SQLExecutionError(

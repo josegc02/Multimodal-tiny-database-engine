@@ -11,7 +11,7 @@ temporales usan un formato binario explícito con struct (ver _temp_records).
 from __future__ import annotations
 
 from contextlib import ExitStack, closing, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import heapq
 import hashlib
 from itertools import chain, islice
@@ -22,6 +22,7 @@ import tempfile
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from engine.query._temp_records import read_header, read_record, write_header, write_record
+from engine.spatial.geometry import Point
 
 Row = Mapping[str, Any]
 
@@ -72,6 +73,7 @@ class ExecutionStats:
     memory_sorts: int = 0  # ordenamientos resueltos en memoria (sin runs en disco)
     # EXPLAIN ANALYZE: {id(nodo del plan): {"rows", "first", "total"}}; None = sin medir.
     profile: dict | None = None
+    spatial: dict = field(default_factory=dict)  # id(Scan) -> contadores de consultas espaciales
 
 
 @dataclass(frozen=True)
@@ -93,7 +95,7 @@ def _order_keys(order_by: str | Sequence[str | OrderKey]) -> tuple[OrderKey, ...
 def _key(row: Row, fields: Sequence[str]) -> tuple:
     values = tuple(row[field] for field in fields)
     for value in values:
-        if value is not None and type(value) not in (int, float, str):
+        if value is not None and type(value) not in (int, float, str, Point):
             raise TypeError("Las claves deben ser int, float finitos, str o None")
         if type(value) is float and not math.isfinite(value):
             raise ValueError("No se permiten claves NaN o infinitas")
@@ -409,6 +411,8 @@ def _partition_id(key: tuple, fanout: int, depth: int) -> int:
         elif type(value) in (int, float):
             numerator, denominator = value.as_integer_ratio() if type(value) is float else (value, 1)
             canonical.append(("n", numerator, denominator))
+        elif isinstance(value, Point):
+            canonical.append(("point", float(value.lat).as_integer_ratio(), float(value.lon).as_integer_ratio()))
         else:
             canonical.append(("s", value))
     data = repr((depth, canonical)).encode("utf-8")

@@ -2,8 +2,9 @@
 
 Cabecera de archivo: magic/version EXT1 (4 bytes). Cada registro contiene un
 uint32 con la cantidad de campos. Cada campo guarda nombre UTF-8 (longitud uint32
-+ bytes), etiqueta uint8 y valor: NULL (sin payload), int64, float64 o texto UTF-8
-con longitud uint32. Todos los números usan big-endian, como storage.record.
++ bytes), etiqueta uint8 y valor: NULL (sin payload), int64, float64, texto UTF-8
+con longitud uint32 o POINT (dos float64). Todos los números usan big-endian,
+como storage.record.
 
 Se incluyen nombres y tipos porque estos operadores también reciben iterables
 sin Schema y permiten NULL. Los registros del heap conservan su formato original.
@@ -11,13 +12,15 @@ sin Schema y permiten NULL. Los registros del heap conservan su formato original
 
 import struct
 from typing import Any, BinaryIO, Mapping
+from engine.spatial.geometry import Point
 
 MAGIC = b"EXT1"
 UINT32 = struct.Struct(">I")
 TAG = struct.Struct(">B")
 INT64 = struct.Struct(">q")
 FLOAT64 = struct.Struct(">d")
-NULL, INTEGER, FLOAT, TEXT = range(4)
+NULL, INTEGER, FLOAT, TEXT, POINT = range(5)
+POINT64 = struct.Struct(">dd")
 
 
 def _read_exact(fh: BinaryIO, size: int) -> bytes:
@@ -66,8 +69,11 @@ def write_record(fh: BinaryIO, row: Mapping[str, Any]) -> None:
         elif type(value) is str:
             fh.write(TAG.pack(TEXT))
             _write_text(fh, value)
+        elif isinstance(value, Point):
+            fh.write(TAG.pack(POINT))
+            fh.write(POINT64.pack(value.lat, value.lon))
         else:
-            raise TypeError("Los temporales admiten int64, float64, str y None")
+            raise TypeError("Los temporales admiten int64, float64, str, Point y None")
 
 
 def read_record(fh: BinaryIO) -> dict:
@@ -86,6 +92,8 @@ def read_record(fh: BinaryIO) -> dict:
             value = FLOAT64.unpack(_read_exact(fh, FLOAT64.size))[0]
         elif tag == TEXT:
             value = _read_text(fh)
+        elif tag == POINT:
+            value = Point(*POINT64.unpack(_read_exact(fh, POINT64.size)))
         else:
             raise ValueError("Tipo de campo temporal desconocido")
         row[name] = value

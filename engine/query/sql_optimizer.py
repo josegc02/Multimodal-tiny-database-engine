@@ -5,6 +5,7 @@ import math
 from engine.query import ast
 from engine.query.external_algorithms import OrderKey
 from engine.query.planner import QueryPlanner, TableStats
+from engine.spatial.geometry import Point, Polygon
 
 
 def base_scan(plan):
@@ -31,7 +32,7 @@ class SQLOptimizer:
     @staticmethod
     def _constant(expression):
         """(True, valor) si la expresión es un literal (incluido -literal)."""
-        if isinstance(expression, ast.Literal) and type(expression.value) in (int, float, str):
+        if isinstance(expression, ast.Literal) and type(expression.value) in (int, float, str, Point):
             return True, expression.value
         if (isinstance(expression, ast.UnaryOp) and expression.operator in ("-", "+")
                 and isinstance(expression.operand, ast.Literal)
@@ -102,7 +103,60 @@ class SQLOptimizer:
             return type(value) is int
         if kind == "float":
             return type(value) in (int, float)
+        if kind == "point":
+            return isinstance(value, Point)
         return type(value) is str
+
+    @staticmethod
+    def _spatial_target(call, qualifier):
+        if not isinstance(call, ast.SpatialCall):
+            return None
+        left, right = call.arguments
+        pairs = [(left, right)]
+        if call.function == "DISTANCIA":
+            pairs.append((right, left))
+        for column, constant in pairs:
+            expected = Point if call.function == "DISTANCIA" else Polygon
+            if (isinstance(column, ast.ColumnRef) and column.table == qualifier
+                    and isinstance(constant, ast.Literal) and isinstance(constant.value, expected)):
+                return column.name, constant.value, call.metric or "haversine"
+        return None
+
+    def _spatial_choice(self, plan, binding, qualifier, indexes):
+        available = {index.field: index for index in indexes if index.valid and index.spatial}
+        def choice(algorithm, target, value):
+            field = target[0]
+            if field not in available:
+                return None
+            index = available[field]
+            lookup = getattr(index.index, "height", index.lookup_pages)
+            return self.costs._plan("spatial", algorithm, lookup + binding.statistics.pages,
+                                    "R-Tree: poda espacial y refinamiento exacto.", index=index,
+                                    field=field, value=value)
+        target = self._spatial_target(plan.get("spatial_order"), qualifier)
+        if target:
+            selected = choice("rtree_knn_scan", target, (target[1], plan.get("spatial_k"), target[2]))
+            if selected:
+                return selected
+        for term in self._conjuncts(plan.get("predicate")):
+            if isinstance(term, ast.SpatialCall) and term.function == "WITHIN":
+                target = self._spatial_target(term, qualifier)
+                if target:
+                    selected = choice("rtree_polygon_scan", target, target[1])
+                    if selected:
+                        return selected
+            if isinstance(term, ast.BinaryOp) and term.operator in self._FLIP:
+                for call, radius, op in [(term.left, term.right, term.operator),
+                                         (term.right, term.left, self._FLIP[term.operator])]:
+                    if not isinstance(call, ast.SpatialCall) or call.function != "DISTANCIA" or op not in ("<", "<="):
+                        continue
+                    target = self._spatial_target(call, qualifier)
+                    constant, value = self._constant(radius)
+                    if target and constant and type(value) in (int, float) and math.isfinite(value) and value >= 0:
+                        selected = choice("rtree_radius_scan", target, (target[1], value, target[2]))
+                        if selected:
+                            return selected
+        return None
 
     def choice(self, plan):
         if plan.operation == "Scan":
@@ -113,8 +167,12 @@ class SQLOptimizer:
             indexes = binding.index_info()
             schema = binding.storage.schema
             kinds = dict(zip(schema.fields, schema.types))
+            spatial = self._spatial_choice(plan, binding, qualifier, indexes)
+            if spatial is not None:
+                return spatial
             candidates = [self.costs.plan_equality(binding.statistics, field, value, indexes)
-                          for field, value in self._equalities(predicate, qualifier)]
+                          for field, value in self._equalities(predicate, qualifier)
+                          if self._compatible(kinds[field], value)]
             for field, (lower, upper, include_lower, include_upper) in self._ranges(predicate, qualifier).items():
                 if self._compatible(kinds[field], lower) and self._compatible(kinds[field], upper):
                     candidates.append(self.costs.plan_range(binding.statistics, field, lower, upper,
@@ -134,16 +192,17 @@ class SQLOptimizer:
         source = plan.children[0]
         scan = base_scan(source)
         binding = self.catalog.table(scan.get("table").name) if scan else None
+        spatial_source = scan is not None and self.choice(scan).algorithm.startswith("rtree_")
         if plan.operation == "Sort":
             items = plan.get("order_by")
-            simple = scan is not None and all(isinstance(i.expression, ast.ColumnRef) for i in items)
+            simple = scan is not None and not spatial_source and all(isinstance(i.expression, ast.ColumnRef) for i in items)
             keys = tuple(OrderKey(i.expression.name if simple else f"$sort{n}", i.direction == "DESC",
                                   i.nulls_first if i.nulls_first is not None else i.direction == "DESC")
                          for n, i in enumerate(items))
             return self.costs.plan_order_by(self.estimates(source), keys,
                                             binding.index_info() if simple else ())
         groups = plan.get("group_by")
-        simple = scan is not None and all(isinstance(g, ast.ColumnRef) for g in groups)
+        simple = scan is not None and not spatial_source and all(isinstance(g, ast.ColumnRef) for g in groups)
         fields = tuple(g.name if simple else f"$group{n}" for n, g in enumerate(groups))
         return self.costs.plan_group_by(self.estimates(source), fields,
                                         indexes=binding.index_info() if simple else ())

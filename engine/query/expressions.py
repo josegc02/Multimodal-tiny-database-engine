@@ -6,6 +6,8 @@ import re
 from engine.query import ast
 from engine.query.errors import SQLExecutionError
 from engine.query.logical_plan import column_key
+from engine.spatial.distance import Metric, distance
+from engine.spatial.geometry import Point, Polygon
 
 
 def truth(value):
@@ -38,6 +40,17 @@ def evaluate(expression, row):
 
 
 def _evaluate(expression, row):
+    if isinstance(expression, ast.SpatialCall):
+        left, right = (evaluate(arg, row) for arg in expression.arguments)
+        if left is None or right is None:
+            return None
+        if not isinstance(left, Point):
+            raise SQLExecutionError(f"{expression.function} requiere POINT como primer argumento")
+        if expression.function == "DISTANCIA" and isinstance(right, Point):
+            return distance(left, right, Metric(expression.metric or "haversine"))
+        if expression.function == "WITHIN" and isinstance(right, Polygon):
+            return right.contains(left)
+        raise SQLExecutionError(f"Argumento inválido para {expression.function}")
     if isinstance(expression, ast.Literal):
         return expression.value
     if isinstance(expression, ast.ColumnRef):

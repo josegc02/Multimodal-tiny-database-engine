@@ -17,7 +17,7 @@ def _coordinate(value, low, high, name):
         raise ValueError(f"{name} debe ser un número entre {low} y {high}: {value!r}")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, order=True)
 class Point:
     lat: float
     lon: float
@@ -25,6 +25,9 @@ class Point:
     def __post_init__(self):
         _coordinate(self.lat, -90, 90, "lat")
         _coordinate(self.lon, -180, 180, "lon")
+
+    def __str__(self):
+        return f"POINT({self.lat:g}, {self.lon:g})"
 
 
 @dataclass(frozen=True)

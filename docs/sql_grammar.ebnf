@@ -13,7 +13,7 @@ create_table = "CREATE", "TABLE", identifier, "(", table_element,
                {",", table_element}, ")", ["USING", ("HEAP" | "SEQUENTIAL" | "BTREE")] ;
 table_element = column_definition | "PRIMARY", "KEY", "(", identifier, ")"
               | "FOREIGN", "KEY", "(", identifier, ")", references ;
-column_definition = (identifier, ("INT" | "FLOAT")
+column_definition = (identifier, ("INT" | "FLOAT" | "POINT")
                   | identifier, ("STR" | "VARCHAR"), "(", integer, ")"), ["PRIMARY", "KEY"], [references] ;
 references = "REFERENCES", identifier, ["(", identifier, ")"],
              ["ON", "DELETE", ("RESTRICT" | "CASCADE" | "NO", "ACTION")] ;
@@ -27,7 +27,7 @@ copy_option = "FORMAT", "csv" | "CSV" | "HEADER", ["TRUE" | "FALSE"]
 explain = "EXPLAIN", ["ANALYZE"], (select | insert | delete) ;
 create_index = "CREATE", "INDEX", identifier, "ON", identifier,
                (["USING", index_method], "(", identifier, ")", ["USING", index_method]) ;
-index_method = "HASH" | "BTREE" ;
+index_method = "HASH" | "BTREE" | "RTREE" ;
 
 select = "SELECT", ["DISTINCT"], select_item, {",", select_item},
          "FROM", table_ref, {join},
@@ -35,7 +35,7 @@ select = "SELECT", ["DISTINCT"], select_item, {",", select_item},
          ["GROUP", "BY", expression, {",", expression}],
          ["HAVING", expression],
          ["ORDER", "BY", order_item, {",", order_item}],
-         ["LIMIT", integer], ["OFFSET", integer] ;
+         ["LIMIT", integer], ["OFFSET", integer], ["USING", metric] ;
 
 select_item = "*" | identifier, ".", "*" | expression, [alias] ;
 alias = ["AS"], identifier ;
@@ -47,7 +47,7 @@ insert = "INSERT", "INTO", identifier,
          ["(", identifier, {",", identifier}, ")"],
          "VALUES", value_row, {",", value_row} ;
 value_row = "(", signed_literal, {",", signed_literal}, ")" ;
-signed_literal = ["+" | "-"], number | string | "NULL" | "TRUE" | "FALSE" ;
+signed_literal = ["+" | "-"], number | string | "NULL" | "TRUE" | "FALSE" | point | polygon ;
 
 delete = "DELETE", "FROM", table_ref, ["WHERE", expression] ;
 transaction = ("BEGIN" | "COMMIT" | "END" | "ROLLBACK"), ["TRANSACTION"] ;
@@ -66,8 +66,15 @@ comparison = "=" | "!=" | "<>" | "<" | "<=" | ">" | ">=" ;
 additive = multiplicative, {("+" | "-"), multiplicative} ;
 multiplicative = unary, {("*" | "/" | "%"), unary} ;
 unary = {"+" | "-"}, primary ;
-primary = literal | column_ref | aggregate | "(", expression, ")" ;
-literal = number | string | "NULL" | "TRUE" | "FALSE" ;
+primary = literal | column_ref | aggregate | spatial_call | "(", expression, ")" ;
+literal = number | string | "NULL" | "TRUE" | "FALSE" | point | polygon ;
+point = "POINT", coordinate_pair ;
+coordinate_pair = "(", ["+" | "-"], number, ",", ["+" | "-"], number, ")" ;
+polygon = "POLYGON", "(", vertex, ",", vertex, ",", vertex, {",", vertex}, ")" ;
+vertex = ["POINT"], coordinate_pair ;
+metric = "HAVERSINE" | "EUCLIDEAN" ;
+spatial_call = "DISTANCIA", "(", expression, ",", expression, [",", (metric | string)], ")"
+             | "WITHIN", "(", expression, ",", expression, ")" ;
 column_ref = identifier, [".", identifier] ;
 aggregate = "COUNT", "(", "*", ")"
           | aggregate_name, "(", ["DISTINCT"], expression, ")" ;
@@ -90,6 +97,10 @@ aggregate_name = "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" ;
    - El comodín solo es válido como argumento único de COUNT, sin DISTINCT.
      Los agregados anidados se rechazan.
    - LIMIT y OFFSET son enteros sin signo; se permite cero.
+   - POINT usa latitud/longitud en grados y requiere coordenadas válidas.
+   - DISTANCIA admite HAVERSINE (defecto) o EUCLIDEAN; el tercer argumento
+     explícito prevalece sobre USING. Ambas métricas devuelven metros.
+   - POLYGON es un literal de anillo simple; WITHIN incluye el borde.
    - El anidamiento de paréntesis/llamadas se limita a 64 niveles por defecto.
    - single_statement no acepta SQL sobrante y script no acepta sentencias vacías.
 *)

@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 
 from engine.query import ast
 from engine.query.sql_optimizer import base_scan
+from engine.spatial.geometry import Polygon
 
 
 @dataclass
@@ -56,6 +57,8 @@ def sql_text(expression, qualified=False, names=None):
                 return names[e.name]
             return f"{e.table}.{e.name}" if qualified and e.table else e.name
         if isinstance(e, ast.Literal):
+            if isinstance(e.value, Polygon):
+                return "POLYGON(" + ", ".join(f"({p.lat:g}, {p.lon:g})" for p in e.value.vertices) + ")"
             if isinstance(e.value, str):
                 return "'" + e.value.replace("'", "''") + "'"
             if e.value is None:
@@ -67,6 +70,10 @@ def sql_text(expression, qualified=False, names=None):
             return "*"
         if isinstance(e, ast.AggregateCall):
             return f"{e.function.lower()}({'DISTINCT ' if e.distinct else ''}{text(e.argument)})"
+        if isinstance(e, ast.SpatialCall):
+            args = ", ".join(text(arg) for arg in e.arguments)
+            metric = f", '{e.metric or 'haversine'}'" if e.function == "DISTANCIA" else ""
+            return f"{e.function.lower()}({args}{metric})"
         if isinstance(e, ast.UnaryOp):
             if e.operator == "NOT":
                 return f"(NOT {text(e.operand)})"
@@ -224,7 +231,22 @@ class PlanExplainer:
         else:
             choice = self.optimizer.choice(node)
             cost = choice.estimated_io
-            if choice.algorithm == "index_scan":
+            if choice.algorithm.startswith("rtree_"):
+                mode = {"rtree_knn_scan": "KNN", "rtree_radius_scan": "Radius", "rtree_polygon_scan": "Polygon"}[choice.algorithm]
+                label = f"R-Tree {mode} Scan using {choice.index.name} on {self._table_label(table)}"
+                details.append("Spatial Filter: " + ("MINDIST bounds; exact distance" if mode == "KNN"
+                                                       else "MBR intersection; exact refinement"))
+                if choice.algorithm == "rtree_polygon_scan":
+                    details.append("Refinement: ray casting (boundary included)")
+                else:
+                    center, amount, metric = choice.value
+                    details.append(f"Metric: {metric}; Center: {center}")
+                    if mode == "KNN":
+                        details.append(f"Search: best-first MINDIST; k={amount}; WHERE before LIMIT")
+                        rows = min(rows, amount)
+                    else:
+                        details.append(f"Radius: {amount:g} m; Refinement: exact distance <= radius")
+            elif choice.algorithm == "index_scan":
                 label = f"Index Scan using {choice.index.name} on {self._table_label(table)}"
                 column = ast.ColumnRef(choice.field, qualifier)
                 details.append(f"Index Cond: ({self._text(column)} = {self._text(ast.Literal(choice.value))})")
@@ -371,6 +393,11 @@ class PlanExplainer:
                 if (analyze and detail.startswith("Filter:") and measured is not None
                         and node.input_key in profile and node.input_key != used_key):
                     detail_line(f"Rows Removed by Filter: {profile[node.input_key]['rows'] - measured['rows']}")
+            if analyze and stats is not None:
+                counters = next((stats.spatial[key] for key in node.keys if key in stats.spatial), None)
+                if counters is not None:
+                    detail_line(f"Nodes Visited: {counters['nodes_visited']}; Leaves Visited: {counters['leaves_visited']}")
+                    detail_line(f"Spatial Candidates: {counters['candidates']}; Exact Refinements: {counters['refined']}")
             if analyze and node.is_sort and stats is not None and measured is not None:
                 if stats.initial_runs > 0:
                     detail_line(f"Sort Method: external merge  Runs: {stats.initial_runs}  "
