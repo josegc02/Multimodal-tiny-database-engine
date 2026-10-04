@@ -38,14 +38,16 @@ class TestMotorDDL(unittest.TestCase):
         self.execute("INSERT INTO empleados_seq VALUES (2, 'Bob'), (1, 'Ana')")
         result = self.execute("SELECT id, nombre FROM empleados_seq")
         self.assertEqual(sorted(result.filas), [(1, "Ana"), (2, "Bob")])
-        self.assertEqual(
-            self.motor.ejecutar("SELECT * FROM empleados_seq").plan["children"][0]["storage"],
-            "SequentialFile",
-        )
+        plan = self.execute("EXPLAIN SELECT * FROM empleados_seq").plan
+        self.assertTrue(plan[0].startswith("Seq Scan on empleados_seq"))
 
-    def test_execution_plan_reports_heap_storage(self):
-        result = self.execute("SELECT * FROM cuentas")
-        self.assertEqual(result.plan["children"][0]["storage"], "HeapFile")
+    def test_select_does_not_show_a_plan_but_explain_does(self):
+        self.assertIsNone(self.execute("SELECT * FROM cuentas").plan)
+        result = self.execute("EXPLAIN SELECT * FROM cuentas WHERE saldo > 600")
+        self.assertEqual(result.columnas, ["QUERY PLAN"])
+        self.assertEqual(result.plan, [fila[0] for fila in result.filas])
+        self.assertRegex(result.plan[0], r"^Seq Scan on cuentas  \(cost=0\.00\.\.[0-9.]+ rows=[0-9]+\)$")
+        self.assertEqual(result.plan[1], "  Filter: (saldo > 600)")
 
     def test_create_table_storage_method_is_preserved_in_ast_result(self):
         result = self.motor.ejecutar("CREATE TABLE empleados_seq_2 (id INT) USING SEQUENTIAL")

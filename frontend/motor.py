@@ -20,9 +20,11 @@ import shutil
 from engine.concurrency.lock_manager import LockManager
 from engine.concurrency.transaction_manager import TransactionManager
 from engine.query.ast import (
+    CopyStatement,
     CreateIndexStatement,
     CreateTableStatement,
     DeleteStatement,
+    ExplainStatement,
     InsertStatement,
     SelectStatement,
     TransactionStatement,
@@ -40,8 +42,10 @@ from engine.storage.heap_file import HeapFile
 from engine.storage.sequential_file import SequentialFile
 
 
+# Raíz del proyecto: base de las rutas relativas de COPY.
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Carpeta de trabajo del modo demo (relativa a la raíz del proyecto, no al cwd).
-DEMO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "demo_data")
+DEMO_DIR = os.path.join(PROJECT_DIR, "demo_data")
 
 # Archivos que genera el motor y que el modo demo elimina al iniciar.
 _EXTENSIONES_MOTOR = (".db", ".main", ".aux", ".bpt", ".hash", ".idx", ".reorg", ".tmp")
@@ -52,10 +56,10 @@ class Resultado:
     """Resultado de una ejecucion SQL.
 
     Alguno de estos campos estara lleno:
-    - columnas + filas: para SELECT
-    - mensaje: para INSERT/DELETE/BEGIN/COMMIT
+    - columnas + filas: para SELECT y EXPLAIN (columna "QUERY PLAN")
+    - mensaje: para INSERT/DELETE/COPY/BEGIN/COMMIT
     - error: si algo fallo
-    - plan: el LogicalPlan para el panel de plan
+    - plan: líneas del QUERY PLAN (solo con EXPLAIN / EXPLAIN ANALYZE)
     """
 
     def __init__(self, columnas=None, filas=None, mensaje=None,
@@ -91,6 +95,7 @@ class Motor:
             storage=self.catalog,
             query_executor=self.sql_executor,
             planner=self.sql_executor.planner,
+            base_dir=PROJECT_DIR,
         )
         self._cerrado = False
         self._limpiar_directorio_demo()
@@ -198,10 +203,16 @@ class Motor:
             if isinstance(ast, CreateIndexStatement):
                 return Resultado(mensaje=self._crear_indice(ast))
 
-            # --- INSERT / DELETE ---
-            if isinstance(ast, (InsertStatement, DeleteStatement)):
+            # --- INSERT / DELETE / COPY ---
+            if isinstance(ast, (InsertStatement, DeleteStatement, CopyStatement)):
                 mensaje = self.statement_executor.execute(ast)
                 return Resultado(mensaje=mensaje)
+
+            # --- EXPLAIN [ANALYZE]: el plan se muestra solo cuando se pide ---
+            if isinstance(ast, ExplainStatement):
+                lineas = self.statement_executor.execute(ast)
+                return Resultado(columnas=["QUERY PLAN"], filas=[(linea,) for linea in lineas],
+                                 plan=lineas)
 
             # --- SELECT ---
             if isinstance(ast, SelectStatement):
@@ -216,9 +227,7 @@ class Motor:
                 else:
                     columnas = self._columnas_del_plan(plan)
                     filas = []
-
-                plan_explicado = self.sql_executor.optimizer.explain(plan)
-                return Resultado(columnas=columnas, filas=filas, plan=plan_explicado)
+                return Resultado(columnas=columnas, filas=filas)
 
             return Resultado(error=f"Sentencia no soportada: {type(ast).__name__}")
 
@@ -244,20 +253,29 @@ class Motor:
         if existentes:
             raise ValueError(f"Ya existe el archivo de la tabla {statement.name!r}: {existentes[0]}")
         indexes = None
+        primary_key = statement.primary_key
+        # SEQUENTIAL y BTREE se ordenan por la clave primaria (o por la primera columna).
+        key_field = primary_key or fields[0]
+        constraint = f"{statement.name}_pkey"
         if statement.storage_method == "sequential":
             storage = SequentialFile(
-                f"{path}.main", f"{path}.aux", schema, key_field=fields[0]
+                f"{path}.main", f"{path}.aux", schema, key_field=key_field
             )
         elif statement.storage_method == "btree":
-            # B+ agrupado: los registros viven en las hojas, ordenados por la
-            # primera columna (clave primaria). La clave queda como índice agrupado.
+            # B+ agrupado: los registros viven en las hojas ordenados por la clave,
+            # que es única y queda registrada como índice agrupado.
             storage = ClusteredBPlusFile(os.path.join(DEMO_DIR, f"{statement.name}.bpt"), schema,
-                                         key_field=fields[0])
-            indexes = {fields[0]: storage.primary_index_info(f"{statement.name}_pk")}
+                                         key_field=key_field)
+            indexes = {key_field: storage.primary_index_info(constraint)}
+            primary_key = key_field
         else:
             storage = HeapFile(path, schema)
+            if primary_key is not None:
+                # Índice implícito de la clave primaria, como en PostgreSQL.
+                index = ExtendibleHash()
+                indexes = {primary_key: IndexInfo(constraint, primary_key, index)}
         try:
-            self.catalog.register_table(statement.name, storage, indexes)
+            self.catalog.register_table(statement.name, storage, indexes, primary_key=primary_key)
         except Exception:
             storage.close()
             raise

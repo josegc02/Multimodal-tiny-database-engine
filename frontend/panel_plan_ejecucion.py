@@ -1,100 +1,55 @@
-"""Panel de plan de ejecucion: visualiza el acceso fisico elegido."""
+"""Panel de plan de ejecucion: muestra el QUERY PLAN de EXPLAIN / EXPLAIN ANALYZE."""
 
 import tkinter as tk
 from tkinter import ttk
 
+AYUDA = (
+    "El plan se muestra al ejecutar EXPLAIN, como en PostgreSQL:\n\n"
+    "  EXPLAIN SELECT * FROM cuentas WHERE id = 1;\n"
+    "  EXPLAIN ANALYZE SELECT * FROM cuentas ORDER BY saldo;\n\n"
+    "EXPLAIN muestra el plan con costos estimados sin ejecutar la consulta.\n"
+    "EXPLAIN ANALYZE la ejecuta y agrega tiempos y filas reales por operador."
+)
+
 
 class PanelPlanEjecucion(ttk.LabelFrame):
-    """Panel que muestra el plan en una tabla jerarquica.
+    """Texto monoespaciado con el árbol del plan (formato de psql).
 
     Uso:
-        panel.mostrar_plan_texto("Filter\\n  └── Scan (cuentas)")
-        panel.mostrar_plan_objeto(plan)
+        panel.mostrar_plan_texto("Seq Scan on cuentas  (cost=0.00..1.00 rows=3)")
         panel.limpiar()
     """
 
     def __init__(self, master):
         super().__init__(master, text="Plan de ejecucion")
         self._construir()
+        self.limpiar()
 
     def _construir(self):
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True, padx=4, pady=4)
 
-        columnas = ("operation", "storage", "access", "index", "cost", "details")
-        self.tabla = ttk.Treeview(frame, columns=columnas, show="tree headings",
-                                  selectmode="browse")
-        self.tabla.heading("#0", text="Node")
-        self.tabla.column("#0", width=145, minwidth=100, stretch=False)
-        encabezados = {
-            "operation": "Operation",
-            "storage": "Storage",
-            "access": "Access Method",
-            "index": "Index",
-            "cost": "Cost",
-            "details": "Details",
-        }
-        anchos = {"operation": 105, "storage": 120, "access": 145, "index": 145,
-                  "cost": 70, "details": 360}
-        for columna in columnas:
-            self.tabla.heading(columna, text=encabezados[columna])
-            self.tabla.column(columna, width=anchos[columna], minwidth=70,
-                              stretch=columna == "details")
-        self.tabla.pack(side="left", fill="both", expand=True)
-
-        scroll_y = ttk.Scrollbar(frame, orient="vertical",
-                                 command=self.tabla.yview)
+        self.texto = tk.Text(frame, wrap="none", font=("Consolas", 10), state="disabled")
+        scroll_y = ttk.Scrollbar(frame, orient="vertical", command=self.texto.yview)
+        scroll_x = ttk.Scrollbar(self, orient="horizontal", command=self.texto.xview)
+        self.texto.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        self.texto.pack(side="left", fill="both", expand=True)
         scroll_y.pack(side="right", fill="y")
-        self.tabla.configure(yscrollcommand=scroll_y.set)
-
-        scroll_x = ttk.Scrollbar(self, orient="horizontal",
-                                 command=self.tabla.xview)
         scroll_x.pack(side="bottom", fill="x", padx=4)
-        self.tabla.configure(xscrollcommand=scroll_x.set)
+        self.texto.tag_configure("ayuda", foreground="#666666")
+
+    def _escribir(self, contenido, tag=None):
+        self.texto.config(state="normal")
+        self.texto.delete("1.0", tk.END)
+        self.texto.insert("1.0", contenido, tag or ())
+        self.texto.config(state="disabled")
 
     def limpiar(self):
-        """Limpia la tabla del plan."""
-        self.tabla.delete(*self.tabla.get_children())
+        """Vuelve al texto de ayuda (las consultas normales no muestran plan)."""
+        self._escribir(AYUDA, "ayuda")
 
     def mostrar_plan_texto(self, texto):
-        """Muestra texto heredado como una fila de detalles."""
-        self.limpiar()
-        self.tabla.insert("", "end", text="Plan", values=("", "", "", "", "", texto))
-
-    def mostrar_plan_objeto(self, plan):
-        """Muestra un plan a partir de su representacion dict.
-
-        El plan debe tener un metodo to_dict() o ser un dict directo.
-        """
-        if hasattr(plan, "to_dict"):
-            data = plan.to_dict()
-        elif isinstance(plan, dict):
-            data = plan
-        else:
-            self._set_texto(str(plan))
-            return
-
-        self.limpiar()
-        self._insertar_nodo("", data)
-
-    def _insertar_nodo(self, parent, nodo):
-        """Inserta una fila y sus hijos conservando la jerarquia del plan."""
-        if not isinstance(nodo, dict):
-            self.tabla.insert(parent, "end", text=str(nodo), values=("", "", "", "", "", ""))
-            return
-
-        physical = nodo.get("physical") or {}
-        operation = nodo.get("operation", "?")
-        storage = nodo.get("storage", "")
-        access = physical.get("algorithm", "logical")
-        index = physical.get("index") or ""
-        cost = physical.get("estimated_io", "")
-        if isinstance(cost, float):
-            cost = f"{cost:.2f}"
-        details = physical.get("reason", "")
-        item = self.tabla.insert(
-            parent, "end", text=operation,
-            values=(operation, storage, access, index, cost, details), open=True,
-        )
-        for child in nodo.get("children", []):
-            self._insertar_nodo(item, child)
+        """Muestra el QUERY PLAN (una cadena o una lista de líneas)."""
+        if isinstance(texto, (list, tuple)):
+            texto = "\n".join(texto)
+        self._escribir("QUERY PLAN\n" + "-" * 60 + "\n" + texto)

@@ -72,8 +72,9 @@ class Aplicacion(tk.Tk):
         else:
             self.panel_resultados.mostrar_mensaje("Sin resultados")
 
+        # El plan solo aparece cuando se ejecuta EXPLAIN / EXPLAIN ANALYZE.
         if resultado.plan is not None:
-            self.panel_plan.mostrar_plan_objeto(resultado.plan)
+            self.panel_plan.mostrar_plan_texto(resultado.plan)
         else:
             self.panel_plan.limpiar()
         self.panel_archivos.refresh()
