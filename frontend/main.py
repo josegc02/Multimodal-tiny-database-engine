@@ -8,6 +8,7 @@ from frontend.panel_archivos import PanelArchivos
 from frontend.panel_consultas import PanelConsultas
 from frontend.panel_resultados import PanelResultados
 from frontend.panel_plan_ejecucion import PanelPlanEjecucion
+from frontend.panel_mapa import PanelMapa
 
 
 class Aplicacion(tk.Tk):
@@ -16,7 +17,7 @@ class Aplicacion(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("MiniGestor de Base de Datos Multimodal")
-        self.geometry("1200x800")
+        self.geometry("1200x900")
         self.minsize(900, 600)
 
         style = ttk.Style(self)
@@ -30,10 +31,13 @@ class Aplicacion(tk.Tk):
         self.panel_consultas = PanelConsultas(self, on_ejecutar=self._on_ejecutar, base_dir=PROJECT_DIR)
         self.panel_resultados = PanelResultados(self)
         self.panel_plan = PanelPlanEjecucion(self)
+        self.panel_mapa = PanelMapa(self)
+        self.panel_mapa.on_click = self._mapa_click
 
         # Layout: 2x2
         self.grid_rowconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=0)
         self.grid_columnconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
 
@@ -42,6 +46,7 @@ class Aplicacion(tk.Tk):
         self.panel_consultas.grid(row=0, column=1, sticky="nsew", padx=2, pady=2)
         self.panel_resultados.grid(row=1, column=0, sticky="nsew", padx=2, pady=2)
         self.panel_plan.grid(row=1, column=1, sticky="nsew", padx=2, pady=2)
+        self.panel_mapa.grid(row=2, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
 
         # Conectar paneles con el motor
         self.panel_archivos.set_catalog(self.motor.catalog)
@@ -54,6 +59,7 @@ class Aplicacion(tk.Tk):
     def _on_cerrar(self):
         """Cierra los storages antes de salir."""
         try:
+            self.panel_mapa.close()
             self.motor.cerrar()
         finally:
             self.destroy()
@@ -82,6 +88,11 @@ class Aplicacion(tk.Tk):
         else:
             self.panel_plan.limpiar()
         self.panel_archivos.refresh()
+        self.panel_mapa.actualizar(resultado.mapa)
+
+    def _mapa_click(self, lat, lon):
+        self.panel_consultas.editor.insert("insert", f"POINT({lat:.6f}, {lon:.6f})")
+        self.panel_consultas.editor.focus_set()
 
 
 def main():

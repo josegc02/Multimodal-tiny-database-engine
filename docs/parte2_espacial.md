@@ -1,9 +1,9 @@
 # Parte 2: Base de Datos Espacial
 
 Implementados: geometría, métricas, R-Tree y consultas espaciales hasta #23.
-El mapa (#24), datasets de entrega (#25), comparación con PostGIS (#26) y
-benchmarks (#27) siguen pendientes. Contratos, criterios verificados y ejemplos
-SQL en [consultas_espaciales.md](consultas_espaciales.md).
+El mapa Leaflet (#24) está integrado. Datasets de entrega (#25), comparación con
+PostGIS (#26) y benchmarks (#27) siguen pendientes. Contratos, criterios
+verificados y ejemplos SQL en [consultas_espaciales.md](consultas_espaciales.md).
 
 ## Qué pide el enunciado
 

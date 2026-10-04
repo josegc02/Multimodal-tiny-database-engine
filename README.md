@@ -1,6 +1,6 @@
 # Minigestor de Base de Datos Multimodal
 
-Proyecto de Base de Datos II (UTEC, 2026-2): un gestor de bases de datos construido desde cero. La **Parte 1 (base de datos relacional)** incluye almacenamiento en disco, índices, SQL, transacciones con control de concurrencia, interfaz gráfica de 4 paneles y comparación experimental. La **Parte 2** implementa geometría, métricas, R-Tree y SQL espacial hasta el issue #23; mapa, datasets y comparación con PostGIS siguen pendientes (#24–#27).
+Proyecto de Base de Datos II (UTEC, 2026-2): un gestor de bases de datos construido desde cero. La **Parte 1 (base de datos relacional)** incluye almacenamiento en disco, índices, SQL, transacciones con control de concurrencia, interfaz gráfica de 4 paneles y comparación experimental. La **Parte 2** implementa geometría, métricas, R-Tree, SQL espacial y un panel Leaflet local; datasets y comparación con PostGIS siguen pendientes (#25–#27).
 
 ---
 
