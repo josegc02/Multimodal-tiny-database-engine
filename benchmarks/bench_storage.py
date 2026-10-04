@@ -15,7 +15,7 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks._common import (NA, arguments, no_gc, plot, print_table, progress, series,
+from benchmarks._common import (NA, arguments, no_gc, plot, print_table, progress, read_summary, series,
                                 summarize, write_csv, write_metadata)
 from benchmarks.generate_datasets import SCHEMA, generate_records
 from engine.storage.heap_file import HeapFile
@@ -108,20 +108,7 @@ def benchmark(n, seed, repetition):
     return rows
 
 
-def main():
-    args = arguments(__doc__)
-    started = time.perf_counter()
-    runs = []
-    for n in args.sizes:
-        for rep in range(1, args.repetitions + 1):
-            with no_gc():
-                runs.extend(benchmark(n, args.seed, rep))
-    rows = summarize(runs, ("tecnica", "n_registros"), METRICS)
-    os.makedirs(args.output_dir, exist_ok=True)
-    write_csv(args.output_dir / "storage_comparison.csv", rows, FIELDS)
-    write_csv(args.output_dir / "storage_runs.csv", runs, ["tecnica", "n_registros"] + METRICS)
-
-    out = args.output_dir
+def plots(rows, out):
     ms = 1000 / QUERIES  # total de 100 consultas -> ms por consulta
     us = 1_000_000
     plot(out / "storage_tiempo_insercion.png", "Inserción: costo por registro (orden aleatorio)",
@@ -135,15 +122,39 @@ def main():
          [series(rows, "HeapFile", "tiempo_busqueda_seg", "HeapFile (scan) — O(N)", ms),
           series(rows, "SequentialFile", "tiempo_busqueda_seg", "SequentialFile tras la carga — O(log N)", ms),
           series(rows, "SequentialFile", "tiempo_busqueda_post_reorg_seg",
-                 "SequentialFile tras reorganizar — O(log N)", ms)])
-    plot(out / "storage_espacio_disco.png", "Espacio en disco después de insertar N registros", "Bytes",
-         [series(rows, "HeapFile", "espacio_disco_bytes"),
-          series(rows, "SequentialFile", "espacio_disco_bytes", "SequentialFile (main + aux)")],
-         note="El secuencial reserva 10% libre por página (fill_factor = 0,9) para absorber inserciones.")
+                 "SequentialFile tras reorganizar — O(log N)", ms)],
+         note="Heap: recorre páginas hasta la clave. Secuencial: búsqueda binaria en main; aux por índice en memoria.")
+    plot(out / "storage_espacio_disco.png", "Espacio en disco", "Bytes",
+         [series(rows, "HeapFile", "espacio_disco_bytes", "HeapFile tras la carga"),
+          series(rows, "SequentialFile", "espacio_disco_bytes", "SequentialFile tras la carga (main + aux)"),
+          series(rows, "SequentialFile", "espacio_post_reorg_bytes",
+                 "SequentialFile tras borrar 35% y reorganizar")],
+         note="El secuencial reserva 10% libre por página (fill_factor = 0,9). En 1K Heap y Secuencial coinciden.")
     plot(out / "storage_tiempo_reorganizacion.png",
          "Reorganización del secuencial tras borrar 35% de los registros", "Segundos",
          [series(rows, "SequentialFile", "tiempo_reorganizacion_seg", "SequentialFile.reorganize() — O(N)")],
          note="Merge de main (ordenado) con aux: lineal en el número de páginas. El Heap no se reorganiza.")
+
+
+def main():
+    args = arguments(__doc__)
+    if args.solo_graficas:
+        plots(read_summary(args.output_dir / "storage_comparison.csv"), args.output_dir)
+        print(f"Gráficas regeneradas en {args.output_dir.resolve()}")
+        return
+    started = time.perf_counter()
+    runs = []
+    for n in args.sizes:
+        for rep in range(1, args.repetitions + 1):
+            with no_gc():
+                runs.extend(benchmark(n, args.seed, rep))
+    rows = summarize(runs, ("tecnica", "n_registros"), METRICS)
+    os.makedirs(args.output_dir, exist_ok=True)
+    write_csv(args.output_dir / "storage_comparison.csv", rows, FIELDS)
+    write_csv(args.output_dir / "storage_runs.csv", runs, ["tecnica", "n_registros"] + METRICS)
+
+    out = args.output_dir
+    plots(rows, out)
 
     elapsed = time.perf_counter() - started
     write_metadata(args, "storage", elapsed, {

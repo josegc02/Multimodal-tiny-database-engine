@@ -120,15 +120,15 @@ Implementado en `engine/concurrency/` (`LockManager`, `TransactionManager`) y `e
   | `INSERT` | IX | X |
   | `DELETE` | SIX (lee la tabla para evaluar el WHERE) | X |
 
-  Matriz de compatibilidad (✔ = pueden coexistir):
+  Matriz de compatibilidad ("Sí" = pueden coexistir):
 
   | Pedido ↓ / Tenido → | IS | IX | S | SIX | X |
   | :---: | :---: | :---: | :---: | :---: | :---: |
-  | **IS** | ✔ | ✔ | ✔ | ✔ | ✘ |
-  | **IX** | ✔ | ✔ | ✘ | ✘ | ✘ |
-  | **S** | ✔ | ✘ | ✔ | ✘ | ✘ |
-  | **SIX** | ✔ | ✘ | ✘ | ✘ | ✘ |
-  | **X** | ✘ | ✘ | ✘ | ✘ | ✘ |
+  | **IS** | Sí | Sí | Sí | Sí | No |
+  | **IX** | Sí | Sí | No | No | No |
+  | **S** | Sí | No | Sí | No | No |
+  | **SIX** | Sí | No | No | No | No |
+  | **X** | No | No | No | No | No |
 
   Consecuencias: varias transacciones pueden insertar claves distintas en paralelo (IX es compatible con IX); un SELECT espera a que terminen las escrituras sin confirmar, por lo que **no hay lecturas sucias**; y una transacción que lee y luego escribe convierte su S en SIX (*upgrade*).
 
@@ -245,7 +245,7 @@ Promedio por consulta (100 claves existentes):
 | 10.000 | 417.792 B | 446.464 B (+6,9%) | 303.104 B |
 | 100.000 | 4.141.056 B | 4.395.008 B (+6,1%) | 2.994.176 B |
 
-Ambos crecen O(N). El Heap llena cada página al 100%; el secuencial reconstruye `main` con `fill_factor = 0,9` (10% libre por página para absorber inserciones) y mantiene algunas páginas en `aux`, de ahí un ~6% adicional. En 1.000 registros las inserciones posteriores a la última reorganización volvieron a llenar las páginas.
+La gráfica incluye el estado del secuencial tras borrar el 35% y reorganizar. Ambos crecen O(N). El Heap llena cada página al 100%; el secuencial reconstruye `main` con `fill_factor = 0,9` (10% libre por página para absorber inserciones) y mantiene algunas páginas en `aux`, de ahí un ~6% adicional. En 1.000 registros las inserciones posteriores a la última reorganización volvieron a llenar las páginas.
 
 #### Proceso de reorganización
 ![](../benchmarks/results/storage_tiempo_reorganizacion.png)
@@ -308,7 +308,7 @@ Promedio de 20 rangos `[k, k+100]` (k = 101 registros):
 | 10.000 | 1,203 ms | 3,898 ms |
 | 100.000 | 1,290 ms | 4,964 ms |
 
-El costo es **O(log N + k)**: con k fijo, las curvas son casi planas. En el **agrupado** los 101 registros están contiguos en 1 o 2 hojas; el **no agrupado** recorre sus hojas pero debe leer cada uno de los 101 RIDs en una página distinta del heap (los datos se insertaron en orden aleatorio), por eso el agrupado es **3,8 veces más rápido** en 100K. El **Extendible Hash no soporta rangos**: la función hash dispersa claves consecutivas en buckets distintos.
+El costo es **O(log N + k)**: con k fijo, las curvas son casi planas. La barra de error del agrupado en 10.000 es más ancha que en los otros tamaños porque sus tres corridas dieron 0,86, 1,60 y 1,16 ms; en las demás mediciones la diferencia entre corridas es menor a 0,3 ms. Se atribuye a interferencia del sistema operativo durante una corrida (la caché no se vacía entre mediciones); la media sigue en el mismo nivel que en 1.000 y 100.000. En el **agrupado** los 101 registros están contiguos en 1 o 2 hojas; el **no agrupado** recorre sus hojas pero debe leer cada uno de los 101 RIDs en una página distinta del heap (los datos se insertaron en orden aleatorio), por eso el agrupado es **3,8 veces más rápido** en 100K. El **Extendible Hash no soporta rangos**: la función hash dispersa claves consecutivas en buckets distintos.
 
 #### Ordenamiento (ORDER BY)
 ![](../benchmarks/results/indexes_tiempo_orden.png)
@@ -320,9 +320,8 @@ El costo es **O(log N + k)**: con k fijo, las curvas son casi planas. En el **ag
 
 #### Espacio en disco y memoria
 ![](../benchmarks/results/indexes_espacio_adicional.png)
-![](../benchmarks/results/indexes_espacio_total.png)
 
-Espacio **adicional** que requiere cada índice (el espacio total de tabla + índice menos el de un heap con los mismos N registros, que en 100K ocupa 4.141.056 B):
+Espacio **adicional en disco** que requiere cada índice (el espacio total de tabla + índice menos el de un heap con los mismos N registros, que en 100K ocupa 4.141.056 B):
 
 | N | B+ agrupado | B+ no agrupado | Extendible Hash (disco) | Extendible Hash (RAM) |
 | ---: | ---: | ---: | ---: | ---: |
@@ -333,7 +332,11 @@ Espacio **adicional** que requiere cada índice (el espacio total de tabla + ín
 * Los tres crecen **O(N)** (pendiente ≈ 1 en la gráfica).
 * **B+ agrupado**: un solo archivo de 1.585 nodos; ocupa 2,36 MB más que el heap porque sus hojas quedan llenas en promedio al ~69% tras los splits.
 * **B+ no agrupado**: 539 nodos de (clave, RID) además del heap.
-* **Extendible Hash**: snapshot JSON de 2,17 MB además del heap; en ejecución ocupa **23,8 MB de RAM** (directorio de 512 entradas, 512 buckets, factor de carga 0,77), porque vive completo en memoria.
+* **Extendible Hash**: snapshot JSON de 2,17 MB además del heap; en ejecución ocupa **23,8 MB de RAM** (directorio de 512 entradas, 512 buckets, factor de carga 0,77), porque vive completo en memoria. Esa RAM no aparece en la gráfica, que mide solo disco: el hash es el que menos disco adicional usa, pero no el más liviano en total.
+
+Como complemento, el espacio total (tabla + índice). Las tres curvas quedan casi superpuestas porque el heap domina el total; por eso la comparación entre índices se hace con el espacio adicional.
+
+![](../benchmarks/results/indexes_espacio_total.png)
 
 #### Inserciones y eliminaciones frecuentes
 ![](../benchmarks/results/indexes_tiempo_actualizaciones.png)
@@ -363,32 +366,32 @@ Espacio **adicional** que requiere cada índice (el espacio total de tabla + ín
 
 | Estructura | Medición | Teoría | Pendiente 1K→10K / 10K→100K | ¿Coincide? |
 | :--- | :--- | :---: | :---: | :---: |
-| HeapFile | Inserción (por registro) | O(1) | -0,13 / -0,01 | ✅ |
-| SequentialFile | Inserción (por registro) | O(log N) | -0,04 / +0,06 | ✅ |
-| HeapFile | Búsqueda por PK (por consulta) | O(N) | +0,90 / +0,97 | ✅ |
-| SequentialFile | Búsqueda por PK tras la carga | O(log N) | -0,15 / +0,15 | ✅ |
-| SequentialFile | Búsqueda por PK tras reorganizar | O(log N) | -0,07 / +0,12 | ✅ |
-| HeapFile | Espacio en disco | O(N) | +0,97 / +1,00 | ✅ |
-| SequentialFile | Espacio en disco | O(N) | +1,00 / +0,99 | ✅ |
-| SequentialFile | Reorganización | O(N) | +0,61 / +0,91 | ✅ |
-| B+ agrupado | Construcción (por inserción) | O(log N) | -0,02 / +0,03 | ✅ |
-| B+ no agrupado | Construcción (por inserción) | O(log N) | +0,03 / +0,10 | ✅ |
-| Extendible Hash | Construcción (por inserción) | O(1) | -0,03 / +0,18 | ✅ |
-| Extendible Hash | Snapshot JSON del hash | O(N) | +0,78 / +0,94 | ✅ |
-| B+ agrupado | Igualdad (por consulta) | O(log N) | +0,08 / +0,02 | ✅ |
-| B+ no agrupado | Igualdad (por consulta) | O(log N) | -0,03 / +0,14 | ✅ |
-| Extendible Hash | Igualdad (por consulta) | O(1) | -0,03 / +0,18 | ✅ |
-| B+ agrupado | Rango de 101 claves (por consulta) | O(log N + k) | +0,01 / +0,03 | ✅ |
-| B+ no agrupado | Rango de 101 claves (por consulta) | O(log N + k) | -0,01 / +0,10 | ✅ |
-| B+ agrupado | ORDER BY tabla completa | O(N) | +0,85 / +1,01 | ✅ |
-| B+ no agrupado | ORDER BY tabla completa | O(N) | +0,99 / +1,11 | ✅ |
-| Extendible Hash | ORDER BY (scan + external sort) | O(N log N) | +1,29 / +1,09 | ✅ |
-| B+ agrupado | Espacio adicional | O(N) | +0,93 / +0,98 | ✅ |
-| B+ no agrupado | Espacio adicional | O(N) | +0,97 / +0,92 | ✅ |
-| Extendible Hash | Espacio adicional | O(N) | +1,04 / +1,04 | ✅ |
-| B+ agrupado | Inserción/eliminación (por operación) | O(log N) | -0,04 / -0,02 | ✅ |
-| B+ no agrupado | Inserción/eliminación (por operación) | O(log N) | -0,06 / +0,15 | ✅ |
-| Extendible Hash | Inserción/eliminación (por operación) | O(1) | -0,29 / +0,15 | ✅ |
+| HeapFile | Inserción (por registro) | O(1) | -0,13 / -0,01 | Sí |
+| SequentialFile | Inserción (por registro) | O(log N) | -0,04 / +0,06 | Sí |
+| HeapFile | Búsqueda por PK (por consulta) | O(N) | +0,90 / +0,97 | Sí |
+| SequentialFile | Búsqueda por PK tras la carga | O(log N) | -0,15 / +0,15 | Sí |
+| SequentialFile | Búsqueda por PK tras reorganizar | O(log N) | -0,07 / +0,12 | Sí |
+| HeapFile | Espacio en disco | O(N) | +0,97 / +1,00 | Sí |
+| SequentialFile | Espacio en disco | O(N) | +1,00 / +0,99 | Sí |
+| SequentialFile | Reorganización | O(N) | +0,61 / +0,91 | Sí |
+| B+ agrupado | Construcción (por inserción) | O(log N) | -0,02 / +0,03 | Sí |
+| B+ no agrupado | Construcción (por inserción) | O(log N) | +0,03 / +0,10 | Sí |
+| Extendible Hash | Construcción (por inserción) | O(1) | -0,03 / +0,18 | Sí |
+| Extendible Hash | Snapshot JSON del hash | O(N) | +0,78 / +0,94 | Sí |
+| B+ agrupado | Igualdad (por consulta) | O(log N) | +0,08 / +0,02 | Sí |
+| B+ no agrupado | Igualdad (por consulta) | O(log N) | -0,03 / +0,14 | Sí |
+| Extendible Hash | Igualdad (por consulta) | O(1) | -0,03 / +0,18 | Sí |
+| B+ agrupado | Rango de 101 claves (por consulta) | O(log N + k) | +0,01 / +0,03 | Sí |
+| B+ no agrupado | Rango de 101 claves (por consulta) | O(log N + k) | -0,01 / +0,10 | Sí |
+| B+ agrupado | ORDER BY tabla completa | O(N) | +0,85 / +1,01 | Sí |
+| B+ no agrupado | ORDER BY tabla completa | O(N) | +0,99 / +1,11 | Sí |
+| Extendible Hash | ORDER BY (scan + external sort) | O(N log N) | +1,29 / +1,09 | Sí |
+| B+ agrupado | Espacio adicional | O(N) | +0,93 / +0,98 | Sí |
+| B+ no agrupado | Espacio adicional | O(N) | +0,97 / +0,92 | Sí |
+| Extendible Hash | Espacio adicional | O(N) | +1,04 / +1,04 | Sí |
+| B+ agrupado | Inserción/eliminación (por operación) | O(log N) | -0,04 / -0,02 | Sí |
+| B+ no agrupado | Inserción/eliminación (por operación) | O(log N) | -0,06 / +0,15 | Sí |
+| Extendible Hash | Inserción/eliminación (por operación) | O(1) | -0,29 / +0,15 | Sí |
 
 Las **26 curvas** se comportan como predice la teoría. Los casos que merecen comentario:
 * **Reorganización (0,61 entre 1K y 10K)**: es O(N) más un costo fijo de crear y sincronizar el archivo nuevo; con N grande la pendiente es 0,91.

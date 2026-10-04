@@ -29,6 +29,14 @@ Salidas por suite (`storage_*` e `indexes_*`):
   operación** (total ÷ cantidad de operaciones): una curva plana es O(1) u
   O(log N) y una pendiente 1 es O(N). Los CSV guardan los totales.
 
+Para redibujar las gráficas desde los `*_comparison.csv` existentes, sin volver
+a medir:
+
+```bash
+.venv/bin/python benchmarks/bench_storage.py --solo-graficas
+.venv/bin/python benchmarks/bench_indexes.py --solo-graficas
+```
+
 Para contrastar la complejidad teórica con la medida:
 
 ```bash

@@ -25,6 +25,8 @@ def arguments(description):
     parser.add_argument("--repetitions", type=int, default=3,
                         help="Corridas por tamaño; el CSV guarda media y desviación estándar")
     parser.add_argument("--output-dir", type=Path, default=RESULTS)
+    parser.add_argument("--solo-graficas", action="store_true",
+                        help="No mide: redibuja las PNG desde el *_comparison.csv existente")
     args = parser.parse_args()
     if any(n < 200 for n in args.sizes) or len(set(args.sizes)) != len(args.sizes):
         parser.error("Los tamaños deben ser distintos y >= 200 (se consultan 100 claves existentes)")
@@ -76,6 +78,19 @@ def summarize(runs, key_fields, metrics):
     return summary
 
 
+def read_summary(path):
+    """Lee un *_comparison.csv y devuelve números como números (NA se conserva)."""
+    rows = []
+    with path.open(encoding="utf-8") as stream:
+        for row in csv.DictReader(stream):
+            for key, value in row.items():
+                if key == "tecnica" or value == NA:
+                    continue
+                row[key] = int(value) if key in ("n_registros", "repeticiones") else float(value)
+            rows.append(row)
+    return rows
+
+
 def write_csv(path, rows, fields):
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
@@ -112,9 +127,14 @@ def plot(path, title, ylabel, all_series, note=None):
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
             fig, ax = plt.subplots(figsize=(9, 5.5))
-            for label, xs, ys, errors in all_series:
+            # Marcador y trazo distintos por serie: si dos series valen lo mismo
+            # en un punto, ambas siguen siendo visibles.
+            styles = [("o", "-", 7), ("s", "--", 9), ("^", ":", 9), ("D", "-.", 7)]
+            for i, (label, xs, ys, errors) in enumerate(all_series):
                 if xs:
-                    ax.errorbar(xs, ys, yerr=errors, marker="o", capsize=4, label=label)
+                    marker, line, size = styles[i % len(styles)]
+                    ax.errorbar(xs, ys, yerr=errors, marker=marker, linestyle=line, markersize=size,
+                                markerfacecolor="none" if i % 2 else None, capsize=4, label=label)
             ax.set(xscale="log", yscale="log", title=title,
                    xlabel="Registros (N, escala logarítmica)", ylabel=ylabel + " (escala logarítmica)")
             if note:

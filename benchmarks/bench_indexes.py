@@ -18,7 +18,7 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks._common import (NA, arguments, no_gc, plot, print_table, progress, series,
+from benchmarks._common import (NA, arguments, no_gc, plot, print_table, progress, read_summary, series,
                                 summarize, write_csv, write_metadata)
 from benchmarks.generate_datasets import SCHEMA, generate_records
 from engine.indexes import BPlusTreeClustered, BPlusTreeUnclustered, ExtendibleHash
@@ -204,8 +204,55 @@ def benchmark(n, seed, repetition):
     return rows, structures
 
 
+def plots(rows, out):
+    us = 1_000_000
+    all_three = lambda metric, scale=1.0, per=None: [series(rows, t, metric, scale=scale, per=per) for t in TECHNIQUES]
+    plot(out / "indexes_tiempo_construccion.png", "Construcción del índice: costo por inserción",
+         "Microsegundos por inserción",
+         [series(rows, "B+ agrupado", "tiempo_construccion_seg", "B+ agrupado — O(log N)", us, per="n"),
+          series(rows, "B+ no agrupado", "tiempo_construccion_seg", "B+ no agrupado — O(log N)", us, per="n"),
+          series(rows, "Extendible Hash", "tiempo_construccion_seg", "Extendible Hash — O(1) amortizado", us, per="n")],
+         note="Tiempo total de N inserciones dividido por N. El snapshot del hash se reporta aparte (tiempo_snapshot_seg).")
+    plot(out / "indexes_tiempo_igualdad.png", "Búsqueda por igualdad (promedio de 100, registro completo)",
+         "Milisegundos por consulta",
+         [series(rows, "B+ agrupado", "tiempo_igualdad_seg", "B+ agrupado — O(log N)", 1000, per=EQUALITY_QUERIES),
+          series(rows, "B+ no agrupado", "tiempo_igualdad_seg", "B+ no agrupado — O(log N) + 1 lectura", 1000,
+                 per=EQUALITY_QUERIES),
+          series(rows, "Extendible Hash", "tiempo_igualdad_seg", "Extendible Hash — O(1)", 1000, per=EQUALITY_QUERIES)],
+         note="El agrupado lee el registro de su hoja; el no agrupado y el hash leen cada RID del heap.")
+    plot(out / "indexes_tiempo_rango.png", "Búsqueda por rango de 101 claves (promedio de 20, registros completos)",
+         "Milisegundos por consulta",
+         [series(rows, "B+ agrupado", "tiempo_rango_seg", "B+ agrupado — O(log N + k)", 1000, per=RANGE_QUERIES),
+          series(rows, "B+ no agrupado", "tiempo_rango_seg", "B+ no agrupado — O(log N + k lecturas)", 1000,
+                 per=RANGE_QUERIES)],
+         note="k = 101 filas por rango. Extendible Hash no soporta rangos. El no agrupado lee cada RID del heap.")
+    plot(out / "indexes_tiempo_orden.png", "Ordenamiento: ORDER BY id sobre toda la tabla", "Segundos",
+         [series(rows, "B+ agrupado", "tiempo_orden_seg", "B+ agrupado (hojas) — O(N)"),
+          series(rows, "B+ no agrupado", "tiempo_orden_seg", "B+ no agrupado (hojas + RIDs) — O(N)"),
+          series(rows, "Extendible Hash", "tiempo_orden_seg", "Hash: no aplica, scan + external sort — O(N log N)")],
+         note="Tiempo total. B+: recorrido de hojas O(N). Hash: scan + external sort O(N log N).")
+    plot(out / "indexes_espacio_total.png", "Espacio total en disco: tabla + índice (complementaria)", "Bytes",
+         all_three("espacio_total_bytes"),
+         note="El heap domina el total; la diferencia entre índices se ve en la gráfica de espacio adicional.")
+    plot(out / "indexes_espacio_adicional.png", "Espacio adicional en disco requerido por el índice", "Bytes",
+         all_three("espacio_adicional_bytes"),
+         note="Total menos un heap con los mismos N registros. No incluye la RAM del hash (ver memoria_estimada_bytes).")
+    plot(out / "indexes_tiempo_actualizaciones.png", "Inserciones y eliminaciones frecuentes: costo por operación",
+         "Microsegundos por operación",
+         [series(rows, "B+ agrupado", "tiempo_actualizaciones_seg", "B+ agrupado — O(log N)", us, per=2 * UPDATE_PAIRS),
+          series(rows, "B+ no agrupado", "tiempo_actualizaciones_seg", "B+ no agrupado — O(log N)", us,
+                 per=2 * UPDATE_PAIRS),
+          series(rows, "Extendible Hash", "tiempo_actualizaciones_seg", "Extendible Hash — O(1)", us,
+                 per=2 * UPDATE_PAIRS)],
+         note="500 inserciones + 500 eliminaciones en tabla e índice. Sin el snapshot del hash.")
+
+
 def main():
     args = arguments(__doc__)
+    if args.solo_graficas:
+        plots(read_summary(args.output_dir / "indexes_comparison.csv"), args.output_dir)
+        print(f"Gráficas regeneradas en {args.output_dir.resolve()}")
+        return
     started = time.perf_counter()
     runs, structures = [], []
     for n in args.sizes:
@@ -221,45 +268,7 @@ def main():
     write_csv(args.output_dir / "indexes_runs.csv", runs, ["tecnica", "n_registros"] + METRICS)
 
     out = args.output_dir
-    us = 1_000_000
-    all_three = lambda metric, scale=1.0, per=None: [series(rows, t, metric, scale=scale, per=per) for t in TECHNIQUES]
-    plot(out / "indexes_tiempo_construccion.png", "Construcción del índice: costo por inserción",
-         "Microsegundos por inserción",
-         [series(rows, "B+ agrupado", "tiempo_construccion_seg", "B+ agrupado — O(log N)", us, per="n"),
-          series(rows, "B+ no agrupado", "tiempo_construccion_seg", "B+ no agrupado — O(log N)", us, per="n"),
-          series(rows, "Extendible Hash", "tiempo_construccion_seg", "Extendible Hash — O(1) amortizado", us, per="n")],
-         note="Tiempo total de N inserciones dividido por N. El snapshot del hash se reporta aparte (tiempo_snapshot_seg).")
-    plot(out / "indexes_tiempo_igualdad.png", "Búsqueda por igualdad (promedio de 100, registro completo)",
-         "Milisegundos por consulta",
-         [series(rows, "B+ agrupado", "tiempo_igualdad_seg", "B+ agrupado — O(log N)", 1000, per=EQUALITY_QUERIES),
-          series(rows, "B+ no agrupado", "tiempo_igualdad_seg", "B+ no agrupado — O(log N) + 1 lectura", 1000,
-                 per=EQUALITY_QUERIES),
-          series(rows, "Extendible Hash", "tiempo_igualdad_seg", "Extendible Hash — O(1)", 1000, per=EQUALITY_QUERIES)])
-    plot(out / "indexes_tiempo_rango.png", "Búsqueda por rango de 101 claves (promedio de 20, registros completos)",
-         "Milisegundos por consulta",
-         [series(rows, "B+ agrupado", "tiempo_rango_seg", "B+ agrupado — O(log N + k)", 1000, per=RANGE_QUERIES),
-          series(rows, "B+ no agrupado", "tiempo_rango_seg", "B+ no agrupado — O(log N + k lecturas)", 1000,
-                 per=RANGE_QUERIES)],
-         note="k = 101 filas por rango. Extendible Hash no soporta rangos. El no agrupado lee cada RID del heap.")
-    plot(out / "indexes_tiempo_orden.png", "Ordenamiento: ORDER BY id sobre toda la tabla", "Segundos",
-         [series(rows, "B+ agrupado", "tiempo_orden_seg", "B+ agrupado (hojas) — O(N)"),
-          series(rows, "B+ no agrupado", "tiempo_orden_seg", "B+ no agrupado (hojas + RIDs) — O(N)"),
-          series(rows, "Extendible Hash", "tiempo_orden_seg", "Hash: no aplica, scan + external sort — O(N log N)")],
-         note="Tiempo total: recorrer N registros es O(N) (pendiente 1 en log-log).")
-    plot(out / "indexes_espacio_total.png", "Espacio en disco: tabla + índice", "Bytes",
-         all_three("espacio_total_bytes"),
-         note="Agrupado: un solo archivo con los datos en las hojas. No agrupado y hash: heap + archivo del índice.")
-    plot(out / "indexes_espacio_adicional.png", "Espacio adicional requerido por el índice", "Bytes",
-         all_three("espacio_adicional_bytes"),
-         note="Espacio total menos el de un heap con los mismos N registros. Crece O(N) en las tres estructuras.")
-    plot(out / "indexes_tiempo_actualizaciones.png", "Inserciones y eliminaciones frecuentes: costo por operación",
-         "Microsegundos por operación",
-         [series(rows, "B+ agrupado", "tiempo_actualizaciones_seg", "B+ agrupado — O(log N)", us, per=2 * UPDATE_PAIRS),
-          series(rows, "B+ no agrupado", "tiempo_actualizaciones_seg", "B+ no agrupado — O(log N)", us,
-                 per=2 * UPDATE_PAIRS),
-          series(rows, "Extendible Hash", "tiempo_actualizaciones_seg", "Extendible Hash — O(1)", us,
-                 per=2 * UPDATE_PAIRS)],
-         note="500 inserciones + 500 eliminaciones en tabla e índice. Sin el snapshot del hash.")
+    plots(rows, out)
     for stale in ("indexes_espacio_disco.png", "indexes_memoria.png"):
         (out / stale).unlink(missing_ok=True)
 

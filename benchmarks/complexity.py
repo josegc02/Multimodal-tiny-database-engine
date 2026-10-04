@@ -99,7 +99,7 @@ def table(results: Path):
         match = low <= measured[-1] <= high
         ok &= match
         text = " / ".join(f"{s:+.2f}".replace(".", ",") for s in measured)
-        lines.append(f"| {technique} | {label} | {expected} | {text} | {'✅' if match else '❌'} |")
+        lines.append(f"| {technique} | {label} | {expected} | {text} | {'Sí' if match else 'No'} |")
     return "\n".join(lines), ok
 
 
