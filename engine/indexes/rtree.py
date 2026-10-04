@@ -13,12 +13,13 @@ y se reutilizan.
 from __future__ import annotations
 
 import math
+import heapq
 import os
 import struct
 from dataclasses import dataclass, field
 from typing import Iterable, Iterator, List, Optional, Tuple
 
-from engine.spatial.distance import Metric, distance, radius_to_mbr
+from engine.spatial.distance import Metric, distance, mindist, radius_to_mbr
 from engine.spatial.geometry import MBR, Point, Polygon
 from engine.storage.record import RID
 
@@ -448,7 +449,50 @@ class RTree:
         return results
 
     def knn(self, center: Point, k: int, metric: Metric = Metric.HAVERSINE) -> List[Tuple[Point, RID, float]]:
-        raise NotImplementedError("Pendiente: issue #21")
+        """Best-first con MINDIST; empates por RID, sin descartar nodos empatados.
+
+        La frontera contiene nodos y el heap de respuestas a lo sumo k puntos.
+        El margen de poda (un micrómetro) protege las cotas del redondeo flotante;
+        el orden final usa las distancias exactas, sin tolerancia.
+        """
+        if not isinstance(center, Point):
+            raise TypeError("El centro debe ser un Point")
+        if type(k) is not int or k < 0:
+            raise ValueError("k debe ser un entero no negativo")
+        distance(center, center, metric)  # valida incluso en un árbol vacío
+        stats = self.last_stats = RTreeStats()
+        if not k or not self.size:
+            return []
+        frontier, best = [(0.0, self.root)], []
+        serial = 0
+        while frontier:
+            bound, page = heapq.heappop(frontier)
+            if len(best) == k and bound > -best[0][0] + 1e-6:
+                break
+            node = self._read_node(page)
+            stats.nodes_visited += 1
+            if node.is_leaf:
+                stats.leaves_visited += 1
+                for box, rid_key in node.entries:
+                    stats.candidates += 1
+                    stats.refined += 1
+                    point, rid = Point(box[0], box[1]), _rid(rid_key)
+                    meters = distance(center, point, metric)
+                    serial += 1
+                    candidate = (-meters, tuple(-n for n in rid_key), serial, point, rid)
+                    if len(best) < k:
+                        heapq.heappush(best, candidate)
+                    elif candidate[:2] > best[0][:2]:
+                        heapq.heapreplace(best, candidate)
+            else:
+                for box, child in node.entries:
+                    lower = mindist(center, MBR(*box), metric)
+                    if len(best) < k or lower <= -best[0][0] + 1e-6:
+                        heapq.heappush(frontier, (lower, child))
+        results = [(point, rid, -negative) for negative, _, _, point, rid in best]
+        results.sort(key=lambda row: (row[2], _rid_key(row[1])))
+        stats.results = len(results)
+        return results
 
     def within_polygon(self, polygon: Polygon) -> List[Tuple[Point, RID]]:
         raise NotImplementedError("Pendiente: issue #22")
