@@ -261,6 +261,9 @@ class Motor:
             storage = SequentialFile(
                 f"{path}.main", f"{path}.aux", schema, key_field=key_field
             )
+            # La clave de ordenamiento queda como índice: búsqueda binaria del archivo.
+            nombre_clave = constraint if primary_key else f"{statement.name}_{key_field}_seq"
+            indexes = {key_field: storage.primary_index_info(nombre_clave)}
         elif statement.storage_method == "btree":
             # B+ agrupado: los registros viven en las hojas ordenados por la clave,
             # que es única y queda registrada como índice agrupado.

@@ -317,6 +317,22 @@ class TestSequentialFileAutoReorganize(unittest.TestCase):
         self.assertEqual([r["id"] for _, r in self.sf.range_search(40, 120)], list(range(40, 121)))
         self.assertEqual(self.sf.range_search(5, 4), [])
 
+    def test_range_search_open_and_exclusive_bounds(self):
+        self._insert_shuffled(100)
+        ids = lambda **kw: [r["id"] for _, r in self.sf.range_search(**kw)]
+        self.assertEqual(ids(), list(range(100)))
+        self.assertEqual(ids(lower=95), list(range(95, 100)))
+        self.assertEqual(ids(upper=3), [0, 1, 2, 3])
+        self.assertEqual(ids(lower=10, upper=14, include_lower=False, include_upper=False), [11, 12, 13])
+
+    def test_key_index_view_uses_current_rids(self):
+        index = self.sf.primary_index_info("t_key").index
+        self._insert_shuffled(200)
+        self.sf.reorganize()
+        self.assertEqual([self.sf.get(rid)["id"] for rid in index.search(150)], [150])
+        self.assertEqual([self.sf.get(rid)["id"] for rid in index.range_search(10, 12)], [10, 11, 12])
+        self.assertEqual([self.sf.get(rid)["id"] for rid in index.iter_ordered(reverse=True)][:2], [199, 198])
+
     def test_duplicate_keys_are_all_returned(self):
         for i in range(20):
             self.sf.insert({"id": 7, "name": f"dup{i}", "price": float(i)})

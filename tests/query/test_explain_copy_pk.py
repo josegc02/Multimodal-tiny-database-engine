@@ -174,6 +174,15 @@ class TestExplain(MotorTestCase):
         self.assertTrue(re.match(r"^Planning Time: [0-9.]+ ms$", plan[-2]))
         self.assertTrue(re.match(r"^Execution Time: [0-9.]+ ms$", plan[-1]))
 
+    def test_sequential_tables_use_binary_search(self):
+        self.run_sql("CREATE TABLE seq (id INT PRIMARY KEY, v INT) USING SEQUENTIAL")
+        self.run_sql("INSERT INTO seq VALUES " + ", ".join(f"({i}, {i % 7})" for i in range(2000, 0, -1)))
+        plan = self.plan("EXPLAIN SELECT * FROM seq WHERE id BETWEEN 10 AND 12")
+        self.assertTrue(plan[0].startswith("Index Scan using seq_pkey on seq"))
+        self.assertEqual(plan[1], "  Index Cond: ((id >= 10) AND (id <= 12))")
+        self.assertEqual(self.run_sql("SELECT id FROM seq WHERE id BETWEEN 10 AND 12").filas, [(10,), (11,), (12,)])
+        self.assertTrue(self.plan("EXPLAIN SELECT * FROM seq WHERE v = 3")[0].startswith("Seq Scan on seq"))
+
     def test_clustered_order_and_range_use_the_index(self):
         plan = self.plan("EXPLAIN ANALYZE SELECT cid FROM carreras ORDER BY cid DESC")
         self.assertTrue(plan[0].startswith("Index Scan Backward using carreras_pkey on carreras"))

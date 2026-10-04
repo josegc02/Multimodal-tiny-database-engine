@@ -309,12 +309,17 @@ class SequentialFile:
         return False
 
     def _iter_main_from(self, key: Any) -> Iterator[Tuple[RID, Any, bytes]]:
-        """(rid, clave, datos) activos de main en orden, desde el lower bound de key."""
-        page_id = self._locate_page_for_key(key)
-        if page_id < 0:
+        """(rid, clave, datos) activos de main en orden, desde el lower bound de key
+        (desde el principio si key es None)."""
+        if self.num_pages_main == 0:
             return
-        page = self._read_page_main(page_id)
-        slot_id = self._find_insert_position_in_page(page, key)
+        if key is None:
+            page_id, slot_id = 0, 0
+            page = self._read_page_main(0)
+        else:
+            page_id = self._locate_page_for_key(key)
+            page = self._read_page_main(page_id)
+            slot_id = self._find_insert_position_in_page(page, key)
         while page_id < self.num_pages_main:
             if slot_id == 0 and page.page_id != page_id:
                 page = self._read_page_main(page_id)
@@ -346,19 +351,34 @@ class SequentialFile:
         return results
 
     @latched
-    def range_search(self, lower: Any, upper: Any) -> List[Tuple[RID, Dict[str, Any]]]:
-        """Registros con lower <= clave <= upper, ordenados por clave."""
-        if lower > upper:
+    def range_search(self, lower: Any = None, upper: Any = None, *, include_lower: bool = True,
+                     include_upper: bool = True) -> List[Tuple[RID, Dict[str, Any]]]:
+        """Registros con lower <(=) clave <(=) upper ordenados por clave; None = sin límite."""
+        if lower is not None and upper is not None and lower > upper:
             return []
+
+        def above_lower(key):
+            return lower is None or key > lower or (include_lower and key == lower)
+
+        def below_upper(key):
+            return upper is None or key < upper or (include_upper and key == upper)
+
         main = []
         for rid, key, data in self._iter_main_from(lower):
-            if key > upper:
+            if not below_upper(key):
                 break
-            main.append((key, rid, data))
+            if above_lower(key):
+                main.append((key, rid, data))
         aux = sorted(((self._record_key(data), rid, data) for rid, data in self._iter_aux()
-                      if lower <= self._record_key(data) <= upper), key=itemgetter(0))
+                      if above_lower(self._record_key(data)) and below_upper(self._record_key(data))),
+                     key=itemgetter(0))
         return [(rid, self.schema.deserialize(data))
                 for _, rid, data in heapq.merge(main, aux, key=itemgetter(0))]
+
+    def primary_index_info(self, name: str):
+        """Metadatos para que el optimizador use la búsqueda binaria del archivo."""
+        from engine.query.planner import IndexInfo
+        return IndexInfo(name, self.key_field, SequentialKeyIndex(self), ordered=True, clustered=True)
 
     def scan(self) -> Generator[Tuple[RID, Dict[str, Any]], None, None]:
         """Recorre activos de main y luego aux, con sus RIDs físicos actuales.
@@ -469,3 +489,39 @@ class SequentialFile:
 
     def __exit__(self, exc_type, exc, tb):
         self.close()
+
+
+class SequentialKeyIndex:
+    """Vista de índice sobre la clave de ordenamiento del archivo secuencial.
+
+    No ocupa espacio: igualdad y rangos usan la búsqueda binaria sobre main (más
+    el aux acotado) y el orden se obtiene con un merge de main y aux. Los RIDs se
+    calculan en cada consulta, así que no envejecen cuando el archivo se
+    reorganiza.
+    """
+
+    self_maintained = True  # se actualiza junto con la tabla; nunca se reconstruye
+
+    def __init__(self, storage: SequentialFile):
+        self.storage = storage
+
+    def search(self, key) -> List[RID]:
+        try:
+            return [rid for rid, _ in self.storage.search_by_key(key)]
+        except TypeError:  # tipo incomparable con las claves
+            return []
+
+    def range_search(self, lower=None, upper=None, *, include_lower=True, include_upper=True) -> List[RID]:
+        return [rid for rid, _ in self.storage.range_search(
+            lower, upper, include_lower=include_lower, include_upper=include_upper)]
+
+    def iter_ordered(self, reverse: bool = False):
+        rids = [rid for rid, _ in self.storage.range_search()]
+        return reversed(rids) if reverse else iter(rids)
+
+    def bulk_load_from_storage(self, storage, key_field, *, replace=True) -> int:
+        return 0
+
+    def close(self) -> None:
+        pass
+
