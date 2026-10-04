@@ -34,6 +34,8 @@ from engine.query.planner import IndexInfo
 from engine.query.sql_executor import SQLExecutor
 from engine.query.statement_executor import StatementExecutor
 from engine.query.parser import parse_script
+from engine.query import ast as query_ast
+from engine.spatial.geometry import Point, Polygon
 from engine.indexes import ExtendibleHash
 from engine.indexes.rtree import RTree
 from engine.indexes.bplus_tree import CHILD_SIZE, NODE_HEADER_SIZE
@@ -64,7 +66,7 @@ class Resultado:
     """
 
     def __init__(self, columnas=None, filas=None, mensaje=None,
-                 plan=None, error=None, plan_nodos=None, tiempos=(None, None)):
+                 plan=None, error=None, plan_nodos=None, tiempos=(None, None), mapa=None):
         self.columnas = columnas or []
         self.filas = filas or []
         self.mensaje = mensaje
@@ -72,6 +74,7 @@ class Resultado:
         self.plan_nodos = plan_nodos  # árbol del plan como datos (panel de análisis)
         self.tiempos = tiempos        # (planificación, ejecución) en segundos, con ANALYZE
         self.error = error
+        self.mapa = mapa
 
     @property
     def tiene_tabla(self):
@@ -231,12 +234,43 @@ class Motor:
                 else:
                     columnas = self._columnas_del_plan(plan)
                     filas = []
-                return Resultado(columnas=columnas, filas=filas)
+                return Resultado(columnas=columnas, filas=filas, mapa=self._mapa(ast, filas_dict))
 
             return Resultado(error=f"Sentencia no soportada: {type(ast).__name__}")
 
         except Exception as e:
             return Resultado(error=str(e))
+
+    def _mapa(self, statement, rows):
+        binding = self.catalog.table(statement.from_table.name)
+        identifier = binding.primary_key or binding.storage.schema.fields[0]
+        points = []
+        for _, record in binding.storage.scan():
+            for name, kind in zip(binding.storage.schema.fields, binding.storage.schema.types):
+                if kind == "point":
+                    point = record[name]
+                    points.append((record[identifier], point.lat, point.lon, f"{record[identifier]}: {name}"))
+                    break
+        ids = {value for row in rows for key, value in row.items() if key == identifier or key.endswith(identifier)}
+        circle, polygon = None, None
+        def walk(value):
+            nonlocal circle, polygon
+            if isinstance(value, query_ast.SpatialCall):
+                literals = [a.value for a in value.arguments if isinstance(a, query_ast.Literal)]
+                if value.function == "DISTANCIA":
+                    point = next((x for x in literals if isinstance(x, Point)), None)
+                    if point: circle = {"lat": point.lat, "lon": point.lon, "radius": 0}
+                if value.function == "WITHIN":
+                    shape = next((x for x in literals if isinstance(x, Polygon)), None)
+                    if shape: polygon = [(p.lat, p.lon) for p in shape.vertices]
+            elif isinstance(value, query_ast.BinaryOp):
+                walk(value.left); walk(value.right)
+        walk(statement.where)
+        if isinstance(statement.where, query_ast.BinaryOp):
+            for call, radius in ((statement.where.left, statement.where.right), (statement.where.right, statement.where.left)):
+                if isinstance(call, query_ast.SpatialCall) and call.function == "DISTANCIA" and isinstance(radius, query_ast.Literal) and type(radius.value) in (int, float) and circle:
+                    circle["radius"] = radius.value
+        return {"points": points, "result_ids": sorted(ids), "circle": circle, "polygon": polygon}
 
     def _crear_tabla(self, statement: CreateTableStatement) -> str:
         """Crea un HeapFile y lo incorpora al catálogo de la sesión."""
