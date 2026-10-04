@@ -122,3 +122,24 @@ docker compose -f postgis/docker-compose.yml down -v    # detener y borrar los d
 - `ST_DWithin`, para el rango;
 - `ORDER BY <-> LIMIT k`, para k-NN;
 - `ST_Within`, para la intersección con polígonos.
+
+## Comparación experimental
+
+El benchmark de la Parte 2 mide construcción, rango (1/5/10 km), k-NN
+(`k=10/50/100`), espacio de índice y memoria Python para scan secuencial,
+R-Tree y GiST. Usa el mismo dataset y verifica fuera del tiempo medido que los
+IDs de rango y k-NN coincidan con el scan. La corrida completa requiere el
+contenedor y `requirements-postgis.txt`; sin ellos GiST se registra como `NA`.
+
+```bash
+python -m pip install -r requirements.txt
+python -m benchmarks.bench_spatial --sizes 200 --queries 5 --repetitions 1 --sin-postgis
+# Corrida de entrega (PostGIS iniciado):
+python -m pip install -r requirements-postgis.txt
+python -m benchmarks.bench_spatial
+```
+
+Las salidas `spatial_runs.csv`, `spatial_comparison.csv`, `spatial_metadata.json`
+y las PNG se escriben en `benchmarks/results/` (o en `--output-dir`). Se esperan
+consultas selectivas más rápidas con R-Tree/GiST al crecer N; el scan conserva
+costo lineal y puede competir cuando el radio devuelve una gran parte de la tabla.

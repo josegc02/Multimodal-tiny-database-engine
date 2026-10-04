@@ -130,11 +130,15 @@ def plot(path, title, ylabel, all_series, note=None):
 
 
 def write_metadata(args, prefix, elapsed, details):
-    import matplotlib
+    try:
+        import matplotlib
+        matplotlib_version = matplotlib.__version__
+    except ModuleNotFoundError:
+        matplotlib_version = NA
     metadata = {"timestamp_utc": datetime.now(timezone.utc).isoformat(),
                 "python": sys.version, "platform": platform.platform(), "machine": platform.machine(),
                 "seed": args.seed, "sizes": args.sizes, "repetitions": args.repetitions,
-                "elapsed_seconds": elapsed, "matplotlib": matplotlib.__version__, **details}
+                "elapsed_seconds": elapsed, "matplotlib": matplotlib_version, **details}
     with (args.output_dir / f"{prefix}_metadata.json").open("w", encoding="utf-8") as stream:
         json.dump(metadata, stream, indent=2, ensure_ascii=False)
         stream.write("\n")

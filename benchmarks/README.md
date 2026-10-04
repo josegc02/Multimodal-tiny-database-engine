@@ -10,6 +10,14 @@ python -m venv .venv
 ```
 
 También admiten `python -m benchmarks.bench_storage` / `benchmarks.bench_indexes`.
+La comparación espacial se ejecuta de forma análoga:
+
+```bash
+.venv/bin/python -m benchmarks.bench_spatial --sin-postgis
+```
+
+Con PostGIS iniciado desde `postgis/docker-compose.yml`, instalar también
+`requirements-postgis.txt` y omitir `--sin-postgis` para medir GiST.
 Por defecto usan **1.000, 10.000 y 100.000 registros**, **3 repeticiones** por
 tamaño, semilla **42**, y escriben en `benchmarks/results/`. Para validar con
 menos datos sin pisar la corrida oficial:
