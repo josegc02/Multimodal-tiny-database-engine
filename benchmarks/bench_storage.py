@@ -15,7 +15,7 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks._common import (NA, arguments, plot, print_table, progress, series,
+from benchmarks._common import (NA, arguments, no_gc, plot, print_table, progress, series,
                                 summarize, write_csv, write_metadata)
 from benchmarks.generate_datasets import SCHEMA, generate_records
 from engine.storage.heap_file import HeapFile
@@ -23,7 +23,7 @@ from engine.storage.sequential_file import SequentialFile
 
 METRICS = ["tiempo_insercion_seg", "tiempo_busqueda_seg", "tiempo_busqueda_post_reorg_seg",
            "espacio_disco_bytes", "espacio_post_reorg_bytes", "tiempo_reorganizacion_seg",
-           "reorganizaciones_automaticas"]
+           "reorganizaciones_automaticas", "paginas_aux_tras_carga"]
 FIELDS = ["tecnica", "n_registros", "repeticiones"] + [
     name for metric in METRICS for name in (metric, metric + "_std")]
 QUERIES = 100
@@ -73,15 +73,17 @@ def benchmark(n, seed, repetition):
                 # 2. 100 búsquedas por clave primaria, estado tras la carga.
                 search_seconds = _timed_search(storage, technique, keys, by_key)
                 size = os.path.getsize(main) + (os.path.getsize(aux) if technique == "SequentialFile" else 0)
+                aux_after_load = storage.num_pages_aux if technique == "SequentialFile" else NA
 
                 # 3. Borrar 35% (fuera del cronómetro) y reorganizar el secuencial.
                 victims = [rid for rid, record in storage.scan() if record["id"] in delete_keys]
                 for rid in victims:
                     if not storage.delete(rid):
                         raise RuntimeError("No se pudo eliminar un RID actual")
-                reorganize_seconds, after_search, after_size, automatic = NA, NA, NA, NA
+                reorganize_seconds, after_search, after_size, automatic, aux_pages = NA, NA, NA, NA, NA
                 if technique == "SequentialFile":
                     automatic = storage.reorganizations
+                    aux_pages = aux_after_load
                     if not storage.needs_reorganization():
                         raise RuntimeError("Borrar 35% no activó el umbral del 30%")
                     start = time.perf_counter()
@@ -99,7 +101,8 @@ def benchmark(n, seed, repetition):
                              "espacio_disco_bytes": size,
                              "espacio_post_reorg_bytes": after_size,
                              "tiempo_reorganizacion_seg": reorganize_seconds,
-                             "reorganizaciones_automaticas": automatic})
+                             "reorganizaciones_automaticas": automatic,
+                             "paginas_aux_tras_carga": aux_pages})
     finally:
         shutil.rmtree(directory)
     return rows
@@ -108,8 +111,11 @@ def benchmark(n, seed, repetition):
 def main():
     args = arguments(__doc__)
     started = time.perf_counter()
-    runs = [row for n in args.sizes for rep in range(1, args.repetitions + 1)
-            for row in benchmark(n, args.seed, rep)]
+    runs = []
+    for n in args.sizes:
+        for rep in range(1, args.repetitions + 1):
+            with no_gc():
+                runs.extend(benchmark(n, args.seed, rep))
     rows = summarize(runs, ("tecnica", "n_registros"), METRICS)
     os.makedirs(args.output_dir, exist_ok=True)
     write_csv(args.output_dir / "storage_comparison.csv", rows, FIELDS)
@@ -117,28 +123,32 @@ def main():
 
     out = args.output_dir
     ms = 1000 / QUERIES  # total de 100 consultas -> ms por consulta
-    plot(out / "storage_tiempo_insercion.png", "Inserción de N registros en orden aleatorio", "Segundos",
-         [series(rows, "HeapFile", "tiempo_insercion_seg"),
+    us = 1_000_000
+    plot(out / "storage_tiempo_insercion.png", "Inserción: costo por registro (orden aleatorio)",
+         "Microsegundos por inserción",
+         [series(rows, "HeapFile", "tiempo_insercion_seg", "HeapFile — O(1)", us, per="n"),
           series(rows, "SequentialFile", "tiempo_insercion_seg",
-                 "SequentialFile (incluye reorganizaciones automáticas)")])
+                 "SequentialFile — O(log N) + reorganizaciones amortizadas", us, per="n")],
+         note="Tiempo total de N inserciones dividido por N. Curva plana = costo constante por operación.")
     plot(out / "storage_tiempo_busqueda.png", "Búsqueda por clave primaria (promedio de 100 consultas)",
          "Milisegundos por consulta",
-         [series(rows, "HeapFile", "tiempo_busqueda_seg", "HeapFile (scan, para en la 1.ª coincidencia)", ms),
-          series(rows, "SequentialFile", "tiempo_busqueda_seg", "SequentialFile tras la carga", ms),
+         [series(rows, "HeapFile", "tiempo_busqueda_seg", "HeapFile (scan) — O(N)", ms),
+          series(rows, "SequentialFile", "tiempo_busqueda_seg", "SequentialFile tras la carga — O(log N)", ms),
           series(rows, "SequentialFile", "tiempo_busqueda_post_reorg_seg",
-                 "SequentialFile tras reorganizar (aux vacío)", ms)])
+                 "SequentialFile tras reorganizar — O(log N)", ms)])
     plot(out / "storage_espacio_disco.png", "Espacio en disco después de insertar N registros", "Bytes",
          [series(rows, "HeapFile", "espacio_disco_bytes"),
           series(rows, "SequentialFile", "espacio_disco_bytes", "SequentialFile (main + aux)")],
          note="El secuencial reserva 10% libre por página (fill_factor = 0,9) para absorber inserciones.")
     plot(out / "storage_tiempo_reorganizacion.png",
          "Reorganización del secuencial tras borrar 35% de los registros", "Segundos",
-         [series(rows, "SequentialFile", "tiempo_reorganizacion_seg", "SequentialFile.reorganize()")],
-         note="Heap File no requiere reorganización (reutiliza slots borrados).")
+         [series(rows, "SequentialFile", "tiempo_reorganizacion_seg", "SequentialFile.reorganize() — O(N)")],
+         note="Merge de main (ordenado) con aux: lineal en el número de páginas. El Heap no se reorganiza.")
 
     elapsed = time.perf_counter() - started
     write_metadata(args, "storage", elapsed, {
         "page_size": 4096, "equality_queries": QUERIES, "deleted_fraction": .35,
+        "gc": "recolector cíclico desactivado durante cada tamaño (como timeit); gc.collect() antes de medir",
         "sequential": "auto_reorganize=True: reorganiza si desperdicio > 30% o aux > ceil(log2(P_main+1)) páginas; fill_factor 0,9",
         "heap_search": "search_by_key(unique=True): scan que se detiene en la primera coincidencia",
         "search_state": "tras la carga y, en el secuencial, también tras reorganizar (65 claves sobrevivientes, escalado a 100)",

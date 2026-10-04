@@ -18,7 +18,7 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks._common import (NA, arguments, plot, print_table, progress, series,
+from benchmarks._common import (NA, arguments, no_gc, plot, print_table, progress, series,
                                 summarize, write_csv, write_metadata)
 from benchmarks.generate_datasets import SCHEMA, generate_records
 from engine.indexes import BPlusTreeClustered, BPlusTreeUnclustered, ExtendibleHash
@@ -39,7 +39,8 @@ ORDER_CLUSTERED = min(ORDER_UNCLUSTERED, (PAGE_SIZE - NODE_HEADER_SIZE) // (KEY_
 HASH_BUCKET = ORDER_UNCLUSTERED
 
 TECHNIQUES = ("B+ agrupado", "B+ no agrupado", "Extendible Hash")
-METRICS = ["tiempo_construccion_seg", "tiempo_igualdad_seg", "tiempo_rango_seg", "tiempo_orden_seg",
+METRICS = ["tiempo_construccion_seg", "tiempo_snapshot_seg", "tiempo_igualdad_seg", "tiempo_rango_seg",
+           "tiempo_orden_seg",
            "espacio_total_bytes", "espacio_adicional_bytes", "memoria_estimada_bytes",
            "tiempo_actualizaciones_seg"]
 FIELDS = ["tecnica", "n_registros", "repeticiones"] + [
@@ -102,15 +103,20 @@ def benchmark(n, seed, repetition):
             try:
                 fetch = (lambda rids: [heap.get(rid) for rid in rids]) if heap else None
 
-                # 1. Construcción (inserción una a una; el hash termina persistiendo su snapshot).
+                # 1. Construcción: N inserciones. La persistencia del hash (snapshot
+                #    JSON completo, O(N)) se mide aparte para no mezclarla con el
+                #    costo O(1) de cada inserción.
                 start = time.perf_counter()
                 if clustered:
                     inserted = sum(index.insert(record) for record in records)
                 else:
                     inserted = sum(index.insert(key, rid) for key, rid in entries)
-                    if hashed:
-                        index.flush()
                 construction = time.perf_counter() - start
+                snapshot = NA
+                if hashed:
+                    start = time.perf_counter()
+                    index.flush()
+                    snapshot = time.perf_counter() - start
                 _check(inserted == n, "No se insertaron todos los registros/pares")
 
                 # 2. Igualdad: registro completo por clave.
@@ -171,14 +177,15 @@ def benchmark(n, seed, repetition):
                         inserted += index.insert(record["id"], rid)
                         deleted += bool(index.delete(record["id"], rid))
                         heap.delete(rid)
-                if hashed:
-                    index.flush()
                 changes = time.perf_counter() - start
+                if hashed:
+                    index.flush()  # fuera del cronómetro: ya se midió en tiempo_snapshot_seg
                 _check(inserted == UPDATE_PAIRS and deleted == UPDATE_PAIRS, "Falló el ciclo inserción/eliminación")
                 _check(not any(index.search(record["id"]) for record in updates), "Quedaron claves temporales")
 
                 rows.append({"tecnica": technique, "n_registros": n,
-                             "tiempo_construccion_seg": construction, "tiempo_igualdad_seg": equality,
+                             "tiempo_construccion_seg": construction, "tiempo_snapshot_seg": snapshot,
+                             "tiempo_igualdad_seg": equality,
                              "tiempo_rango_seg": range_seconds, "tiempo_orden_seg": order_seconds,
                              "espacio_total_bytes": total, "espacio_adicional_bytes": NA,
                              "memoria_estimada_bytes": memory, "tiempo_actualizaciones_seg": changes,
@@ -203,7 +210,8 @@ def main():
     runs, structures = [], []
     for n in args.sizes:
         for rep in range(1, args.repetitions + 1):
-            result, stats = benchmark(n, args.seed, rep)
+            with no_gc():
+                result, stats = benchmark(n, args.seed, rep)
             runs.extend(result)
             if rep == 1:
                 structures.extend(stats)
@@ -213,32 +221,52 @@ def main():
     write_csv(args.output_dir / "indexes_runs.csv", runs, ["tecnica", "n_registros"] + METRICS)
 
     out = args.output_dir
-    all_three = lambda metric, scale=1.0: [series(rows, t, metric, scale=scale) for t in TECHNIQUES]
-    plot(out / "indexes_tiempo_construccion.png", "Construcción del índice (N inserciones)", "Segundos",
-         all_three("tiempo_construccion_seg"),
-         note="B+ escribe cada página modificada; el hash trabaja en RAM y persiste un snapshot JSON al final.")
+    us = 1_000_000
+    all_three = lambda metric, scale=1.0, per=None: [series(rows, t, metric, scale=scale, per=per) for t in TECHNIQUES]
+    plot(out / "indexes_tiempo_construccion.png", "Construcción del índice: costo por inserción",
+         "Microsegundos por inserción",
+         [series(rows, "B+ agrupado", "tiempo_construccion_seg", "B+ agrupado — O(log N)", us, per="n"),
+          series(rows, "B+ no agrupado", "tiempo_construccion_seg", "B+ no agrupado — O(log N)", us, per="n"),
+          series(rows, "Extendible Hash", "tiempo_construccion_seg", "Extendible Hash — O(1) amortizado", us, per="n")],
+         note="Tiempo total de N inserciones dividido por N. El snapshot del hash se reporta aparte (tiempo_snapshot_seg).")
     plot(out / "indexes_tiempo_igualdad.png", "Búsqueda por igualdad (promedio de 100, registro completo)",
-         "Milisegundos por consulta", all_three("tiempo_igualdad_seg", 1000 / EQUALITY_QUERIES))
+         "Milisegundos por consulta",
+         [series(rows, "B+ agrupado", "tiempo_igualdad_seg", "B+ agrupado — O(log N)", 1000, per=EQUALITY_QUERIES),
+          series(rows, "B+ no agrupado", "tiempo_igualdad_seg", "B+ no agrupado — O(log N) + 1 lectura", 1000,
+                 per=EQUALITY_QUERIES),
+          series(rows, "Extendible Hash", "tiempo_igualdad_seg", "Extendible Hash — O(1)", 1000, per=EQUALITY_QUERIES)])
     plot(out / "indexes_tiempo_rango.png", "Búsqueda por rango de 101 claves (promedio de 20, registros completos)",
          "Milisegundos por consulta",
-         [series(rows, t, "tiempo_rango_seg", scale=1000 / RANGE_QUERIES) for t in TECHNIQUES[:2]],
-         note="Extendible Hash no soporta rangos. El no agrupado incluye leer cada RID del heap.")
+         [series(rows, "B+ agrupado", "tiempo_rango_seg", "B+ agrupado — O(log N + k)", 1000, per=RANGE_QUERIES),
+          series(rows, "B+ no agrupado", "tiempo_rango_seg", "B+ no agrupado — O(log N + k lecturas)", 1000,
+                 per=RANGE_QUERIES)],
+         note="k = 101 filas por rango. Extendible Hash no soporta rangos. El no agrupado lee cada RID del heap.")
     plot(out / "indexes_tiempo_orden.png", "Ordenamiento: ORDER BY id sobre toda la tabla", "Segundos",
-         [series(rows, "B+ agrupado", "tiempo_orden_seg", "B+ agrupado (recorrido de hojas)"),
-          series(rows, "B+ no agrupado", "tiempo_orden_seg", "B+ no agrupado (hojas + lectura de RIDs)"),
-          series(rows, "Extendible Hash", "tiempo_orden_seg",
-                 "Hash: no aplica, se usa scan + external sort")])
+         [series(rows, "B+ agrupado", "tiempo_orden_seg", "B+ agrupado (hojas) — O(N)"),
+          series(rows, "B+ no agrupado", "tiempo_orden_seg", "B+ no agrupado (hojas + RIDs) — O(N)"),
+          series(rows, "Extendible Hash", "tiempo_orden_seg", "Hash: no aplica, scan + external sort — O(N log N)")],
+         note="Tiempo total: recorrer N registros es O(N) (pendiente 1 en log-log).")
     plot(out / "indexes_espacio_total.png", "Espacio en disco: tabla + índice", "Bytes",
          all_three("espacio_total_bytes"),
          note="Agrupado: un solo archivo con los datos en las hojas. No agrupado y hash: heap + archivo del índice.")
-    plot(out / "indexes_tiempo_actualizaciones.png", "500 ciclos inserción + eliminación (tabla e índice)",
-         "Segundos", all_three("tiempo_actualizaciones_seg"))
-    for stale in ("indexes_espacio_disco.png", "indexes_espacio_adicional.png", "indexes_memoria.png"):
+    plot(out / "indexes_espacio_adicional.png", "Espacio adicional requerido por el índice", "Bytes",
+         all_three("espacio_adicional_bytes"),
+         note="Espacio total menos el de un heap con los mismos N registros. Crece O(N) en las tres estructuras.")
+    plot(out / "indexes_tiempo_actualizaciones.png", "Inserciones y eliminaciones frecuentes: costo por operación",
+         "Microsegundos por operación",
+         [series(rows, "B+ agrupado", "tiempo_actualizaciones_seg", "B+ agrupado — O(log N)", us, per=2 * UPDATE_PAIRS),
+          series(rows, "B+ no agrupado", "tiempo_actualizaciones_seg", "B+ no agrupado — O(log N)", us,
+                 per=2 * UPDATE_PAIRS),
+          series(rows, "Extendible Hash", "tiempo_actualizaciones_seg", "Extendible Hash — O(1)", us,
+                 per=2 * UPDATE_PAIRS)],
+         note="500 inserciones + 500 eliminaciones en tabla e índice. Sin el snapshot del hash.")
+    for stale in ("indexes_espacio_disco.png", "indexes_memoria.png"):
         (out / stale).unlink(missing_ok=True)
 
     elapsed = time.perf_counter() - started
     write_metadata(args, "indexes", elapsed, {
         "page_size": PAGE_SIZE, "bplus_clustered_M": ORDER_CLUSTERED, "bplus_unclustered_M": ORDER_UNCLUSTERED,
+        "gc": "recolector cíclico desactivado durante cada tamaño (como timeit); gc.collect() antes de medir",
         "hash_bucket_capacity": HASH_BUCKET, "hash_max_depth": 16,
         "equality_queries": EQUALITY_QUERIES, "range_queries": RANGE_QUERIES,
         "range_width": f"[k, min(N-1, k+{RANGE_WIDTH})]", "update_pairs": UPDATE_PAIRS,
@@ -246,7 +274,7 @@ def main():
         "ordering": "agrupado: hojas; no agrupado: hojas + heap.get; hash: heap.scan + external_sort",
         "space": "espacio_total = tabla + índice; espacio_adicional = total - heap con los mismos N registros",
         "memory_estimate": "solo hash: sys.getsizeof del grafo retenido; no RSS",
-        "durability": "B+ escribe/flush por operación; hash en RAM con snapshot JSON al terminar construcción y actualizaciones",
+        "durability": "B+ escribe/flush por operación; hash en RAM, su snapshot JSON se mide aparte (tiempo_snapshot_seg)",
         "structural_stats": structures})
     print_table(rows, FIELDS)
     print(f"\nResultados: {out.resolve()}\nDuración completa: {elapsed:.3f} s")

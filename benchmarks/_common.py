@@ -1,7 +1,9 @@
 """Salida CSV/PNG, repeticiones y metadatos comunes; no ejecuta benchmarks al importar."""
 
 import argparse
+from contextlib import contextmanager
 import csv
+import gc
 from datetime import datetime, timezone
 import json
 import os
@@ -30,6 +32,24 @@ def arguments(description):
         parser.error("--repetitions debe ser >= 1")
     args.sizes.sort()
     return args
+
+
+@contextmanager
+def no_gc():
+    """Mide sin el recolector de basura cíclico, como hace timeit.
+
+    Con N grande el dataset completo vive en memoria y cada recolección total
+    recorre todos sus objetos: su costo crecería con N y distorsionaría el
+    costo por operación. Se recolecta una vez antes de medir.
+    """
+    enabled = gc.isenabled()
+    gc.collect()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if enabled:
+            gc.enable()
 
 
 def summarize(runs, key_fields, metrics):
@@ -63,12 +83,22 @@ def write_csv(path, rows, fields):
         writer.writerows(rows)
 
 
-def series(rows, technique, metric, label=None, scale=1.0):
-    """(etiqueta, xs, ys, errores) de una técnica; omite NA."""
+def series(rows, technique, metric, label=None, scale=1.0, per=None):
+    """(etiqueta, xs, ys, errores) de una técnica; omite NA.
+
+    per=None grafica el valor tal cual; per="n" lo divide por N (costo por
+    registro); per=<número> lo divide por esa cantidad de operaciones.
+    """
     data = [row for row in rows if row["tecnica"] == technique and row[metric] != NA]
+
+    def factor(row):
+        if per == "n":
+            return scale / row["n_registros"]
+        return scale / per if per else scale
+
     return (label or technique, [row["n_registros"] for row in data],
-            [row[metric] * scale for row in data],
-            [row.get(metric + "_std", 0.0) * scale for row in data])
+            [row[metric] * factor(row) for row in data],
+            [row.get(metric + "_std", 0.0) * factor(row) for row in data])
 
 
 def plot(path, title, ylabel, all_series, note=None):

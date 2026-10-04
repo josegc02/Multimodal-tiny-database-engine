@@ -25,6 +25,19 @@ Salidas por suite (`storage_*` e `indexes_*`):
 - `*_runs.csv`: cada repetición por separado.
 - `*_metadata.json`: entorno, configuración, estadísticas estructurales y duración.
 - PNG en escala **log-log** con barras de error (± 1 desviación estándar).
+  Inserción, construcción de índices y actualizaciones se grafican **por
+  operación** (total ÷ cantidad de operaciones): una curva plana es O(1) u
+  O(log N) y una pendiente 1 es O(N). Los CSV guardan los totales.
+
+Para contrastar la complejidad teórica con la medida:
+
+```bash
+.venv/bin/python benchmarks/complexity.py
+```
+
+Imprime una tabla markdown con la pendiente log-log de cada curva entre tamaños
+consecutivos y su veredicto (usa el último tramo, el asintótico). Termina con
+código 1 si alguna curva no coincide con la teoría.
 
 Cada consulta verifica sus resultados fuera de la región cronometrada. Los
 archivos de datos se crean con `tempfile.mkdtemp()` y se borran al terminar.
@@ -34,6 +47,10 @@ archivos de datos se crean con `tempfile.mkdtemp()` y se borran al terminar.
 - **Dataset**: IDs únicos 0..N-1 en orden aleatorio, nombres ASCII de 20
   caracteres y precios (36 B por registro); todas las técnicas reciben el mismo
   orden y las mismas claves de consulta.
+- **Recolector de basura**: el recolector cíclico se desactiva mientras se mide
+  cada tamaño (con un `gc.collect()` previo), como hace `timeit`. Con N grande
+  el dataset vive en memoria y cada recolección total lo recorre: su costo
+  crecería con N y haría parecer O(N) operaciones O(1).
 
 ### Storage (`bench_storage.py`)
 
@@ -46,6 +63,8 @@ archivos de datos se crean con `tempfile.mkdtemp()` y se borran al terminar.
 - **Reorganización**: se borra el 35% de las claves (no cronometrado), se
   comprueba el umbral del 30% y se mide solo `reorganize()`. Después se repiten
   las búsquedas de las claves sobrevivientes (escaladas a 100 consultas).
+- `paginas_aux_tras_carga`: páginas de `aux` al terminar la carga. La búsqueda
+  no las recorre: las claves de `aux` se ubican con un índice en memoria.
 
 ### Índices (`bench_indexes.py`)
 
@@ -65,8 +84,10 @@ archivos de datos se crean con `tempfile.mkdtemp()` y se borran al terminar.
 - **Actualizaciones**: 500 claves nuevas, cada inserción seguida de su
   eliminación, en tabla e índice (1000 operaciones).
 - **Durabilidad**: el B+ escribe y hace `flush` de cada página modificada; el
-  hash trabaja en RAM y persiste un snapshot JSON al terminar la construcción y
-  las actualizaciones (incluido en el tiempo). Ninguno fuerza `fsync`.
+  hash trabaja en RAM y persiste un snapshot JSON completo, que es O(N). Ese
+  snapshot se mide aparte (`tiempo_snapshot_seg`) y queda fuera de la
+  construcción y de las actualizaciones, para no mezclarlo con su costo O(1)
+  por operación. Ninguno fuerza `fsync`.
 
 ## Valores NA
 
@@ -74,6 +95,8 @@ archivos de datos se crean con `tempfile.mkdtemp()` y se borran al terminar.
 | --- | --- |
 | `tiempo_rango_seg` | Hash: no soporta rangos; no equivale a tiempo cero. |
 | `memoria_estimada_bytes` | B+: no medida (trabaja sobre archivo). |
+| `tiempo_snapshot_seg` | B+: no tiene snapshot (persiste página a página). |
+| `paginas_aux_tras_carga` | Heap: no tiene área de desborde. |
 | `tiempo_reorganizacion_seg`, `*_post_reorg_*`, `reorganizaciones_automaticas` | Heap: no tiene reorganización. |
 
 Las conclusiones se recogen en `docs/informe.md`.
