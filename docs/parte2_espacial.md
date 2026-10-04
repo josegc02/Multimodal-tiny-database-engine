@@ -1,6 +1,9 @@
 # Parte 2: Base de Datos Espacial
 
-Plan de trabajo y estructura de la Parte 2 (entrega parcial, semana 8). Cada archivo base tiene la interfaz definida y sus métodos lanzan `NotImplementedError` con el issue donde se implementan.
+Implementados: geometría, métricas, R-Tree y consultas espaciales hasta #23.
+El mapa (#24), datasets de entrega (#25), comparación con PostGIS (#26) y
+benchmarks (#27) siguen pendientes. Contratos, criterios verificados y ejemplos
+SQL en [consultas_espaciales.md](consultas_espaciales.md).
 
 ## Qué pide el enunciado
 
@@ -93,12 +96,12 @@ Plan de trabajo y estructura de la Parte 2 (entrega parcial, semana 8). Cada arc
 - **Rendimiento:** 100.000 puntos de Lima se insertan en ~106 s (~1 ms por inserción, el mismo orden que el B+ agrupado). El árbol queda con altura 3, 831 nodos y hojas llenas al 69%. Una ventana de 59 puntos visita 47 de los 831 nodos.
 - **Pruebas** (`tests/indexes/test_rtree.py`): después de cada operación verifican altura balanceada, ocupación entre m y M, MBRs exactos en cada padre y que ninguna página se pierda ni se duplique. También comparan las búsquedas con fuerza bruta y cubren puntos repetidos y alineados, persistencia y reutilización de páginas.
 
-## Decisiones a tomar
-- **Elección de la métrica en SQL (#23):** `USING HAVERSINE | EUCLIDEAN` al final de la consulta, o un tercer argumento `distancia(col, punto, 'haversine')`.
-- **Polígonos en SQL (#23):**
-  - Opción 1: `WITHIN(col, POLYGON((lat lon, ...)))`.
-  - Opción 2: por nombre de distrito cargado desde GeoJSON.
-- **Almacenamiento del tipo `POINT`:** dos `float` de 8 bytes en `engine/storage/record.py` (16 bytes por punto).
+## Decisiones implementadas y pendientes
+- **Métrica SQL (#23):** ambas formas están implementadas: `USING HAVERSINE | EUCLIDEAN`
+  al final de SELECT y tercer argumento explícito en `distancia`, que tiene prioridad.
+- **Polígonos SQL (#23):** `WITHIN(col, POLYGON((lat, lon), ...))`, con borde incluido.
+  Los distritos GeoJSON se cargan con `load_districts` en Python.
+- **Tipo `POINT`:** dos `float` de 8 bytes en el registro (16 bytes por punto).
 - **Construcción masiva del R-Tree (opcional):** *bulk loading* STR acelera la construcción frente a insertar punto por punto. Decidir si se agrega para el benchmark (#27).
 - **Mapa (#24):**
   - Opción 1: `tkintermapview`, un widget Tk con OpenStreetMap integrado en la ventana actual.

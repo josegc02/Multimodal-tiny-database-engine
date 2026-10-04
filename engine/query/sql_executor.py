@@ -18,6 +18,7 @@ from engine.query.errors import SQLExecutionError
 from engine.query.parser import parse
 from engine.query.sql_optimizer import SQLOptimizer, base_scan
 from engine.storage.record import RID
+from engine.spatial.distance import Metric
 
 
 def _rid_keys(qualifier):
@@ -87,7 +88,9 @@ class SQLExecutor:
         table = plan.get("table")
         binding = self.catalog.table(table.name)
         physical = self.optimizer.choice(plan)
-        if physical is None or physical.algorithm == "sequential_scan":
+        if physical is not None and physical.algorithm.startswith("rtree_"):
+            yield from self._spatial_scan(plan, binding, physical, stats)
+        elif physical is None or physical.algorithm == "sequential_scan":
             for rid, record in binding.storage.scan():
                 yield _context(table, rid, record)
         elif physical.algorithm == "index_range_scan":
@@ -102,6 +105,52 @@ class SQLExecutor:
             index = physical.index.index
             for rid, record in self._probe(binding, lambda: index.search(physical.value)):
                 yield _context(table, rid, record)
+
+    def _spatial_scan(self, plan, binding, physical, stats):
+        """Consume R-Tree y registros bajo el latch; conserva todos los filtros SQL.
+
+        k-NN con WHERE amplía el prefijo hasta reunir k filas que cumplan el
+        predicado: filtrar solo los primeros k vecinos perdería resultados.
+        """
+        table, index = plan.get("table"), physical.index.index
+        totals = stats.spatial.setdefault(id(plan), dict(nodes_visited=0, leaves_visited=0,
+                                                         candidates=0, refined=0, results=0))
+        def query():
+            stats.index_probes += 1
+            if physical.algorithm == "rtree_radius_scan":
+                center, radius, metric = physical.value
+                found = index.range_query(center, radius, Metric(metric))
+            elif physical.algorithm == "rtree_polygon_scan":
+                found = index.within_polygon(physical.value)
+            else:
+                center, _, metric = physical.value
+                found = index.knn(center, requested, Metric(metric))
+            for name in ("nodes_visited", "leaves_visited", "candidates", "refined"):
+                totals[name] += getattr(index.last_stats, name)
+            rows = []
+            for item in found:
+                rid = item[1]
+                record = binding.storage.get(rid)
+                if record is not None:
+                    rows.append(_context(table, rid, record))
+            return rows
+        with binding.latch:
+            if physical.algorithm == "rtree_knn_scan":
+                wanted = physical.value[1]
+                requested = min(wanted, len(index))
+                while True:
+                    rows = query()
+                    predicate = plan.get("predicate")
+                    if predicate is not None:
+                        rows = [row for row in rows if truth(evaluate(predicate, row)) is True]
+                    if len(rows) >= wanted or requested >= len(index):
+                        rows = rows[:wanted]
+                        break
+                    requested = min(len(index), max(1, requested * 2))
+            else:
+                rows = query()
+            totals["results"] += len(rows)
+        yield from rows
 
     @staticmethod
     def _probe(binding, find_rids):

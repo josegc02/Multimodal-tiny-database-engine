@@ -1,6 +1,6 @@
 # Minigestor de Base de Datos Multimodal
 
-Proyecto de Base de Datos II (UTEC, 2026-2): un gestor de bases de datos construido desde cero. La **Parte 1 (base de datos relacional)** está completa: almacenamiento en disco, índices, SQL, transacciones con control de concurrencia, interfaz gráfica de 4 paneles y comparación experimental. Las partes siguientes (espacial, texto, multimedia y aplicación) se apoyan en esta base.
+Proyecto de Base de Datos II (UTEC, 2026-2): un gestor de bases de datos construido desde cero. La **Parte 1 (base de datos relacional)** incluye almacenamiento en disco, índices, SQL, transacciones con control de concurrencia, interfaz gráfica de 4 paneles y comparación experimental. La **Parte 2** implementa geometría, métricas, R-Tree y SQL espacial hasta el issue #23; mapa, datasets y comparación con PostGIS siguen pendientes (#24–#27).
 
 ---
 
@@ -81,8 +81,8 @@ Resultados, gráficas y metodología: `benchmarks/README.md` y la sección 3 de 
 
 | Sentencia | Detalle |
 | :--- | :--- |
-| `CREATE TABLE t (col INT \| FLOAT \| VARCHAR(n), ...) [USING HEAP \| SEQUENTIAL \| BTREE]` | `SEQUENTIAL` y `BTREE` se ordenan por la clave primaria (o la primera columna) y el optimizador usa ese orden para igualdad, rangos y ORDER BY; `BTREE` es una tabla organizada como B+ agrupado (clave única). |
-| `CREATE INDEX nombre ON t (col) USING HASH \| BTREE` | Índices secundarios: hash extensible o B+ no agrupado. |
+| `CREATE TABLE t (col INT \| FLOAT \| VARCHAR(n) \| POINT, ...) [USING HEAP \| SEQUENTIAL \| BTREE]` | `SEQUENTIAL` y `BTREE` se ordenan por la clave primaria (o la primera columna) y el optimizador usa ese orden para igualdad, rangos y ORDER BY; `BTREE` es una tabla organizada como B+ agrupado (clave única). POINT se almacena como dos doubles. |
+| `CREATE INDEX nombre ON t (col) USING HASH \| BTREE \| RTREE` | Índices secundarios: hash extensible, B+ no agrupado o R-Tree sobre POINT. |
 | `SELECT [DISTINCT] ... FROM t [JOIN t2 ON ...] [WHERE ...] [GROUP BY ... [HAVING ...]] [ORDER BY ... [ASC\|DESC]] [LIMIT n [OFFSET m]]` | `AND/OR/NOT`, comparaciones, `BETWEEN`, `IN`, `LIKE`, aritmética, `COUNT/SUM/AVG/MIN/MAX` (también con `DISTINCT`). |
 | `INSERT INTO t [(cols)] VALUES (...), (...)` | Valida tipos y columnas de todo el lote antes de escribir. |
 | `DELETE FROM t [WHERE ...]` | Usa índices si conviene; eliminación lógica en heap y secuencial. |
@@ -91,8 +91,13 @@ Resultados, gráficas y metodología: `benchmarks/README.md` y la sección 3 de 
 | `col INT REFERENCES padre(pk) [ON DELETE RESTRICT \| CASCADE]` o `FOREIGN KEY (col) REFERENCES padre` | Verifica el padre en INSERT/COPY; DELETE del padre falla (RESTRICT) o borra las hijas (CASCADE). Índice automático en la columna hija. |
 | `COPY t [(cols)] FROM 'archivo.csv' WITH (FORMAT csv, HEADER true, DELIMITER ';')` | Carga un CSV (comillas, UTF-8 con BOM, `ENCODING 'LATIN1'`); todo o nada, con la línea del error. |
 | `EXPLAIN [ANALYZE] SELECT \| INSERT \| DELETE ...` | Plan con el formato de PostgreSQL; `ANALYZE` ejecuta y muestra tiempos y filas reales. |
+| `distancia(p, POINT(lat, lon))`, `WITHIN(p, POLYGON((lat, lon), ...))` | Rango, k-NN con ORDER BY/LIMIT y polígonos. SELECT admite `USING HAVERSINE \| EUCLIDEAN`; también se elige métrica como tercer argumento de distancia. |
 
 El optimizador elige por costo estimado entre scan secuencial e índices: hash o B+ para igualdad; B+ para rangos (`<`, `<=`, `>`, `>=`, `BETWEEN`), `ORDER BY` y `GROUP BY`; hash join externo o *index nested loop* para `JOIN`. Gramática completa: `docs/sql_grammar.ebnf`.
+
+En consultas espaciales utiliza un R-Tree vigente cuando el predicado permite
+poda; de lo contrario calcula por scan. Ejemplos, contratos y criterios de
+los issues #20–#23: [consultas espaciales](docs/consultas_espaciales.md).
 
 ---
 
@@ -126,8 +131,8 @@ engine/
 │   ├── bplus_tree_clustered.py # Hojas con registros completos
 │   ├── bplus_tree_unclustered.py # Hojas con (clave, RID); claves duplicadas
 │   ├── extendible_hash.py      # Hash extensible en memoria con snapshot JSON
-│   └── rtree.py                # Parte 2: R-Tree en disco (rango, k-NN, polígonos) — en desarrollo
-├── spatial/                    # Parte 2: Point, MBR, Polygon y métricas Euclidiana/Haversine — en desarrollo
+│   └── rtree.py                # Parte 2: R-Tree en disco (rango, k-NN, polígonos)
+├── spatial/                    # Parte 2: Point, MBR, Polygon, GeoJSON y métricas Euclidiana/Haversine
 ├── query/
 │   ├── lexer.py, parser.py, ast.py   # Análisis léxico y sintáctico
 │   ├── logical_plan.py         # Plan lógico (Scan, Filter, Join, Aggregate, Sort, Project, Limit...)

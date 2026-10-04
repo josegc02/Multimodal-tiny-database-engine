@@ -7,6 +7,7 @@ import struct
 from engine.query import ast
 from engine.query.catalog import Catalog
 from engine.query.errors import SQLSemanticError
+from engine.spatial.geometry import Point, Polygon
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,8 @@ def output_name(expression):
         return f"{expression.function.lower()}({distinct}{output_name(expression.argument)})"
     if isinstance(expression, ast.Literal):
         return str(expression.value)
+    if isinstance(expression, ast.SpatialCall):
+        return f"{expression.function.lower()}({', '.join(output_name(a) for a in expression.arguments)})"
     return repr(expression)
 
 
@@ -86,7 +89,8 @@ def normalize_insert(binding, columns, rows):
             value = record[name]
             if (kind == "int" and type(value) is not int
                     or kind == "float" and type(value) not in (int, float)
-                    or kind == "str" and type(value) is not str):
+                    or kind == "str" and type(value) is not str
+                    or kind == "point" and not isinstance(value, Point)):
                 raise SQLSemanticError(f"Tipo inválido para {name!r}: se requiere {kind}; storage no admite NULL")
             if type(value) is float and not math.isfinite(value):
                 raise SQLSemanticError(f"Valor no finito para {name!r}")
@@ -107,7 +111,8 @@ class LogicalPlanner:
             qualifier = table.alias or table.name
             if qualifier in scope:
                 raise SQLSemanticError(f"Alias de tabla repetido: {qualifier}")
-            scope[qualifier] = self.catalog.table(table.name).storage.schema.fields
+            schema = self.catalog.table(table.name).storage.schema
+            scope[qualifier] = dict(zip(schema.fields, schema.types))
         return scope
 
     def _bind(self, expression, scope, *, aggregates=False):
@@ -130,6 +135,22 @@ class LogicalPlanner:
             return replace(expression, argument=self._bind(expression.argument, scope))
         if isinstance(expression, ast.Star):
             raise SQLSemanticError("Comodín fuera de la proyección")
+        if isinstance(expression, ast.SpatialCall):
+            if expression.function not in ("DISTANCIA", "WITHIN") or len(expression.arguments) != 2:
+                raise SQLSemanticError("Función espacial inválida")
+            bound = map_children(expression, lambda child: self._bind(child, scope, aggregates=aggregates))
+            if bound.metric not in (None, "haversine", "euclidean"):
+                raise SQLSemanticError("Métrica espacial inválida")
+            for arg, expected in zip(bound.arguments, ("point", "point" if bound.function == "DISTANCIA" else "polygon")):
+                if isinstance(arg, ast.ColumnRef):
+                    kind = scope[arg.table][arg.name]
+                elif isinstance(arg, ast.Literal):
+                    kind = "point" if isinstance(arg.value, Point) else "polygon" if isinstance(arg.value, Polygon) else None
+                else:
+                    kind = None
+                if kind != expected:
+                    raise SQLSemanticError(f"{bound.function} requiere argumentos {expected.upper()}")
+            return bound
         return map_children(expression, lambda child: self._bind(child, scope, aggregates=aggregates))
 
     def plan(self, statement: ast.Statement) -> LogicalPlan:
@@ -235,6 +256,19 @@ class LogicalPlanner:
             plan = node("Distinct", plan, expressions=selected)
         if order_by:
             plan = node("Sort", plan, order_by=tuple(order_by))
+        # Top-k espacial solo para una tabla, sin agregación ni DISTINCT y una
+        # única clave de orden ASC. Otros casos conservan el sort SQL completo.
+        if (statement.limit is not None and len(order_by) == 1 and order_by[0].direction == "ASC"
+                and not statement.joins and not statement.distinct and not group_by
+                and not aggregates and having is None and isinstance(order_by[0].expression, ast.SpatialCall)
+                and order_by[0].expression.function == "DISTANCIA"):
+            def annotate(current):
+                if current.operation == "Scan":
+                    return node("Scan", table=current.get("table"), predicate=current.get("predicate"),
+                                spatial_order=order_by[0].expression,
+                                spatial_k=statement.limit + (statement.offset or 0))
+                return replace(current, children=tuple(annotate(child) for child in current.children))
+            plan = annotate(plan)
         plan = node("Project", plan, columns=tuple(projections))
         if statement.limit is not None or statement.offset is not None:
             plan = node("Limit", plan, limit=statement.limit, offset=statement.offset or 0)

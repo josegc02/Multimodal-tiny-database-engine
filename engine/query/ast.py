@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
+from engine.spatial.geometry import Point, Polygon
 
 
 class Node:
     def to_dict(self) -> dict:
         """Representación serializable para inspección y la futura UI de planes."""
         def convert(value):
+            if isinstance(value, Point):
+                return {"type": "Point", "lat": value.lat, "lon": value.lon}
+            if isinstance(value, Polygon):
+                return {"type": "Polygon", "vertices": convert(tuple(value.vertices)),
+                        "holes": convert(value.holes)}
             if isinstance(value, Node):
                 return value.to_dict()
             if isinstance(value, tuple):
@@ -23,7 +29,14 @@ class Expression(Node):
 
 @dataclass(frozen=True)
 class Literal(Expression):
-    value: int | float | str | bool | None
+    value: int | float | str | bool | Point | Polygon | None
+
+
+@dataclass(frozen=True)
+class SpatialCall(Expression):
+    function: str
+    arguments: tuple[Expression, ...]
+    metric: str | None = None
 
 
 @dataclass(frozen=True)

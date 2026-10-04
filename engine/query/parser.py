@@ -5,15 +5,17 @@ El resultado es un AST: no se usa eval, no se consulta storage y no se ejecuta S
 """
 
 from contextlib import contextmanager
+from dataclasses import fields, replace
 
 from engine.query.ast import (
     AggregateCall, Between, BinaryOp, ColumnDefinition, ColumnRef, CopyStatement,
     CreateIndexStatement, CreateTableStatement, DeleteStatement, ExplainStatement, ForeignKeyDefinition, InList,
     InsertStatement, IsNull, Join, Literal, OrderByItem, SelectItem,
-    SelectStatement, Star, Statement, TableRef, TransactionStatement, UnaryOp,
+    SelectStatement, SpatialCall, Star, Statement, TableRef, TransactionStatement, UnaryOp, Node,
 )
 from engine.query.errors import SQLParseError
 from engine.query.lexer import tokenize
+from engine.spatial.geometry import Point, Polygon
 
 AGGREGATES = {"COUNT", "SUM", "AVG", "MIN", "MAX"}
 COMPARISONS = {"=", "!=", "<>", "<", "<=", ">", ">="}
@@ -252,9 +254,9 @@ class Parser:
 
     def _column_definition(self):
         name = self._identifier()
-        type_token = self._match("INT", "FLOAT", "STR", "VARCHAR")
+        type_token = self._match("INT", "FLOAT", "STR", "VARCHAR", "POINT")
         if type_token is None:
-            self._error("Se esperaba INT, FLOAT, STR o VARCHAR")
+            self._error("Se esperaba INT, FLOAT, STR, VARCHAR o POINT")
         type_name = "str" if type_token.kind == "VARCHAR" else type_token.kind.lower()
         size = None
         if self._match("("):
@@ -288,9 +290,9 @@ class Parser:
         return CreateIndexStatement(name, table, column, method)
 
     def _index_method(self):
-        token = self._match("HASH", "BTREE")
+        token = self._match("HASH", "BTREE", "RTREE")
         if token is None:
-            self._error("USING requiere HASH o BTREE")
+            self._error("USING requiere HASH, BTREE o RTREE")
         return token.kind.lower()
 
     def _comma_list(self, parse_item):
@@ -335,8 +337,35 @@ class Parser:
             order_by = self._comma_list(self._order_item)
         limit = self._expect("INTEGER").value if self._match("LIMIT") else None
         offset = self._expect("INTEGER").value if self._match("OFFSET") else None
-        return SelectStatement(columns, table, tuple(joins), where, group_by,
-                               having, order_by, distinct, limit, offset)
+        statement = SelectStatement(columns, table, tuple(joins), where, group_by,
+                                    having, order_by, distinct, limit, offset)
+        metric = "haversine"
+        if self._match("USING"):
+            token = self._match("HAVERSINE", "EUCLIDEAN")
+            if token is None:
+                self._error("USING requiere HAVERSINE o EUCLIDEAN")
+            metric = token.kind.lower()
+        # Recorrido iterativo: una cadena plana de muchos AND no debe consumir
+        # la pila de Python al propagar la métrica a sus llamadas espaciales.
+        converted, pending = {}, [(statement, False)]
+        while pending:
+            value, visited = pending.pop()
+            if not isinstance(value, (tuple, Node)):
+                continue
+            children = value if isinstance(value, tuple) else tuple(getattr(value, f.name) for f in fields(value))
+            if not visited:
+                pending.append((value, True))
+                pending.extend((child, False) for child in children if isinstance(child, (tuple, Node)))
+                continue
+            if isinstance(value, tuple):
+                result = tuple(converted.get(id(child), child) for child in children)
+            else:
+                result = replace(value, **{f.name: converted.get(id(child), child)
+                                           for f, child in zip(fields(value), children)})
+                if isinstance(result, SpatialCall) and result.function == "DISTANCIA" and result.metric is None:
+                    result = replace(result, metric=metric)
+            converted[id(value)] = result
+        return converted[id(statement)]
 
     def _order_item(self):
         expression = self._expression()
@@ -372,6 +401,8 @@ class Parser:
         return row
 
     def _literal(self):
+        if self._peek().kind in ("POINT", "POLYGON"):
+            return self._geometry()
         sign = self._match("+", "-")
         if token := self._match("INTEGER", "FLOAT"):
             return Literal(-token.value if sign and sign.kind == "-" else token.value)
@@ -382,6 +413,53 @@ class Parser:
         if token := self._match("NULL", "TRUE", "FALSE"):
             return Literal({"NULL": None, "TRUE": True, "FALSE": False}[token.kind])
         self._error("Se esperaba un literal numérico, string, NULL, TRUE o FALSE")
+
+    def _coordinate_pair(self):
+        self._expect("(")
+        values = []
+        for i in range(2):
+            if i:
+                self._expect(",")
+            sign = self._match("+", "-")
+            token = self._match("INTEGER", "FLOAT")
+            if token is None:
+                self._error("POINT requiere latitud y longitud numéricas")
+            values.append(-token.value if sign and sign.kind == "-" else token.value)
+        self._expect(")")
+        return Point(*values)
+
+    def _geometry(self):
+        token = self._advance()
+        try:
+            if token.kind == "POINT":
+                return Literal(self._coordinate_pair())
+            self._expect("(")
+            def vertex():
+                self._match("POINT")
+                return self._coordinate_pair()
+            vertices = self._comma_list(vertex)
+            self._expect(")")
+            return Literal(Polygon(vertices))
+        except SQLParseError:
+            raise
+        except ValueError as exc:
+            self._error(str(exc), token)
+
+    def _spatial_call(self):
+        function = self._advance().kind
+        self._expect("(")
+        with self._nested():
+            left = self._expression()
+            self._expect(",")
+            right = self._expression()
+            metric = None
+            if function == "DISTANCIA" and self._match(","):
+                token = self._match("STRING", "HAVERSINE", "EUCLIDEAN")
+                if token is None or token.value.lower() not in ("haversine", "euclidean"):
+                    self._error("Métrica inválida: HAVERSINE o EUCLIDEAN")
+                metric = token.value.lower()
+            self._expect(")")
+        return SpatialCall(function, (left, right), metric)
 
     def _delete(self):
         self._expect("FROM")
@@ -458,6 +536,10 @@ class Parser:
         return expression
 
     def _primary(self):
+        if self._peek().kind in ("POINT", "POLYGON"):
+            return self._geometry()
+        if self._peek().kind in ("DISTANCIA", "WITHIN"):
+            return self._spatial_call()
         if self._match("("):
             with self._nested():
                 expression = self._expression()

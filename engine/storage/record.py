@@ -4,6 +4,8 @@ import struct
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
+from engine.spatial.geometry import Point
+
 _TYPE_FORMATS = {
     "int": "q",     # 8 bytes, entero con signo
     "float": "d",   # 8 bytes, double
@@ -39,6 +41,9 @@ class Schema:
             elif ftype in _TYPE_FORMATS:
                 fmt_parts.append(_TYPE_FORMATS[ftype])
                 self.sizes.append(struct.calcsize(_TYPE_FORMATS[ftype]))
+            elif ftype == "point":
+                fmt_parts.append("16s")
+                self.sizes.append(16)
             else:
                 raise ValueError(f"Tipo no soportado: {ftype}")
 
@@ -63,6 +68,10 @@ class Schema:
                 values.append(int(value))
             elif ftype == "float":
                 values.append(float(value))
+            elif ftype == "point":
+                if not isinstance(value, Point):
+                    raise ValueError(f"El campo {name!r} requiere POINT")
+                values.append(struct.pack(">dd", value.lat, value.lon))
         return struct.pack(self.struct_format, *values)
 
     def deserialize(self, data: bytes) -> Dict[str, Any]:
@@ -71,6 +80,8 @@ class Schema:
         for name, ftype, raw in zip(self.fields, self.types, raw_values):
             if ftype == "str":
                 record[name] = raw.rstrip(b"\x00").decode("utf-8")
+            elif ftype == "point":
+                record[name] = Point(*struct.unpack(">dd", raw))
             else:
                 record[name] = raw
         return record

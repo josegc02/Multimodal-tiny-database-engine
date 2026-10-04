@@ -35,6 +35,7 @@ from engine.query.sql_executor import SQLExecutor
 from engine.query.statement_executor import StatementExecutor
 from engine.query.parser import parse_script
 from engine.indexes import ExtendibleHash
+from engine.indexes.rtree import RTree
 from engine.indexes.bplus_tree import CHILD_SIZE, NODE_HEADER_SIZE
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
 from engine.storage.clustered_file import ClusteredBPlusFile
@@ -48,7 +49,7 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEMO_DIR = os.path.join(PROJECT_DIR, "demo_data")
 
 # Archivos que genera el motor y que el modo demo elimina al iniciar.
-_EXTENSIONES_MOTOR = (".db", ".main", ".aux", ".bpt", ".hash", ".idx", ".reorg", ".tmp")
+_EXTENSIONES_MOTOR = (".db", ".main", ".aux", ".bpt", ".hash", ".idx", ".rtree", ".reorg", ".tmp")
 _DIRECTORIOS_TEMPORALES = (".bplus-build-",)
 
 
@@ -259,6 +260,9 @@ class Motor:
         primary_key = statement.primary_key
         # SEQUENTIAL y BTREE se ordenan por la clave primaria (o por la primera columna).
         key_field = primary_key or fields[0]
+        kinds = {column.name: column.type for column in statement.columns}
+        if kinds[key_field] == "point" and (primary_key or statement.storage_method != "heap"):
+            raise ValueError("POINT no puede ser clave primaria ni clave de orden físico; usa una columna INT")
         constraint = f"{statement.name}_pkey"
         if statement.storage_method == "sequential":
             storage = SequentialFile(
@@ -304,6 +308,9 @@ class Motor:
         cada DELETE del padre para aplicar RESTRICT o CASCADE.
         """
         for definition in statement.foreign_keys:
+            column = next(c for c in statement.columns if c.name == definition.column)
+            if column.type == "point":
+                raise ValueError("POINT no admite llaves foráneas")
             padre = self.catalog.table(definition.ref_table)
             columna_padre = definition.ref_column or padre.primary_key
             if columna_padre is None:
@@ -331,11 +338,17 @@ class Motor:
 
         position = binding.storage.schema.fields.index(statement.column)
         key_type = binding.storage.schema.types[position]
+        if (statement.method == "rtree") != (key_type == "point"):
+            raise ValueError("RTREE requiere una columna POINT; POINT solo admite índices RTREE")
         index_path = os.path.join(DEMO_DIR, f"{statement.table}_{statement.name}")
-        index_file = f"{index_path}.hash" if statement.method == "hash" else f"{index_path}.bpt"
+        extension = {"hash": "hash", "btree": "bpt", "rtree": "rtree"}[statement.method]
+        index_file = f"{index_path}.{extension}"
         if os.path.exists(index_file):
             raise ValueError(f"Ya existe el archivo {index_file!r}; usa otro nombre de índice")
-        if statement.method == "hash":
+        if statement.method == "rtree":
+            index = RTree(index_file)
+            metadata = IndexInfo(statement.name, statement.column, index, spatial=True)
+        elif statement.method == "hash":
             index = ExtendibleHash(filepath=index_file)
             metadata = IndexInfo(statement.name, statement.column, index)
         else:
@@ -357,6 +370,8 @@ class Motor:
     def _columnas_del_plan(self, plan):
         """Intenta extraer los nombres de columna del plan (para SELECT vacio)."""
         try:
+            while plan.operation != "Project" and len(plan.children) == 1:
+                plan = plan.children[0]
             if plan.operation == "Project":
                 columnas = plan.get("columns")
                 if columnas:

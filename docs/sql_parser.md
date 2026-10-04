@@ -26,7 +26,7 @@ representación del resultado:
 - `INSERT INTO ... VALUES`: una o varias filas de literales, con lista opcional
   de columnas. No se admiten expresiones ni subconsultas dentro de `VALUES`.
 - `DELETE FROM ...`: con alias y filtro opcionales.
-- `CREATE TABLE ...`: columnas `INT`, `FLOAT`, `STR(n)` o `VARCHAR(n)`, y una
+- `CREATE TABLE ...`: columnas `INT`, `FLOAT`, `STR(n)`, `VARCHAR(n)` o `POINT`, y una
   clave primaria opcional (`id INT PRIMARY KEY` o `PRIMARY KEY (id)`). La clave
   rechaza duplicados (`llave duplicada viola la restricción de unicidad
   "t_pkey"`); en un heap crea el índice hash `t_pkey` y en `SEQUENTIAL`/`BTREE`
@@ -53,12 +53,17 @@ representación del resultado:
   defecto se usa `HEAP`. `BTREE` crea una tabla organizada como **B+ agrupado**
   (registros en las hojas, clave primaria única = primera columna) y registra
   esa clave como índice agrupado para igualdad, rangos y `ORDER BY`.
-- `CREATE INDEX ... ON ... (...) USING HASH|BTREE`: índices secundarios de una
+- `CREATE INDEX ... ON ... (...) USING HASH|BTREE|RTREE`: índices secundarios de una
   columna (`BTREE` = B+ no agrupado). El optimizador usa el hash para igualdad y
   el B+ para igualdad, rangos (`<`, `<=`, `>`, `>=`, `BETWEEN`) y `ORDER BY`,
   comparando su costo estimado con el de un scan secuencial.
 - Transacciones: `BEGIN`, `COMMIT`, `END` y `ROLLBACK`, con `TRANSACTION` opcional.
   `END` se representa como `COMMIT` en el AST.
+- Espacial: literales `POINT(lat, lon)` y `POLYGON((lat, lon), ...)`, funciones
+  `distancia(p, q)` y `WITHIN(p, poligono)`. Métrica mediante `USING HAVERSINE`
+  o `USING EUCLIDEAN` al final de SELECT, o tercer argumento explícito en
+  `distancia`. El índice RTREE se usa para radio, k-NN y polígonos; sin él se
+  evalúan las mismas expresiones con scan. Véase [contratos y ejemplos](consultas_espaciales.md).
 
 No se admiten `ALTER`, `DROP`, `UPDATE`, subconsultas, uniones de resultados
 (`UNION`), joins externos/cruzados, tablas separadas por comas,
@@ -89,7 +94,7 @@ print(query.to_dict())       # Representación compatible con JSON
 
 `CreateTableStatement` conserva el nombre y las definiciones de columnas;
 `CreateIndexStatement` conserva el nombre, la tabla, la columna y el método
-(`hash` o `btree`). `SelectStatement` conserva proyecciones, fuente, joins, filtro, agrupación,
+(`hash`, `btree` o `rtree`). `SelectStatement` conserva proyecciones, fuente, joins, filtro, agrupación,
 `HAVING`, orden y límites. `InsertStatement` conserva la tabla, las columnas y
 filas de nodos `Literal`. `DeleteStatement` conserva tabla y filtro, mientras
 que `TransactionStatement` conserva la acción. Los nodos de expresión retienen
@@ -155,6 +160,13 @@ También admite `clustered`, `lookup_pages` y la ubicación de NULLs. El extendi
 hash solo ofrece igualdad. `BPlusTreeUnclustered` implementa el contrato ordenado
 y se puede registrar con `IndexInfo(..., ordered=True)`; sus RIDs se resuelven
 en el storage registrado. Véase [Índices B+](bplus_indexes.md).
+Un R-Tree se registra con `IndexInfo(..., spatial=True)`. El optimizador detecta
+un radio constante o un polígono dentro de predicados AND; conserva el filtro
+SQL completo para respetar desigualdades estrictas, OR y NOT. Para top-k con
+WHERE amplía los vecinos candidatos hasta reunir suficientes filas elegibles.
+Las métricas quedan en `SpatialCall` y las geometrías en `Literal`; ambos se
+convierten a JSON con `to_dict()`. POINT ocupa 16 bytes y también puede viajar
+en los archivos temporales de sort, group y join.
 Las expresiones calculadas o entradas transformadas usan operadores externos.
 Los temporales se serializan con `struct`, sin `pickle`. `BufferConfig` limita
 la cantidad lógica de registros del buffer, no los bytes de objetos Python.

@@ -52,6 +52,7 @@ class IndexInfo:
     valid: bool = True
     lookup_pages: float = 1.0
     nulls_first_ascending: bool = False
+    spatial: bool = False
 
     def __post_init__(self):
         if not self.name or not self.field or not math.isfinite(self.lookup_pages) or self.lookup_pages < 0:
