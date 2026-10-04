@@ -47,13 +47,14 @@ class PanelArchivos(ttk.LabelFrame):
         for nombre in nombres:
             self.lista.insert(tk.END, nombre)
 
-        if anterior in nombres:
-            posicion = nombres.index(anterior)
-            self.lista.selection_set(posicion)
-            self.lista.see(posicion)
-            self._on_seleccion(None)
-        else:
+        if not nombres:
             self._mostrar_esquema("")
+            return
+        # Conserva la selección; si no había (inicio o tabla borrada), muestra la primera.
+        posicion = nombres.index(anterior) if anterior in nombres else 0
+        self.lista.selection_set(posicion)
+        self.lista.see(posicion)
+        self._on_seleccion(None)
 
     def _on_seleccion(self, event):
         """Muestra el esquema de la tabla seleccionada."""

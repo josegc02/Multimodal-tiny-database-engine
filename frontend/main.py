@@ -3,7 +3,7 @@
 import tkinter as tk
 from tkinter import ttk
 
-from frontend.motor import Motor
+from frontend.motor import PROJECT_DIR, Motor
 from frontend.panel_archivos import PanelArchivos
 from frontend.panel_consultas import PanelConsultas
 from frontend.panel_resultados import PanelResultados
@@ -27,7 +27,7 @@ class Aplicacion(tk.Tk):
 
         # Crear los 4 paneles
         self.panel_archivos = PanelArchivos(self)
-        self.panel_consultas = PanelConsultas(self, on_ejecutar=self._on_ejecutar)
+        self.panel_consultas = PanelConsultas(self, on_ejecutar=self._on_ejecutar, base_dir=PROJECT_DIR)
         self.panel_resultados = PanelResultados(self)
         self.panel_plan = PanelPlanEjecucion(self)
 
@@ -45,6 +45,8 @@ class Aplicacion(tk.Tk):
 
         # Conectar paneles con el motor
         self.panel_archivos.set_catalog(self.motor.catalog)
+        self.panel_consultas.obtener_tablas = lambda: set(self.motor.catalog.tables)
+        self.panel_consultas.on_error = self.panel_resultados.mostrar_error
 
         # Registrar cierre limpio
         self.protocol("WM_DELETE_WINDOW", self._on_cerrar)
@@ -72,9 +74,11 @@ class Aplicacion(tk.Tk):
         else:
             self.panel_resultados.mostrar_mensaje("Sin resultados")
 
-        # El plan solo aparece cuando se ejecuta EXPLAIN / EXPLAIN ANALYZE.
-        if resultado.plan is not None:
-            self.panel_plan.mostrar_plan_texto(resultado.plan)
+        # El plan solo aparece cuando se ejecuta EXPLAIN / EXPLAIN ANALYZE:
+        # Resultados muestra el texto y este panel el análisis por nodo.
+        if resultado.plan_nodos:
+            self.panel_plan.mostrar_plan(resultado.plan_nodos, analyze=resultado.tiempos[1] is not None,
+                                         tiempos=resultado.tiempos)
         else:
             self.panel_plan.limpiar()
         self.panel_archivos.refresh()

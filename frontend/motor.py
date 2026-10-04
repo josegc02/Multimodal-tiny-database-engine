@@ -63,11 +63,13 @@ class Resultado:
     """
 
     def __init__(self, columnas=None, filas=None, mensaje=None,
-                 plan=None, error=None):
+                 plan=None, error=None, plan_nodos=None, tiempos=(None, None)):
         self.columnas = columnas or []
         self.filas = filas or []
         self.mensaje = mensaje
         self.plan = plan
+        self.plan_nodos = plan_nodos  # árbol del plan como datos (panel de análisis)
+        self.tiempos = tiempos        # (planificación, ejecución) en segundos, con ANALYZE
         self.error = error
 
     @property
@@ -212,7 +214,8 @@ class Motor:
             if isinstance(ast, ExplainStatement):
                 lineas = self.statement_executor.execute(ast)
                 return Resultado(columnas=["QUERY PLAN"], filas=[(linea,) for linea in lineas],
-                                 plan=lineas)
+                                 plan=lineas, plan_nodos=getattr(lineas, "nodes", None),
+                                 tiempos=(getattr(lineas, "planning", None), getattr(lineas, "execution", None)))
 
             # --- SELECT ---
             if isinstance(ast, SelectStatement):
