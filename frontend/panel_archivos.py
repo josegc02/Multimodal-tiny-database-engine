@@ -35,16 +35,25 @@ class PanelArchivos(ttk.LabelFrame):
         self.refresh()
 
     def refresh(self):
-        """Recarga la lista de tablas desde el catalogo."""
+        """Recarga la lista de tablas conservando la tabla seleccionada."""
+        seleccion = self.lista.curselection()
+        anterior = self.lista.get(seleccion[0]) if seleccion else None
         self.lista.delete(0, tk.END)
 
         if self.catalog is None:
             return
 
-        for nombre in sorted(self.catalog.tables.keys()):
+        nombres = sorted(self.catalog.tables.keys())
+        for nombre in nombres:
             self.lista.insert(tk.END, nombre)
 
-        self._mostrar_esquema("")
+        if anterior in nombres:
+            posicion = nombres.index(anterior)
+            self.lista.selection_set(posicion)
+            self.lista.see(posicion)
+            self._on_seleccion(None)
+        else:
+            self._mostrar_esquema("")
 
     def _on_seleccion(self, event):
         """Muestra el esquema de la tabla seleccionada."""
@@ -72,6 +81,21 @@ class PanelArchivos(ttk.LabelFrame):
         lineas.append("Campos:")
         for campo, tipo in zip(storage.schema.fields, storage.schema.types):
             lineas.append(f"  - {campo}: {tipo}")
+
+        if binding.indexes:
+            lineas.append("")
+            lineas.append("Indices:")
+            for campo, registro in binding.indexes.items():
+                info = registro.metadata
+                tipo = type(registro.index).__name__
+                if info is not None and info.clustered:
+                    tipo = "B+ agrupado (la tabla)"
+                elif info is not None and info.ordered:
+                    tipo = "B+ no agrupado"
+                elif "Hash" in tipo:
+                    tipo = "Hash extensible"
+                nombre_indice = info.name if info is not None else campo
+                lineas.append(f"  - {nombre_indice} ({campo}): {tipo}")
 
         # Info adicional de estadisticas
         stats = binding.statistics

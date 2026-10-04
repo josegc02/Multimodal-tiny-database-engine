@@ -80,6 +80,41 @@ class TestMotorDDL(unittest.TestCase):
         self.execute("CREATE INDEX t_id ON t (id) USING HASH")
         self.assertTrue(self.motor.ejecutar("CREATE INDEX t_id_2 ON t (id) USING BTREE").tiene_error)
 
+    def test_demo_mode_starts_clean_after_closing_and_reopening(self):
+        # Simula usar el frontend, cerrarlo y volver a abrirlo.
+        script = [
+            "CREATE TABLE emp (id INT, nombre VARCHAR(20))",
+            "CREATE TABLE emp_seq (id INT, nombre VARCHAR(20)) USING SEQUENTIAL",
+            "CREATE TABLE emp_bt (id INT, nombre VARCHAR(20)) USING BTREE",
+            "INSERT INTO emp VALUES (1, 'Ana')",
+            "INSERT INTO emp_seq VALUES (1, 'Ana')",
+            "INSERT INTO emp_bt VALUES (1, 'Ana')",
+            "CREATE INDEX emp_hash ON emp (id) USING HASH",
+            "CREATE INDEX emp_nom ON emp (nombre) USING BTREE",
+            "INSERT INTO cuentas VALUES (99, 'Zoe', 1)",
+        ]
+        for _ in range(2):
+            for sql in script:
+                self.execute(sql)
+            self.motor.cerrar()
+            self.motor = Motor()
+            self.assertEqual(sorted(self.motor.catalog.tables), ["cuentas", "productos"])
+            self.assertEqual(self.execute("SELECT COUNT(*) AS n FROM cuentas").filas, [(3,)])
+
+    def test_close_is_idempotent(self):
+        self.motor.cerrar()
+        self.motor.cerrar()
+
+    def test_cleanup_only_removes_engine_files(self):
+        import os
+        from frontend import motor as motor_module
+        notas = os.path.join(motor_module.DEMO_DIR, "notas.txt")
+        with open(notas, "w", encoding="utf-8") as fh:
+            fh.write("no borrar")
+        self.motor.cerrar()
+        self.motor = Motor()
+        self.assertTrue(os.path.exists(notas))
+
     def test_ddl_rejects_duplicate_index_name(self):
         self.execute("CREATE TABLE first_table (id INT)")
         self.execute("CREATE TABLE second_table (id INT)")
