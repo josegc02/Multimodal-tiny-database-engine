@@ -15,7 +15,7 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks._common import (NA, arguments, no_gc, plot, print_table, progress, read_summary, series,
+from benchmarks._common import (NA, arguments, plot, print_table, progress, read_summary, series,
                                 summarize, write_csv, write_metadata)
 from benchmarks.generate_datasets import SCHEMA, generate_records
 from engine.storage.heap_file import HeapFile
@@ -146,8 +146,7 @@ def main():
     runs = []
     for n in args.sizes:
         for rep in range(1, args.repetitions + 1):
-            with no_gc():
-                runs.extend(benchmark(n, args.seed, rep))
+            runs.extend(benchmark(n, args.seed, rep))
     rows = summarize(runs, ("tecnica", "n_registros"), METRICS)
     os.makedirs(args.output_dir, exist_ok=True)
     write_csv(args.output_dir / "storage_comparison.csv", rows, FIELDS)
@@ -159,7 +158,6 @@ def main():
     elapsed = time.perf_counter() - started
     write_metadata(args, "storage", elapsed, {
         "page_size": 4096, "equality_queries": QUERIES, "deleted_fraction": .35,
-        "gc": "recolector cíclico desactivado durante cada tamaño (como timeit); gc.collect() antes de medir",
         "sequential": "auto_reorganize=True: reorganiza si desperdicio > 30% o aux > ceil(log2(P_main+1)) páginas; fill_factor 0,9",
         "heap_search": "search_by_key(unique=True): scan que se detiene en la primera coincidencia",
         "search_state": "tras la carga y, en el secuencial, también tras reorganizar (65 claves sobrevivientes, escalado a 100)",

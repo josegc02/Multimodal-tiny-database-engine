@@ -55,10 +55,11 @@ archivos de datos se crean con `tempfile.mkdtemp()` y se borran al terminar.
 - **Dataset**: IDs únicos 0..N-1 en orden aleatorio, nombres ASCII de 20
   caracteres y precios (36 B por registro); todas las técnicas reciben el mismo
   orden y las mismas claves de consulta.
-- **Recolector de basura**: el recolector cíclico se desactiva mientras se mide
-  cada tamaño (con un `gc.collect()` previo), como hace `timeit`. Con N grande
-  el dataset vive en memoria y cada recolección total lo recorre: su costo
-  crecería con N y haría parecer O(N) operaciones O(1).
+- **Variación del entorno**: en Windows, la misma corrida puede variar ±25–30%
+  entre repeticiones (frecuencia del CPU, antivirus, procesos de fondo). Por
+  eso se repite 3 veces y se grafica la desviación estándar. El recolector de
+  basura queda activo: un experimento alternando encendido/apagado en la misma
+  sesión no mostró diferencias mayores que esa variación.
 
 ### Storage (`bench_storage.py`)
 

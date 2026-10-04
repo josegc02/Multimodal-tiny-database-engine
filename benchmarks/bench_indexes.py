@@ -18,7 +18,7 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks._common import (NA, arguments, no_gc, plot, print_table, progress, read_summary, series,
+from benchmarks._common import (NA, arguments, plot, print_table, progress, read_summary, series,
                                 summarize, write_csv, write_metadata)
 from benchmarks.generate_datasets import SCHEMA, generate_records
 from engine.indexes import BPlusTreeClustered, BPlusTreeUnclustered, ExtendibleHash
@@ -257,8 +257,7 @@ def main():
     runs, structures = [], []
     for n in args.sizes:
         for rep in range(1, args.repetitions + 1):
-            with no_gc():
-                result, stats = benchmark(n, args.seed, rep)
+            result, stats = benchmark(n, args.seed, rep)
             runs.extend(result)
             if rep == 1:
                 structures.extend(stats)
@@ -275,7 +274,6 @@ def main():
     elapsed = time.perf_counter() - started
     write_metadata(args, "indexes", elapsed, {
         "page_size": PAGE_SIZE, "bplus_clustered_M": ORDER_CLUSTERED, "bplus_unclustered_M": ORDER_UNCLUSTERED,
-        "gc": "recolector cíclico desactivado durante cada tamaño (como timeit); gc.collect() antes de medir",
         "hash_bucket_capacity": HASH_BUCKET, "hash_max_depth": 16,
         "equality_queries": EQUALITY_QUERIES, "range_queries": RANGE_QUERIES,
         "range_width": f"[k, min(N-1, k+{RANGE_WIDTH})]", "update_pairs": UPDATE_PAIRS,

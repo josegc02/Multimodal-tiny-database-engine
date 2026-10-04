@@ -1,9 +1,7 @@
 """Salida CSV/PNG, repeticiones y metadatos comunes; no ejecuta benchmarks al importar."""
 
 import argparse
-from contextlib import contextmanager
 import csv
-import gc
 from datetime import datetime, timezone
 import json
 import os
@@ -34,24 +32,6 @@ def arguments(description):
         parser.error("--repetitions debe ser >= 1")
     args.sizes.sort()
     return args
-
-
-@contextmanager
-def no_gc():
-    """Mide sin el recolector de basura cíclico, como hace timeit.
-
-    Con N grande el dataset completo vive en memoria y cada recolección total
-    recorre todos sus objetos: su costo crecería con N y distorsionaría el
-    costo por operación. Se recolecta una vez antes de medir.
-    """
-    enabled = gc.isenabled()
-    gc.collect()
-    gc.disable()
-    try:
-        yield
-    finally:
-        if enabled:
-            gc.enable()
 
 
 def summarize(runs, key_fields, metrics):
