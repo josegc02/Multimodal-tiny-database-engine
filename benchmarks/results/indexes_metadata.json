@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-04T04:14:53.042008+00:00",
+  "timestamp_utc": "2026-10-04T06:41:20.208480+00:00",
   "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
   "platform": "Windows-11-10.0.26200-SP0",
   "machine": "AMD64",
@@ -10,11 +10,12 @@
     100000
   ],
   "repetitions": 3,
-  "elapsed_seconds": 1043.2285670998972,
+  "elapsed_seconds": 1160.7104928998742,
   "matplotlib": "3.10.7",
   "page_size": 4096,
   "bplus_clustered_M": 92,
   "bplus_unclustered_M": 254,
+  "gc": "recolector cíclico desactivado durante cada tamaño (como timeit); gc.collect() antes de medir",
   "hash_bucket_capacity": 254,
   "hash_max_depth": 16,
   "equality_queries": 100,
@@ -25,7 +26,7 @@
   "ordering": "agrupado: hojas; no agrupado: hojas + heap.get; hash: heap.scan + external_sort",
   "space": "espacio_total = tabla + índice; espacio_adicional = total - heap con los mismos N registros",
   "memory_estimate": "solo hash: sys.getsizeof del grafo retenido; no RSS",
-  "durability": "B+ escribe/flush por operación; hash en RAM con snapshot JSON al terminar construcción y actualizaciones",
+  "durability": "B+ escribe/flush por operación; hash en RAM, su snapshot JSON se mide aparte (tiempo_snapshot_seg)",
   "structural_stats": [
     {
       "tecnica": "B+ agrupado",
