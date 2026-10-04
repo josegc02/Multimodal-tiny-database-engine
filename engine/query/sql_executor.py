@@ -172,7 +172,9 @@ class SQLExecutor:
                          for i, call in enumerate(aggregates)}
                 fields = tuple(f"$group{i}" for i in range(len(groups)))
                 specs = specs or {"$unused": Aggregate()}
-                if ordered:
+                if any(call.distinct for call in aggregates):
+                    yield from self._distinct_aggregates(prepared(), fields, aggregates, specs, stats)
+                elif ordered:
                     yield from streaming_group_by(prepared(), fields, specs)
                 else:
                     yield from external_hash_group_by(prepared(), fields, specs, config=self.config, stats=stats)
@@ -213,6 +215,41 @@ class SQLExecutor:
                                 yield row
             else:
                 raise SQLExecutionError(f"Operador lógico no soportado: {operation}")
+
+    def _distinct_aggregates(self, rows, fields, aggregates, specs, stats):
+        """GROUP BY con agregados DISTINCT (p. ej. COUNT(DISTINCT x)).
+
+        Las filas se guardan en un archivo temporal para recorrerlas varias
+        veces con memoria acotada: una pasada calcula los agregados normales y,
+        por cada agregado DISTINCT, otra elimina duplicados (grupo, valor) con
+        hash externo y luego agrega por grupo.
+        """
+        def group_by(source, keys, aggregate_specs):
+            return external_hash_group_by(source, keys, aggregate_specs, config=self.config, stats=stats)
+
+        with tempfile.TemporaryFile(dir=self.config.temp_dir) as fh:
+            write_header(fh)
+            count = 0
+            for row in rows:
+                write_record(fh, row)
+                count += 1
+
+            def replay():
+                fh.seek(0)
+                read_header(fh)
+                for _ in range(count):
+                    yield read_record(fh)
+
+            distinct = {f"$agg{i}" for i, call in enumerate(aggregates) if call.distinct}
+            plain = {name: spec for name, spec in specs.items() if name not in distinct}
+            results = {tuple(row[f] for f in fields): row
+                       for row in group_by(replay(), fields, plain or {"$unused": Aggregate()})}
+            for name in sorted(distinct):
+                value = specs[name].field
+                unique = group_by(replay(), fields + (value,), {"$unused": Aggregate()})
+                for row in group_by(unique, fields, {name: specs[name]}):
+                    results[tuple(row[f] for f in fields)][name] = row[name]
+        yield from results.values()
 
     def _insert(self, plan):
         binding = self.catalog.table(plan.get("table"))

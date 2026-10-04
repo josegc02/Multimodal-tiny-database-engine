@@ -121,9 +121,9 @@ class LogicalPlanner:
         if isinstance(expression, ast.AggregateCall):
             if not aggregates:
                 raise SQLSemanticError("No se permite un agregado en este contexto")
-            if expression.distinct:
-                raise SQLSemanticError("La ejecución de agregados DISTINCT aún no está implementada")
             if isinstance(expression.argument, ast.Star):
+                if expression.distinct:
+                    raise SQLSemanticError("DISTINCT requiere una expresión, no '*'")
                 if expression.function != "COUNT":
                     raise SQLSemanticError("Solo COUNT admite '*'")
                 return expression

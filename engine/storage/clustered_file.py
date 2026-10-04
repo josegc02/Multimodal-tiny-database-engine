@@ -14,6 +14,7 @@ consumidores relocalizan por clave (search_by_key).
 
 from __future__ import annotations
 
+import math
 import threading
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -97,6 +98,9 @@ class ClusteredBPlusFile:
 
     @latched
     def search_by_key(self, value: Any) -> List[Tuple[RID, Dict[str, Any]]]:
+        # Igualdad SQL entre int y float integral (id = 1.0), sin truncar 1.5 a 1.
+        if self.tree.key_type == "int" and type(value) is float and math.isfinite(value) and value.is_integer():
+            value = int(value)
         try:
             key = self.tree._normalize_key(value)
         except (TypeError, ValueError, OverflowError):
