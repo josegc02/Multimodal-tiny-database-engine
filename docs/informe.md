@@ -154,14 +154,14 @@ Las pruebas se ejecutan con scripts de consola independientes del frontend (`ben
 * **Páginas** de **4096 bytes** en todas las estructuras.
 * **Repeticiones**: **3 corridas por tamaño**. Las tablas reportan la **media**, y las gráficas muestran barras de error de ± 1 desviación estándar (`*_comparison.csv`; cada corrida está en `*_runs.csv`).
 * **Gráficas en escala log-log** (también las de espacio), para comparar crecimientos sin distorsiones.
-* **Entorno**: Windows 11 (AMD64), Python 3.13.5, sin vaciar la caché del sistema operativo. La corrida de almacenamiento tomó **250 s** y la de índices **1.243 s**.
+* **Entorno**: Windows 11 (AMD64), Python 3.13.5, sin vaciar la caché del sistema operativo. La corrida de almacenamiento tomó **250 s** y la de índices **1.043 s**.
 
 > **Corrección respecto de la versión anterior de este informe.** La medición original (18/09) tenía tres problemas que invalidaban varias conclusiones:
 > 1. El Archivo Secuencial dejaba **una sola página en `main`** y enviaba el resto de los registros a `aux` (con N=10.000: 1 página en `main` y 101 en `aux`). En la práctica se comparaba un heap contra otro heap, la búsqueda del secuencial era lineal y el espacio en disco salía idéntico.
 > 2. La búsqueda del Heap recorría el archivo completo aunque la clave fuera primaria, y el B+ no agrupado devolvía RIDs sin leer los registros del heap.
-> 3. El B+ recalculaba todos los separadores del camino tras **cada** inserción. Además, todos los índices usaban M = 64, sin importar el tamaño real de sus entradas.
+> 3. El B+ recalculaba todos los separadores del camino tras **cada** inserción y eliminación. Además, todos los índices usaban M = 64, sin importar el tamaño real de sus entradas.
 >
-> Se corrigieron el motor (secuencial con reorganización automática y separadores del B+ actualizados en O(altura)) y los benchmarks. Todos los números de esta sección provienen de la nueva corrida.
+> Se corrigieron el motor (secuencial con reorganización automática; inserción y eliminación del B+ en O(altura)) y los benchmarks. Todos los números de esta sección provienen de la nueva corrida.
 
 ### 3.2 Comparación de Almacenamiento: Heap File vs Archivo Secuencial
 
@@ -228,12 +228,12 @@ Tras borrar el **35%** de los registros (no cronometrado), `needs_reorganization
 
 | N | B+ agrupado | B+ no agrupado | Extendible Hash |
 | ---: | ---: | ---: | ---: |
-| 1.000 | 0,63 s | 1,17 s | 0,05 s |
-| 10.000 | 8,52 s | 13,46 s | 0,70 s |
-| 100.000 | 97,19 s | 161,31 s | 9,58 s |
+| 1.000 | 0,63 s | 1,19 s | 0,04 s |
+| 10.000 | 6,92 s | 12,03 s | 0,62 s |
+| 100.000 | 89,61 s | 168,80 s | 8,00 s |
 
-* El hash es **16,8 veces más rápido** que el B+ no agrupado en 100K. Trabaja en RAM y escribe un único snapshot JSON al final (incluido en el tiempo), mientras que el B+ escribe y hace `flush` de cada página que modifica.
-* El no agrupado tarda **1,66 veces** más que el agrupado aunque sus entradas son más pequeñas. Con M = 254, cada escritura de nodo serializa casi el triple de entradas que con M = 92.
+* El hash es **21 veces más rápido** que el B+ no agrupado en 100K. Trabaja en RAM y escribe un único snapshot JSON al final (incluido en el tiempo), mientras que el B+ escribe y hace `flush` de cada página que modifica.
+* El no agrupado tarda **1,88 veces** más que el agrupado aunque sus entradas son más pequeñas. Con M = 254, cada escritura de nodo serializa casi el triple de entradas que con M = 92.
 * Con la versión anterior del B+ (M = 64 y recálculo completo de separadores en cada inserción), construir 100K registros tomaba **698 s** (agrupado) y **443 s** (no agrupado).
 
 #### Búsqueda por igualdad
@@ -243,11 +243,11 @@ Promedio por consulta, registro completo:
 
 | N | B+ agrupado | B+ no agrupado | Extendible Hash |
 | ---: | ---: | ---: | ---: |
-| 1.000 | 0,25 ms | 0,71 ms | 0,05 ms |
-| 10.000 | 0,38 ms | 0,66 ms | 0,09 ms |
-| 100.000 | 0,62 ms | 1,00 ms | 0,14 ms |
+| 1.000 | 0,28 ms | 0,65 ms | 0,05 ms |
+| 10.000 | 0,37 ms | 0,75 ms | 0,09 ms |
+| 100.000 | 0,46 ms | 0,99 ms | 0,10 ms |
 
-El hash es el más rápido: calcula el bucket directamente (BLAKE2b) en RAM y hace **una sola lectura** del heap. El B+ agrupado lee la altura del árbol y encuentra el registro en la hoja. El no agrupado lee la altura del árbol **más** una página del heap. Por eso es entre 1,6 y 2,8 veces más lento que el agrupado. Los tres crecen poco con N (O(1) y O(log N)).
+El hash es el más rápido: calcula el bucket directamente (BLAKE2b) en RAM y hace **una sola lectura** del heap. El B+ agrupado lee la altura del árbol y encuentra el registro en la hoja. El no agrupado lee la altura del árbol **más** una página del heap, por eso es entre 2,0 y 2,4 veces más lento que el agrupado. Los tres crecen poco con N (O(1) y O(log N)).
 
 #### Búsqueda por rango
 ![](../benchmarks/results/indexes_tiempo_rango.png)
@@ -256,19 +256,19 @@ Promedio de 20 rangos `[k, k+100]` (101 registros):
 
 | N | B+ agrupado | B+ no agrupado |
 | ---: | ---: | ---: |
-| 1.000 | 0,80 ms | 2,95 ms |
-| 10.000 | 1,11 ms | 2,80 ms |
-| 100.000 | 1,55 ms | 5,40 ms |
+| 1.000 | 1,04 ms | 2,02 ms |
+| 10.000 | 1,13 ms | 3,20 ms |
+| 100.000 | 1,14 ms | 3,44 ms |
 
-En el **agrupado** los 101 registros están contiguos en 1 o 2 hojas. El **no agrupado** recorre sus hojas, pero debe leer cada uno de los 101 RIDs en una página distinta del heap. Como los datos se insertaron en orden aleatorio, claves vecinas quedan en páginas distintas, y el agrupado resulta **3,5 veces más rápido** en 100K. (La versión anterior del informe concluía lo contrario porque el no agrupado no leía los registros.) El **Extendible Hash no soporta rangos**: la función hash dispersa claves consecutivas en buckets distintos.
+En el **agrupado** los 101 registros están contiguos en 1 o 2 hojas. El **no agrupado** recorre sus hojas, pero debe leer cada uno de los 101 RIDs en una página distinta del heap. Como los datos se insertaron en orden aleatorio, claves vecinas quedan en páginas distintas, y el agrupado resulta **3 veces más rápido** en 100K. (La versión anterior del informe concluía lo contrario porque el no agrupado no leía los registros.) El **Extendible Hash no soporta rangos**: la función hash dispersa claves consecutivas en buckets distintos.
 
 #### Ordenamiento (ORDER BY)
 ![](../benchmarks/results/indexes_tiempo_orden.png)
 
-`ORDER BY id` sobre toda la tabla: **0,45 s** (agrupado), **3,93 s** (no agrupado) y **15,41 s** (hash) con 100K registros.
+`ORDER BY id` sobre toda la tabla: **0,50 s** (agrupado), **3,74 s** (no agrupado) y **12,54 s** (hash) con 100K registros.
 * El agrupado recorre sus hojas encadenadas, que ya están ordenadas.
-* El no agrupado obtiene el orden de sus hojas, pero hace una lectura aleatoria del heap por cada registro.
-* El hash no aporta orden, así que el motor recurre a `scan` del heap + *external sort* k-way. Es 34 veces más lento que el agrupado.
+* El no agrupado obtiene el orden de sus hojas, pero hace una lectura aleatoria del heap por cada registro: 7,5 veces más lento que el agrupado.
+* El hash no aporta orden, así que el motor recurre a `scan` del heap + *external sort* k-way: 25 veces más lento que el agrupado.
 
 #### Espacio en disco y memoria
 ![](../benchmarks/results/indexes_espacio_total.png)
@@ -283,20 +283,28 @@ Los tres terminan ocupando de 1,52 a 1,57 veces lo que ocupa el heap solo. La di
 #### Inserciones y eliminaciones frecuentes
 ![](../benchmarks/results/indexes_tiempo_actualizaciones.png)
 
-500 ciclos de inserción + eliminación (1.000 operaciones, en tabla e índice): **17,4 s** (agrupado), **23,9 s** (no agrupado) y **1,79 s** (hash) en 100K.
-* El hash resuelve cada operación en RAM con splits y merges locales.
-* En el B+, la eliminación sigue recalculando los separadores del camino con `_first_key`. Es el costo dominante y la siguiente optimización pendiente, igual a la que ya se aplicó a la inserción.
+500 ciclos de inserción + eliminación (1.000 operaciones, en tabla e índice):
+
+| N | B+ agrupado | B+ no agrupado | Extendible Hash |
+| ---: | ---: | ---: | ---: |
+| 1.000 | 1,04 s | 1,36 s | 0,29 s |
+| 10.000 | 1,05 s | 1,33 s | 0,22 s |
+| 100.000 | 1,26 s | 1,82 s | 1,28 s |
+
+* En el B+, inserción y eliminación cuestan O(altura): los splits, redistribuciones y fusiones actualizan solo los separadores afectados. Por eso el tiempo casi no cambia entre 1.000 y 100.000 registros (de 1,0 a 1,3 s en el agrupado).
+* Con la versión anterior, que recalculaba los separadores de todo el camino al eliminar, las mismas 1.000 operaciones tomaban **17,4 s** (agrupado) y **23,9 s** (no agrupado) en 100K: ahora son **14 y 13 veces más rápidas**.
+* El hash resuelve cada operación en RAM; su tiempo en 100K incluye además reescribir el snapshot JSON completo (2,17 MB) al final, por lo que ahí queda a la par del B+ agrupado.
 
 #### Resumen y conclusiones de índices
 
 | Técnica | Ventajas | Desventajas | Escenario recomendado |
 | :--- | :--- | :--- | :--- |
-| **B+ Agrupado** | El mejor en rangos (3,5× frente al no agrupado) y en ORDER BY (8,7×); igualdad en O(log N) sin I/O adicional. | Solo uno por tabla (define el orden físico); splits mueven registros completos; ~57% más espacio que un heap. | Clave primaria de tablas con consultas de rango, ordenamientos o recorridos por clave. |
-| **B+ No Agrupado** | Rangos y orden sobre cualquier columna; permite varios por tabla; claves duplicadas. | Una lectura aleatoria del heap por registro: 3,5× más lento que el agrupado en rangos y 8,7× en ORDER BY. | Índices secundarios sobre columnas con filtros de rango selectivos (pocos registros por consulta). |
-| **Extendible Hash** | La igualdad más rápida (0,14 ms en 100K) y las actualizaciones más baratas; construcción 16,8× más rápida. | No soporta rangos ni orden; reside en RAM (23,8 MB para 100K) y persiste por snapshot completo. | Búsquedas exactas y joins por igualdad sobre claves que no se consultan por rango. |
+| **B+ Agrupado** | El mejor en rangos (3× frente al no agrupado) y en ORDER BY (7,5×); igualdad en O(log N) sin I/O adicional; actualizaciones en O(altura). | Solo uno por tabla (define el orden físico); splits mueven registros completos; ~57% más espacio que un heap. | Clave primaria de tablas con consultas de rango, ordenamientos o recorridos por clave (`CREATE TABLE ... USING BTREE`). |
+| **B+ No Agrupado** | Rangos y orden sobre cualquier columna; permite varios por tabla; claves duplicadas. | Una lectura aleatoria del heap por registro: 3× más lento que el agrupado en rangos y 7,5× en ORDER BY. | Índices secundarios sobre columnas con filtros de rango selectivos (pocos registros por consulta). |
+| **Extendible Hash** | La igualdad más rápida (0,10 ms en 100K); construcción 21× más rápida. | No soporta rangos ni orden; reside en RAM (23,8 MB para 100K) y persiste por snapshot completo, cuyo costo crece con N. | Búsquedas exactas y joins por igualdad sobre claves que no se consultan por rango. |
 
 ### 3.4 Conclusión general de la Parte 1
 No existe una estructura óptima para todo: cada una equilibra de forma distinta el costo de escritura, la latencia de lectura y el consumo de recursos.
-* Para **alta tasa de escritura con consultas de punto exacto**, la mejor combinación es **Heap File + Extendible Hash**: inserción O(1) y búsqueda en ~0,1 ms, a cambio de mantener el índice en RAM.
+* Para **alta tasa de escritura con consultas de punto exacto**, la mejor combinación es **Heap File + Extendible Hash**: inserción O(1) y búsqueda en ~0,1 ms, a cambio de mantener el índice en RAM. Desde SQL, los índices se mantienen fila por fila en cada INSERT/DELETE (no se reconstruyen).
 * Para **consultas por rango u ordenamiento sobre la clave primaria**, conviene un **B+ agrupado**, o un **Sequential File** si la tabla se lee mucho más de lo que se escribe. Las mediciones corregidas muestran que la búsqueda binaria del secuencial supera al heap por más de tres órdenes de magnitud, a cambio de insertar ~3 veces más lento.
 * El **B+ no agrupado** se justifica para columnas secundarias con filtros selectivos. En rangos grandes o en ORDER BY de toda la tabla, sus lecturas aleatorias al heap lo vuelven varias veces más lento que el agrupado.

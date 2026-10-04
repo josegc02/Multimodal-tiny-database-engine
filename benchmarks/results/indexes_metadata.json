@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-03T20:02:24.016505+00:00",
+  "timestamp_utc": "2026-10-04T04:14:53.042008+00:00",
   "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
   "platform": "Windows-11-10.0.26200-SP0",
   "machine": "AMD64",
@@ -10,7 +10,7 @@
     100000
   ],
   "repetitions": 3,
-  "elapsed_seconds": 1242.60258289997,
+  "elapsed_seconds": 1043.2285670998972,
   "matplotlib": "3.10.7",
   "page_size": 4096,
   "bplus_clustered_M": 92,

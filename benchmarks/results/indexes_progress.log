@@ -25,3 +25,4 @@
 [indexes] N=100000 rep=3: B+ agrupado
 [indexes] N=100000 rep=3: B+ no agrupado
 [indexes] N=100000 rep=3: Extendible Hash
+Matplotlib is building the font cache; this may take a moment.
