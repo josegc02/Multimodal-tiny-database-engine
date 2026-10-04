@@ -245,7 +245,18 @@ class Motor:
         binding = self.catalog.table(statement.from_table.name)
         identifier = binding.primary_key or binding.storage.schema.fields[0]
         points = []
-        for _, record in binding.storage.scan():
+        point_field = next((name for name, kind in zip(binding.storage.schema.fields, binding.storage.schema.types)
+                            if kind == "point"), None)
+        spatial_index = binding.indexes.get(point_field) if point_field else None
+        # El mapa no debe transformar una consulta resuelta por R-Tree en un scan
+        # completo. Si el índice está vigente, ya contiene todos los puntos y sus RID.
+        if spatial_index is not None and spatial_index.valid and hasattr(spatial_index.index, "__iter__"):
+            records = ((rid, binding.storage.get(rid)) for _, rid in spatial_index.index)
+        else:
+            records = binding.storage.scan()
+        for _, record in records:
+            if record is None:
+                continue
             for name, kind in zip(binding.storage.schema.fields, binding.storage.schema.types):
                 if kind == "point":
                     point = record[name]
