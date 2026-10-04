@@ -11,8 +11,7 @@ CREATE TABLE IF NOT EXISTS puntos (
     ubicacion GEOGRAPHY(POINT, 4326) NOT NULL
 );
 
--- El índice GiST se crea después de cargar los datos para medir su construcción:
---   CREATE INDEX puntos_ubicacion_gist ON puntos USING GIST (ubicacion);
+CREATE INDEX IF NOT EXISTS puntos_ubicacion_gist ON puntos USING GIST (ubicacion);
 
 CREATE TABLE IF NOT EXISTS distritos (
     id     INTEGER PRIMARY KEY,
