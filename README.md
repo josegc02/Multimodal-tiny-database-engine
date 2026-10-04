@@ -26,9 +26,11 @@ python -m pip install -r requirements.txt pytest
 python -m frontend.main
 ```
 
-Paneles: **Archivos** (tablas, esquema, índices y estadísticas), **Consultas** (editor SQL; `Ctrl+Enter` ejecuta), **Resultados** y **Plan de ejecución**, que muestra el `QUERY PLAN` cuando se ejecuta `EXPLAIN` o `EXPLAIN ANALYZE` (como en `psql`).
+Paneles: **Archivos** (tablas, esquema, índices y estadísticas), **Consultas** (editor SQL; `Ctrl+Enter` ejecuta), **Resultados** y **Plan de ejecución**. Con `EXPLAIN` o `EXPLAIN ANALYZE`, Resultados muestra el `QUERY PLAN` en texto (como `psql`) y el panel de plan lo muestra como tabla por operador (costo, filas estimadas y reales, tiempos y loops), al estilo de la pestaña *Analysis* de pgAdmin.
 
 > **Modo demo.** Al iniciar, el frontend vacía `demo_data/` (solo los archivos que genera el motor) y crea las tablas de ejemplo `cuentas` y `productos`. Lo creado en una sesión no se conserva al cerrar la aplicación. La capa de almacenamiento sí permite reabrir sus archivos (HeapFile, SequentialFile, B+ y snapshot del hash); los tests de reapertura lo verifican.
+
+**Cargar un CSV desde el frontend.** El botón **Cargar CSV...** del panel de consultas abre el explorador de archivos y escribe en el editor el SQL para cargarlo: un `CREATE TABLE` con los tipos deducidos del archivo (si la tabla todavía no existe) y el `COPY` con el delimitador y la codificación detectados. No ejecuta nada: revisa los tipos y la `PRIMARY KEY` y pulsa **Ejecutar**.
 
 Ejemplo de sesión:
 
@@ -36,14 +38,14 @@ Ejemplo de sesión:
 CREATE TABLE alumnos (id INT PRIMARY KEY, nombre VARCHAR(100), carrera_id INT, nota INT);
 COPY alumnos FROM 'datos/alumnos.csv' WITH (FORMAT csv, HEADER true);   -- ruta relativa a la raíz del proyecto
 EXPLAIN ANALYZE SELECT * FROM alumnos WHERE nota >= 14 ORDER BY id;
---  Sort  (cost=0.00..132.00 rows=333) (actual time=33.554..37.603 rows=355 loops=1)
+--  Sort  (cost=132.00..132.00 rows=333) (actual time=11.810..11.909 rows=324 loops=1)
 --    Sort Key: id
---    Sort Method: in-memory (1 run)
---    ->  Seq Scan on alumnos  (cost=0.00..33.00 rows=333) (actual time=0.148..16.519 rows=355 loops=1)
+--    Sort Method: in-memory
+--    ->  Seq Scan on alumnos  (cost=0.00..33.00 rows=333) (actual time=0.136..10.349 rows=324 loops=1)
 --          Filter: (nota >= 14)
---          Rows Removed by Filter: 645
---  Planning Time: 0.179 ms
---  Execution Time: 38.938 ms
+--          Rows Removed by Filter: 676
+--  Planning Time: 0.218 ms
+--  Execution Time: 12.887 ms
 
 CREATE TABLE emp (id INT, nombre VARCHAR(20), salario INT) USING BTREE;  -- B+ agrupado
 INSERT INTO emp VALUES (1, 'Ana', 3000), (2, 'Bob', 2500), (3, 'Carla', 4100);
