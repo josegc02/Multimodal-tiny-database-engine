@@ -49,10 +49,16 @@ class Schema:
         values = []
         for name, ftype, size in zip(self.fields, self.types, self.sizes):
             value = record.get(name)
+            if value is None:
+                raise ValueError(f"Falta el campo {name!r}: el storage no admite NULL")
             if ftype == "str":
-                encoded = str(value).encode("utf-8")[:size]
-                encoded = encoded.ljust(size, b"\x00")
-                values.append(encoded)
+                encoded = str(value).encode("utf-8")
+                if len(encoded) > size:
+                    # Cortar por bytes puede partir un carácter multibyte (ñ, á, ...)
+                    # y el registro ya no se podría leer: se corta en el último
+                    # carácter completo.
+                    encoded = encoded[:size].decode("utf-8", "ignore").encode("utf-8")
+                values.append(encoded.ljust(size, b"\x00"))
             elif ftype == "int":
                 values.append(int(value))
             elif ftype == "float":
