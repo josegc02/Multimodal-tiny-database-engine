@@ -66,6 +66,8 @@ class ExecutionStats:
     peak_buffered_records: int = 0
     peak_open_files: int = 0
     index_probes: int = 0
+    # EXPLAIN ANALYZE: {id(nodo del plan): {"rows", "first", "total"}}; None = sin medir.
+    profile: dict | None = None
 
 
 @dataclass(frozen=True)

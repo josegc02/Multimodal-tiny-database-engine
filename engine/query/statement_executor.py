@@ -26,11 +26,16 @@ la tabla, que es corto. Nunca se espera un lock reteniendo un latch.
 
 from __future__ import annotations
 
+import csv
+import os
+import time
 from typing import Optional
 
 from engine.concurrency.lock_manager import DeadlockError, LockMode
-from engine.query.ast import (DeleteStatement, InsertStatement, SelectStatement,
-                              TransactionStatement)
+from engine.query.ast import (CopyStatement, DeleteStatement, ExplainStatement, InsertStatement,
+                              Literal, SelectStatement, TransactionStatement)
+from engine.query.errors import SQLExecutionError, SQLSemanticError
+from engine.query.external_algorithms import ExecutionStats
 from engine.query.logical_plan import LogicalPlan, LogicalPlanner, normalize_insert
 
 
@@ -55,8 +60,10 @@ class StatementExecutor:
     """
 
     def __init__(self, transaction_manager, lock_manager=None, storage=None,
-                 query_executor=None, planner=None):
+                 query_executor=None, planner=None, base_dir=None):
         self.tm = transaction_manager
+        # Carpeta desde la que se resuelven las rutas relativas de COPY.
+        self.base_dir = base_dir or os.getcwd()
         self.lock_manager = lock_manager
         self.storage = storage
         if query_executor is None and storage is not None and callable(getattr(storage, "table", None)):
@@ -96,6 +103,10 @@ class StatementExecutor:
             return self._execute_delete(statement)
         if isinstance(statement, (SelectStatement, LogicalPlan)):
             return self.select(statement)
+        if isinstance(statement, CopyStatement):
+            return self._execute_copy(statement)
+        if isinstance(statement, ExplainStatement):
+            return self._execute_explain(statement)
         raise NotImplementedError(
             f"Sentencia no soportada: {type(statement).__name__}"
         )
@@ -164,12 +175,14 @@ class StatementExecutor:
             tx.add_lock(resource, mode)
 
     @staticmethod
-    def _key_field(storage):
-        return getattr(storage, "key_field", None) or storage.schema.fields[0]
+    def _key_field(binding):
+        """Columna que identifica una fila para los locks X (la clave primaria si existe)."""
+        storage = binding.storage
+        return binding.primary_key or getattr(storage, "key_field", None) or storage.schema.fields[0]
 
     # --- SELECT ---
 
-    def select(self, statement):
+    def select(self, statement, *, stats=None):
         """Ejecuta un SELECT (AST o LogicalPlan) con locks S y devuelve sus filas."""
         if self.query_executor is None:
             raise RuntimeError("No hay un ejecutor de consultas configurado")
@@ -178,7 +191,7 @@ class StatementExecutor:
         def work(tx):
             for table in sorted(_scanned_tables(plan)):  # orden fijo entre tablas
                 self._lock(tx, table, LockMode.SHARED)
-            return list(self.query_executor.execute(plan))
+            return list(self.query_executor.execute(plan, stats=stats))
 
         return self._run_in_transaction(work)
 
@@ -187,47 +200,145 @@ class StatementExecutor:
     def _execute_insert(self, statement: InsertStatement):
         """Ejecuta un INSERT, con o sin transaccion activa."""
         binding = self.storage.table(statement.table)
-        storage = binding.storage
-        columns = statement.columns or tuple(storage.schema.fields)
+        columns = statement.columns or tuple(binding.storage.schema.fields)
         # Valida tipos y columnas de todo el lote antes de escribir.
         records = normalize_insert(binding, columns, statement.values)
-        key_field = self._key_field(storage)
+        count = self._insert_records(statement.table, binding, records)
+        return f"{count} registro(s) insertado(s)"
+
+    def _insert_records(self, table, binding, records):
+        """Inserta registros ya validados (INSERT y COPY) con locks, PK y undo log."""
+        storage = binding.storage
+        key_field = self._key_field(binding)
 
         def work(tx):
-            self._lock(tx, statement.table, LockMode.INTENTION_EXCLUSIVE)
+            self._lock(tx, table, LockMode.INTENTION_EXCLUSIVE)
             try:
                 for record in records:
-                    self._lock(tx, f"{statement.table}:{record[key_field]}", LockMode.EXCLUSIVE)
+                    self._lock(tx, f"{table}:{record[key_field]}", LockMode.EXCLUSIVE)
                     with binding.latch:
+                        binding.ensure_unique(record)
                         rid = storage.insert(record)
                         stored = storage.get(rid)
                         binding.record_inserted(rid, stored)
                         tx.add_operation({
                             "op": "INSERT",
-                            "table": statement.table,
+                            "table": table,
                             "rid": rid,
                             "record": stored,
                         })
             finally:
                 binding.finish_write()
-            return f"{len(records)} registro(s) insertado(s)"
+            return len(records)
 
         return self._run_in_transaction(work)
 
+    # --- COPY ---
+
+    def _execute_copy(self, statement: CopyStatement):
+        """COPY tabla FROM 'archivo.csv': valida todo el archivo y lo inserta en una transacción."""
+        binding = self.storage.table(statement.table)
+        schema = binding.storage.schema
+        columns = statement.columns or tuple(schema.fields)
+        unknown = [column for column in columns if column not in schema.fields]
+        if unknown:
+            raise SQLSemanticError(f"La columna {unknown[0]!r} no existe en {statement.table!r}")
+        kinds = dict(zip(schema.fields, schema.types))
+        path = statement.path if os.path.isabs(statement.path) else os.path.join(self.base_dir, statement.path)
+        if not os.path.isfile(path):
+            raise SQLExecutionError(f'no se pudo abrir el archivo "{path}": no existe')
+
+        encoding = "utf-8-sig" if statement.encoding == "utf-8" else statement.encoding
+        records = []
+        try:
+            with open(path, newline="", encoding=encoding) as stream:
+                reader = csv.reader(stream, delimiter=statement.delimiter)
+                first = True
+                for row in reader:
+                    line = reader.line_num
+                    if first and statement.header:
+                        first = False
+                        continue
+                    first = False
+                    if not row or all(not value.strip() for value in row):
+                        continue  # líneas vacías
+                    if len(row) != len(columns):
+                        raise SQLExecutionError(
+                            f"COPY {statement.table}, línea {line}: se esperaban {len(columns)} "
+                            f"valores y se encontraron {len(row)}")
+                    values = tuple(Literal(self._csv_value(text, kinds[column], column, statement.table, line))
+                                   for column, text in zip(columns, row))
+                    try:
+                        records.extend(normalize_insert(binding, columns, [values]))
+                    except SQLSemanticError as exc:
+                        raise SQLExecutionError(f"COPY {statement.table}, línea {line}: {exc}") from None
+        except UnicodeDecodeError as exc:
+            raise SQLExecutionError(
+                f"COPY {statement.table}: el archivo no está en {statement.encoding.upper()} ({exc.reason}); "
+                "use ENCODING 'LATIN1' o 'WIN1252'") from None
+        self._insert_records(statement.table, binding, records)
+        return f"COPY {len(records)}"
+
+    @staticmethod
+    def _csv_value(text, kind, column, table, line):
+        if kind == "str":
+            return text
+        value = text.strip()
+        if not value:
+            raise SQLExecutionError(
+                f"COPY {table}, línea {line}: valor vacío en {column!r} (el storage no admite NULL)")
+        try:
+            return int(value) if kind == "int" else float(value)
+        except ValueError:
+            raise SQLExecutionError(
+                f"COPY {table}, línea {line}: {value!r} no es un valor {kind.upper()} válido "
+                f"para {column!r}") from None
+
+    # --- EXPLAIN ---
+
+    def _execute_explain(self, statement: ExplainStatement):
+        """Plan con formato de PostgreSQL. ANALYZE ejecuta la sentencia y mide cada operador."""
+        from engine.query.explain import PlanExplainer
+
+        started = time.perf_counter()
+        inner = statement.statement
+        plan = self.planner.plan(inner)
+        explainer = PlanExplainer(self.storage, self.query_executor.optimizer)
+        root = explainer.build(plan)
+        planning = time.perf_counter() - started
+        if not statement.analyze:
+            return explainer.render(root)
+
+        stats = ExecutionStats(profile={})
+        started = time.perf_counter()
+        if isinstance(inner, SelectStatement):
+            self.select(plan, stats=stats)
+        elif isinstance(inner, DeleteStatement):
+            self._execute_delete(inner, plan=plan, stats=stats)
+        else:
+            self._execute_insert(inner)
+        execution = time.perf_counter() - started
+        if not isinstance(inner, SelectStatement):
+            root.actual = {"rows": 0, "first": execution, "total": execution, "loops": 1}
+        return explainer.render(root, stats.profile, stats) + [
+            f"Planning Time: {planning * 1000:.3f} ms",
+            f"Execution Time: {execution * 1000:.3f} ms",
+        ]
+
     # --- DELETE ---
 
-    def _execute_delete(self, statement: DeleteStatement):
+    def _execute_delete(self, statement: DeleteStatement, *, plan=None, stats=None):
         """Ejecuta un DELETE, con o sin transaccion activa."""
         table_name = statement.table.name
         binding = self.storage.table(table_name)
         storage = binding.storage
-        key_field = self._key_field(storage)
-        plan = self.planner.plan(statement)
+        key_field = self._key_field(binding)
+        plan = plan or self.planner.plan(statement)
 
         def work(tx):
             self._lock(tx, table_name, LockMode.SHARED_INTENTION_EXCLUSIVE)
             # Candidatas según el plan (usa índices si conviene); no se modifica nada aún.
-            candidates = list(self.query_executor.matching_records(plan))
+            candidates = list(self.query_executor.matching_records(plan, stats=stats))
             deleted = 0
             try:
                 for rid, record in candidates:

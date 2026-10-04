@@ -3,6 +3,7 @@
 from contextlib import closing
 from itertools import islice
 import tempfile
+import time
 
 from engine.query import ast
 from engine.query._temp_records import read_header, read_record, write_header, write_record
@@ -131,13 +132,49 @@ class SQLExecutor:
                     yield row
 
     def _run(self, plan, stats):
+        if stats.profile is None:
+            yield from self._run_node(plan, stats)
+        else:
+            yield from self._timed(plan, self._run_node(plan, stats), stats)
+
+    @staticmethod
+    def _timed(node, rows, stats):
+        """Cuenta filas y tiempo (inclusivo, como PostgreSQL) de un operador."""
+        entry = stats.profile.setdefault(id(node), {"rows": 0, "first": None, "total": 0.0, "loops": 0})
+        entry["loops"] += 1
+        iterator = iter(rows)
+        try:
+            while True:
+                start = time.perf_counter()
+                try:
+                    row = next(iterator)
+                except StopIteration:
+                    entry["total"] += time.perf_counter() - start
+                    return
+                entry["total"] += time.perf_counter() - start
+                if entry["first"] is None:
+                    entry["first"] = entry["total"]
+                entry["rows"] += 1
+                yield row
+        finally:
+            close = getattr(iterator, "close", None)
+            if close is not None:
+                close()
+
+    def _run_node(self, plan, stats):
         operation = plan.operation
         if operation == "Scan":
             yield from self._scan(plan, stats)
             return
         physical = self.optimizer.choice(plan)
         ordered = physical is not None and physical.algorithm in ("index_order_scan", "index_group_by")
-        source = self._ordered_source(plan.children[0], physical) if ordered else self._run(plan.children[0], stats)
+        if ordered:
+            source = self._ordered_source(plan.children[0], physical)
+            if stats.profile is not None:
+                # El recorrido del índice reemplaza al subárbol: se mide como su Scan.
+                source = self._timed(base_scan(plan.children[0]), source, stats)
+        else:
+            source = self._run(plan.children[0], stats)
         with closing(source) as rows:
             if operation == "Filter":
                 for row in rows:
@@ -257,6 +294,7 @@ class SQLExecutor:
         with binding.latch:
             try:
                 for record in records:
+                    binding.ensure_unique(record)
                     rid = binding.storage.insert(record)
                     binding.record_inserted(rid, binding.storage.get(rid))
             finally:

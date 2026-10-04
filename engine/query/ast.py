@@ -113,6 +113,7 @@ class ColumnDefinition(Node):
     name: str
     type: str
     size: int | None = None
+    primary_key: bool = False
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,7 @@ class CreateTableStatement(Statement):
     name: str
     columns: tuple[ColumnDefinition, ...]
     storage_method: str = "heap"
+    primary_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -160,3 +162,21 @@ class DeleteStatement(Statement):
 @dataclass(frozen=True)
 class TransactionStatement(Statement):
     action: str
+
+
+@dataclass(frozen=True)
+class CopyStatement(Statement):
+    """COPY tabla [(columnas)] FROM 'archivo' [WITH (FORMAT csv, HEADER, DELIMITER ',')]."""
+    table: str
+    columns: tuple[str, ...] | None
+    path: str
+    header: bool = False
+    delimiter: str = ","
+    encoding: str = "utf-8"
+
+
+@dataclass(frozen=True)
+class ExplainStatement(Statement):
+    """EXPLAIN [ANALYZE] <SELECT | INSERT | DELETE>."""
+    statement: Statement
+    analyze: bool = False

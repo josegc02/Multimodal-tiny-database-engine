@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import math
 import threading
 
-from engine.query.errors import SQLSemanticError
+from engine.query.errors import SQLIntegrityError, SQLSemanticError
 from engine.query.planner import IndexInfo, TableStats
 from engine.storage.heap_file import PAGE_HEADER_SIZE, SLOT_SIZE
 
@@ -30,6 +30,9 @@ class TableBinding:
     latch: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
     # Hay índices secundarios que deben reconstruirse al terminar la escritura.
     _rebuild_pending: bool = field(default=False, repr=False, compare=False)
+    # Clave primaria (una columna) y nombre de su restricción, p. ej. "alumnos_pkey".
+    primary_key: str | None = None
+    primary_key_name: str | None = None
     # Auto-analyze (como PostgreSQL): estadísticas exactas tras
     # ANALYZE_BASE + ANALYZE_FRACTION * filas cambios desde el último analyze.
     _changes_since_analyze: int = field(default=0, repr=False, compare=False)
@@ -57,6 +60,31 @@ class TableBinding:
                 if current == record:
                     return current_rid
             return None
+
+    def ensure_unique(self, record):
+        """Lanza SQLIntegrityError si la clave primaria de `record` ya existe.
+
+        Se llama con el lock X de la fila tomado, así que dos transacciones no
+        pueden insertar la misma clave a la vez.
+        """
+        if self.primary_key is None:
+            return
+        value = record[self.primary_key]
+        if self._key_exists(value):
+            raise SQLIntegrityError(
+                f'llave duplicada viola la restricción de unicidad "{self.primary_key_name}": '
+                f"ya existe la llave ({self.primary_key})=({value})")
+
+    def _key_exists(self, value):
+        with self.latch:
+            column = self.primary_key
+            registered = self.indexes.get(column)
+            if registered is not None and registered.valid:
+                return any(self.storage.get(rid) is not None for rid in registered.index.search(value))
+            if getattr(self.storage, "key_field", None) == column and callable(
+                    getattr(self.storage, "search_by_key", None)):
+                return bool(self.storage.search_by_key(value))
+            return any(record[column] == value for _, record in self.storage.scan())
 
     def analyze(self):
         """Estadísticas explícitas; hasta 1024 valores distintos por columna y
@@ -111,6 +139,9 @@ class TableBinding:
         rows = max(0, stats.rows + delta)
         distinct = {name: (min(max(count, 1), rows) if rows else 0)
                     for name, count in stats.distinct_values.items()}
+        if self.primary_key in distinct:
+            # La clave primaria es única: tiene tantos valores distintos como filas.
+            distinct[self.primary_key] = min(rows, 1024)
         bounds = dict(stats.value_bounds)
         if delta > 0:
             schema = self.storage.schema
@@ -204,7 +235,8 @@ class Catalog:
         self.tables: dict[str, TableBinding] = {}
 
     def register_table(self, name: str, storage, indexes: dict | None = None,
-                       *, statistics: TableStats | None = None) -> TableBinding:
+                       *, statistics: TableStats | None = None,
+                       primary_key: str | None = None) -> TableBinding:
         if not isinstance(name, str) or not name or name in self.tables:
             raise SQLSemanticError(f"Nombre de tabla inválido o repetido: {name!r}")
         for method in ("scan", "get", "insert", "delete"):
@@ -213,6 +245,11 @@ class Catalog:
         if not hasattr(storage, "schema"):
             raise SQLSemanticError("El storage debe exponer su schema")
         binding = TableBinding(storage)
+        if primary_key is not None:
+            if primary_key not in storage.schema.fields:
+                raise SQLSemanticError(f"Clave primaria inexistente: {primary_key}")
+            binding.primary_key = primary_key
+            binding.primary_key_name = f"{name}_pkey"
         for column, index in (indexes or {}).items():
             if column not in storage.schema.fields:
                 raise SQLSemanticError(f"Columna de índice inexistente: {column}")
