@@ -35,6 +35,8 @@ class SequentialFile:
     así que un scan concurrente con una reorganización puede ver ambos estados.
     """
 
+    stable_rids = False
+
     def __init__(
         self,
         filepath_main: str,

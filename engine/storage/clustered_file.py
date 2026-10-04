@@ -42,6 +42,8 @@ class DuplicateKeyError(ValueError):
 class ClusteredBPlusFile:
     """Storage cuyo archivo es un B+ agrupado."""
 
+    stable_rids = False  # splits y merges mueven registros entre hojas
+
     def __init__(self, filepath: str, schema_def, key_field: str, *, page_size: int = 4096,
                  order: Optional[int] = None):
         self.filepath = filepath
@@ -150,6 +152,8 @@ class ClusteredBPlusFile:
 
 class PrimaryClusteredIndex:
     """Vista de índice sobre la propia tabla agrupada (no ocupa espacio extra)."""
+
+    self_maintained = True  # se actualiza junto con la tabla; nunca se reconstruye
 
     def __init__(self, table: ClusteredBPlusFile):
         self.table = table

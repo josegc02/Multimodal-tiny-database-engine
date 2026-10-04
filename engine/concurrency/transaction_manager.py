@@ -133,8 +133,8 @@ class TransactionManager:
     def _refresh_indexes(self, tables) -> None:
         for table in tables:
             binding = self._binding(table)
-            if binding is not None and binding.indexes:
-                binding.refresh_indexes()
+            if binding is not None:
+                binding.finish_write()
 
     def _locate(self, table: str, storage, rid, record):
         """RID actual del registro: los del SequentialFile se desplazan."""
@@ -165,12 +165,16 @@ class TransactionManager:
                 if record is not None:
                     rid = self._locate(table, storage, rid, record)
                 if rid is not None:
-                    storage.delete(rid)
+                    removed = storage.get(rid)
+                    if storage.delete(rid) and binding is not None and removed is not None:
+                        binding.record_deleted(rid, removed)
 
             elif op_type == "DELETE":
                 old = op.get("old")
                 if old is not None:
-                    storage.insert(old)
+                    rid = storage.insert(old)
+                    if binding is not None:
+                        binding.record_inserted(rid, storage.get(rid))
 
             elif op_type == "UPDATE":
                 old = op.get("old")

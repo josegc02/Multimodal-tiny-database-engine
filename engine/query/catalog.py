@@ -1,4 +1,4 @@
-"""Catálogo explícito de storages abiertos e índices de igualdad vigentes."""
+"""Catálogo explícito de storages abiertos y de sus índices vigentes."""
 
 from dataclasses import dataclass, field
 import math
@@ -28,6 +28,14 @@ class TableBinding:
     indexes: dict[str, RegisteredIndex] = field(default_factory=dict)
     statistics: TableStats | None = None
     latch: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
+    # Hay índices secundarios que deben reconstruirse al terminar la escritura.
+    _rebuild_pending: bool = field(default=False, repr=False, compare=False)
+    # Auto-analyze (como PostgreSQL): estadísticas exactas tras
+    # ANALYZE_BASE + ANALYZE_FRACTION * filas cambios desde el último analyze.
+    _changes_since_analyze: int = field(default=0, repr=False, compare=False)
+
+    ANALYZE_BASE = 50
+    ANALYZE_FRACTION = 0.10
 
     def locate(self, rid, record):
         """RID actual de `record`, o None si ya no existe.
@@ -74,13 +82,93 @@ class TableBinding:
                     bounds[name] = (min(low, value), max(high, value))
                 else:
                     bounds[name] = (value, value)
+        self.statistics = TableStats(count, self._pages(count),
+                                     {name: len(values) for name, values in distinct.items()},
+                                     bounds)
+        self._changes_since_analyze = 0
+
+    def _pages(self, rows):
         per_page = max(1, (self.storage.page_size - PAGE_HEADER_SIZE) // (self.storage.schema.record_size + SLOT_SIZE))
         pages = getattr(self.storage, "num_pages", None)
         if pages is None:
             pages = getattr(self.storage, "num_pages_main", 0) + getattr(self.storage, "num_pages_aux", 0)
-        self.statistics = TableStats(count, max(pages, math.ceil(count / per_page)),
-                                     {name: len(values) for name, values in distinct.items()},
-                                     bounds)
+        return max(pages, math.ceil(rows / per_page))
+
+    def _adjust_statistics(self, delta, record):
+        """Actualiza cardinalidad, páginas y (mín, máx) sin recorrer la tabla.
+
+        Los valores distintos no se pueden mantener exactos fila por fila: se
+        conservan como estimación y se recalculan con analyze() cuando cambió
+        una fracción de la tabla (costo amortizado O(1) por fila).
+        """
+        stats = self.statistics
+        if stats is None:
+            return
+        self._changes_since_analyze += 1
+        if self._changes_since_analyze > self.ANALYZE_BASE + self.ANALYZE_FRACTION * stats.rows:
+            self.analyze()
+            return
+        rows = max(0, stats.rows + delta)
+        distinct = {name: (min(max(count, 1), rows) if rows else 0)
+                    for name, count in stats.distinct_values.items()}
+        bounds = dict(stats.value_bounds)
+        if delta > 0:
+            schema = self.storage.schema
+            for name, kind in zip(schema.fields, schema.types):
+                if kind in ("int", "float"):
+                    low, high = bounds.get(name, (record[name], record[name]))
+                    bounds[name] = (min(low, record[name]), max(high, record[name]))
+        self.statistics = TableStats(rows, self._pages(rows), distinct, bounds)
+
+    def _secondary_indexes(self):
+        """Índices con estructura propia (el primario agrupado ES la tabla)."""
+        return [(column, registered) for column, registered in self.indexes.items()
+                if not getattr(registered.index, "self_maintained", False)]
+
+    def _incremental(self):
+        """¿Se pueden actualizar los índices fila por fila?
+
+        Solo si el storage tiene RIDs estables (HeapFile): en el secuencial y en
+        el B+ agrupado una inserción o reorganización mueve los RIDs de otras
+        filas, así que sus índices secundarios se reconstruyen al final.
+        """
+        return getattr(self.storage, "stable_rids", False) and all(
+            callable(getattr(registered.index, "insert", None))
+            and callable(getattr(registered.index, "delete", None))
+            for _, registered in self._secondary_indexes())
+
+    def record_inserted(self, rid, record):
+        """Mantiene índices y estadísticas tras insertar `record` en `rid`."""
+        with self.latch:
+            self._adjust_statistics(+1, record)
+            self._maintain(lambda index, key: index.insert(key, rid), record)
+
+    def record_deleted(self, rid, record):
+        """Mantiene índices y estadísticas tras eliminar `record` de `rid`."""
+        with self.latch:
+            self._adjust_statistics(-1, record)
+            self._maintain(lambda index, key: index.delete(key, rid), record)
+
+    def _maintain(self, operation, record):
+        secondary = self._secondary_indexes()
+        if not secondary:
+            return
+        if self._incremental() and not self._rebuild_pending:
+            try:
+                for column, registered in secondary:
+                    operation(registered.index, record[column])
+                return
+            except Exception:
+                pass  # el índice quedó a medias: se reconstruye al final
+        self._rebuild_pending = True
+        for _, registered in secondary:
+            registered.valid = False
+
+    def finish_write(self):
+        """Fin de una sentencia o de un rollback: reconstruye lo pendiente."""
+        with self.latch:
+            if self._rebuild_pending:
+                self.refresh_indexes()
 
     def index_info(self):
         from dataclasses import replace
@@ -93,11 +181,14 @@ class TableBinding:
                 binding.valid = False
 
     def refresh_indexes(self):
+        """Reconstrucción completa (O(N)): al registrar índices o tras cambios
+        que movieron RIDs. Las escrituras normales usan record_inserted/deleted."""
         with self.latch:
             self.invalidate_indexes()
             for name, binding in self.indexes.items():
                 binding.index.bulk_load_from_storage(self.storage, name, replace=True)
                 binding.valid = True
+            self._rebuild_pending = False
             self.analyze()
 
 

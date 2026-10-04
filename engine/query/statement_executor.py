@@ -199,16 +199,17 @@ class StatementExecutor:
                 for record in records:
                     self._lock(tx, f"{statement.table}:{record[key_field]}", LockMode.EXCLUSIVE)
                     with binding.latch:
-                        binding.invalidate_indexes()
                         rid = storage.insert(record)
+                        stored = storage.get(rid)
+                        binding.record_inserted(rid, stored)
                         tx.add_operation({
                             "op": "INSERT",
                             "table": statement.table,
                             "rid": rid,
-                            "record": storage.get(rid),
+                            "record": stored,
                         })
             finally:
-                binding.refresh_indexes()
+                binding.finish_write()
             return f"{len(records)} registro(s) insertado(s)"
 
         return self._run_in_transaction(work)
@@ -236,8 +237,8 @@ class StatementExecutor:
                         current = binding.locate(rid, record)
                         if current is None:
                             continue
-                        binding.invalidate_indexes()
                         if storage.delete(current):
+                            binding.record_deleted(current, record)
                             tx.add_operation({
                                 "op": "DELETE",
                                 "table": table_name,
@@ -246,7 +247,7 @@ class StatementExecutor:
                             })
                             deleted += 1
             finally:
-                binding.refresh_indexes()
+                binding.finish_write()
             return f"{deleted} registro(s) eliminado(s)"
 
         return self._run_in_transaction(work)

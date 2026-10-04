@@ -147,6 +147,10 @@ def latched(method):
 
 
 class HeapFile:
+    # Un registro conserva su RID hasta que se elimina: los índices pueden
+    # mantenerse fila por fila.
+    stable_rids = True
+
     def __init__(self, filepath: str, schema_def: List[Tuple[Any, ...]], page_size: int = DEFAULT_PAGE_SIZE):
         self.filepath = filepath
         self.page_size = page_size

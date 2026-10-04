@@ -218,10 +218,12 @@ class SQLExecutor:
         binding = self.catalog.table(plan.get("table"))
         records = normalize_insert(binding, plan.get("columns"), plan.get("values"))
         with binding.latch:
-            binding.invalidate_indexes()
-            for record in records:
-                binding.storage.insert(record)
-            binding.refresh_indexes()
+            try:
+                for record in records:
+                    rid = binding.storage.insert(record)
+                    binding.record_inserted(rid, binding.storage.get(rid))
+            finally:
+                binding.finish_write()
         return len(records)
 
     def _delete(self, plan, stats):
@@ -240,10 +242,15 @@ class SQLExecutor:
             fh.seek(0)
             read_header(fh)
             with binding.latch:
-                binding.invalidate_indexes()
                 deleted = 0
-                for _ in range(count):
-                    rid = read_record(fh)
-                    deleted += bool(binding.storage.delete(RID(rid["page"], rid["slot"], rid["file"])))
-                binding.refresh_indexes()
+                try:
+                    for _ in range(count):
+                        rid = read_record(fh)
+                        rid = RID(rid["page"], rid["slot"], rid["file"])
+                        record = binding.storage.get(rid)
+                        if record is not None and binding.storage.delete(rid):
+                            binding.record_deleted(rid, record)
+                            deleted += 1
+                finally:
+                    binding.finish_write()
         return deleted
