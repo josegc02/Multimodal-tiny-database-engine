@@ -19,7 +19,8 @@ class SequentialFile:
     """Archivo secuencial paginado: main ordenado por clave + aux de desborde.
 
     - Inserción: búsqueda binaria de la página destino y del slot; si la página
-      de main está llena, el registro va al final de aux.
+      de main está llena, el registro va al final de aux (con un índice en memoria
+      de sus claves, así la búsqueda no recorre aux).
     - Eliminación lazy: solo marca el slot; el espacio se recupera al reorganizar.
     - Reorganización: merge de main (ya ordenado) con aux ordenado, escrito en un
       archivo nuevo con fill_factor. Con auto_reorganize=True se dispara antes de
@@ -167,10 +168,13 @@ class SequentialFile:
             if value is None:
                 self._page_max[page_id] = previous
             previous = self._page_max[page_id]
-        self._active_aux = sum(
-            sum(1 for _ in self._read_page_aux(page_id).iter_active())
-            for page_id in range(self.num_pages_aux)
-        )
+        # Índice en memoria de las claves que están en aux (aux está acotado):
+        # buscar una clave no exige recorrer aux.
+        self._aux_index = {}
+        self._active_aux = 0
+        for rid, data in self._iter_aux():
+            self._aux_index.setdefault(self._record_key(data), []).append(rid)
+            self._active_aux += 1
 
     def _rebuild_page_bounds(self) -> None:
         self._load_metadata()
@@ -218,19 +222,20 @@ class SequentialFile:
 
     def _insert_into_aux(self, data: bytes) -> RID:
         # aux solo crece al final; sus huecos se recuperan al reorganizar.
+        page = None
         if self.num_pages_aux > 0:
             page = self._read_page_aux(self.num_pages_aux - 1)
             slot_id = page.insert_record(data)
-            if slot_id is not None:
-                self._write_page_aux(page)
-                self._active_aux += 1
-                return RID(page.page_id, slot_id, file="aux")
-
-        page = self._create_page_aux()
-        slot_id = page.insert_record(data)
+            if slot_id is None:
+                page = None
+        if page is None:
+            page = self._create_page_aux()
+            slot_id = page.insert_record(data)
         self._write_page_aux(page)
         self._active_aux += 1
-        return RID(page.page_id, slot_id, file="aux")
+        rid = RID(page.page_id, slot_id, file="aux")
+        self._aux_index.setdefault(self._record_key(data), []).append(rid)
+        return rid
 
     @latched
     def insert(self, record: Dict[str, Any]) -> RID:
@@ -301,10 +306,17 @@ class SequentialFile:
             if rid.page_id < 0 or rid.page_id >= self.num_pages_aux:
                 return False
             page = self._read_page_aux(rid.page_id)
+            data = page.get_record(rid.slot_id)
             ok = page.delete_record(rid.slot_id)
             if ok:
                 self._write_page_aux(page)
                 self._active_aux -= 1
+                key = self._record_key(data)
+                rids = self._aux_index.get(key, [])
+                if rid in rids:
+                    rids.remove(rid)
+                if not rids:
+                    self._aux_index.pop(key, None)
             return ok
         return False
 
@@ -339,14 +351,19 @@ class SequentialFile:
 
     @latched
     def search_by_key(self, value: Any) -> List[Tuple[RID, Dict[str, Any]]]:
-        """Todos los registros con clave == value: O(log P) en main + aux acotado."""
+        """Todos los registros con clave == value.
+
+        O(log P) lecturas en main (búsqueda binaria de página y de slot) más una
+        lectura por coincidencia en aux, gracias al índice en memoria de aux.
+        """
         results = []
         for rid, key, data in self._iter_main_from(value):
             if key != value:
                 break
             results.append((rid, self.schema.deserialize(data)))
-        for rid, data in self._iter_aux():
-            if self._record_key(data) == value:
+        for rid in self._aux_index.get(value, ()):
+            data = self._read_page_aux(rid.page_id).get_record(rid.slot_id)
+            if data is not None:
                 results.append((rid, self.schema.deserialize(data)))
         return results
 
@@ -459,6 +476,7 @@ class SequentialFile:
         self._active_main = active
         self._deleted_main = 0
         self._active_aux = 0
+        self._aux_index = {}
         self.reorganizations += 1
 
     def _iter_main_all(self) -> Iterator[Tuple[RID, Any, bytes]]:

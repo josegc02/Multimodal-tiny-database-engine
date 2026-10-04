@@ -257,6 +257,23 @@ class TestSequentialFile(unittest.TestCase):
         self.assertEqual(rid.file, "aux")
         self.assertEqual(rec["id"], 99)
 
+    def test_aux_key_index_survives_reopen_delete_and_duplicates(self):
+        for i in range(6):
+            self.sf.insert({"id": i * 10, "name": f"main{i}", "price": 0.0})
+        for key in (99, 77, 77):
+            self.assertEqual(self.sf.insert({"id": key, "name": "aux", "price": 1.0}).file, "aux")
+        self.sf.close()
+        self.sf = SequentialFile(self.main_path, self.aux_path, SCHEMA, key_field="id",
+                                 page_size=256, auto_reorganize=False)
+        self.assertEqual(len(self.sf.search_by_key(77)), 2)
+        rid = self.sf.search_by_key(99)[0][0]
+        self.assertTrue(self.sf.delete(rid))
+        self.assertEqual(self.sf.search_by_key(99), [])
+        self.assertEqual(len(self.sf.search_by_key(77)), 2)
+        self.sf.reorganize()
+        self.assertEqual([r["id"] for _, r in self.sf.search_by_key(77)], [77, 77])
+        self.assertEqual(self.sf.search_by_key(77)[0][0].file, "main")
+
     def test_search_by_key_deleted_returns_empty(self):
         rid = self.sf.insert({"id": 50, "name": "ToDelete", "price": 50.0})
         self.assertEqual(len(self.sf.search_by_key(50)), 1)
