@@ -1,90 +1,107 @@
-"""Geometrías 2D: punto, rectángulo mínimo (MBR) y polígono.
+"""Geometrías 2D en grados: punto, rectángulo mínimo (MBR) y polígono.
 
-Convención de coordenadas: POINT(lat, lon), como en el enunciado
-(`POINT(-12.0464, -77.0428)` es Lima). PostGIS usa el orden inverso
-(`ST_MakePoint(lon, lat)`); tenerlo en cuenta al comparar con GiST (issue #26).
-
-Estado: estructura base. Los métodos marcados como pendientes se implementan
-en los issues indicados.
+Orden de coordenadas: POINT(lat, lon), como en el enunciado. PostGIS y GeoJSON
+usan (lon, lat).
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Iterable, Sequence
+
+
+def _coordinate(value, low, high, name):
+    if type(value) not in (int, float) or not math.isfinite(value) or not low <= value <= high:
+        raise ValueError(f"{name} debe ser un número entre {low} y {high}: {value!r}")
 
 
 @dataclass(frozen=True)
 class Point:
-    """Punto geográfico en grados decimales: lat ∈ [-90, 90], lon ∈ [-180, 180]."""
-
     lat: float
     lon: float
 
-    def validate(self) -> None:
-        """Rechaza coordenadas fuera de rango o no finitas. Pendiente: issue #18."""
-        raise NotImplementedError("Pendiente: issue #18")
+    def __post_init__(self):
+        _coordinate(self.lat, -90, 90, "lat")
+        _coordinate(self.lon, -180, 180, "lon")
 
 
 @dataclass(frozen=True)
 class MBR:
-    """Minimum Bounding Rectangle alineado a los ejes (en grados)."""
+    """Rectángulo alineado a los ejes. No cruza el antimeridiano (min_lon <= max_lon)."""
 
     min_lat: float
     min_lon: float
     max_lat: float
     max_lon: float
 
+    def __post_init__(self):
+        _coordinate(self.min_lat, -90, 90, "min_lat")
+        _coordinate(self.max_lat, -90, 90, "max_lat")
+        _coordinate(self.min_lon, -180, 180, "min_lon")
+        _coordinate(self.max_lon, -180, 180, "max_lon")
+        if self.min_lat > self.max_lat or self.min_lon > self.max_lon:
+            raise ValueError(f"MBR inválido: los mínimos superan a los máximos ({self})")
+
     @classmethod
     def from_point(cls, point: Point) -> MBR:
-        """MBR degenerado de un punto. Pendiente: issue #18."""
-        raise NotImplementedError("Pendiente: issue #18")
+        return cls(point.lat, point.lon, point.lat, point.lon)
+
+    @classmethod
+    def of_points(cls, points: Iterable[Point]) -> MBR:
+        points = list(points)
+        if not points:
+            raise ValueError("Se necesita al menos un punto")
+        lats = [p.lat for p in points]
+        lons = [p.lon for p in points]
+        return cls(min(lats), min(lons), max(lats), max(lons))
 
     def area(self) -> float:
-        """Área en grados² (criterio de ChooseLeaf y del split). Pendiente: issue #18."""
-        raise NotImplementedError("Pendiente: issue #18")
+        """Área en grados² (criterio de ChooseLeaf y del split)."""
+        return (self.max_lat - self.min_lat) * (self.max_lon - self.min_lon)
+
+    def margin(self) -> float:
+        """Semiperímetro en grados (desempata splits con área 0, p. ej. puntos alineados)."""
+        return (self.max_lat - self.min_lat) + (self.max_lon - self.min_lon)
 
     def union(self, other: MBR) -> MBR:
-        """MBR mínimo que contiene a ambos. Pendiente: issue #18."""
-        raise NotImplementedError("Pendiente: issue #18")
+        return MBR(min(self.min_lat, other.min_lat), min(self.min_lon, other.min_lon),
+                   max(self.max_lat, other.max_lat), max(self.max_lon, other.max_lon))
 
     def enlargement(self, other: MBR) -> float:
-        """Aumento de área al incluir `other` (ChooseLeaf). Pendiente: issue #18."""
-        raise NotImplementedError("Pendiente: issue #18")
+        """Cuánto crece el área si se incluye `other`."""
+        return self.union(other).area() - self.area()
 
     def intersects(self, other: MBR) -> bool:
-        """¿Los rectángulos se tocan o solapan? Pendiente: issue #20."""
-        raise NotImplementedError("Pendiente: issue #20")
+        """Verdadero si se solapan o se tocan en un borde."""
+        return (self.min_lat <= other.max_lat and other.min_lat <= self.max_lat
+                and self.min_lon <= other.max_lon and other.min_lon <= self.max_lon)
+
+    def overlap(self, other: MBR) -> float:
+        """Área de la intersección (0 si no se solapan)."""
+        height = min(self.max_lat, other.max_lat) - max(self.min_lat, other.min_lat)
+        width = min(self.max_lon, other.max_lon) - max(self.min_lon, other.min_lon)
+        return height * width if height > 0 and width > 0 else 0.0
 
     def contains_point(self, point: Point) -> bool:
-        """¿El punto cae dentro o en el borde? Pendiente: issue #20."""
-        raise NotImplementedError("Pendiente: issue #20")
+        """Verdadero si el punto está dentro o sobre el borde."""
+        return self.min_lat <= point.lat <= self.max_lat and self.min_lon <= point.lon <= self.max_lon
 
 
 @dataclass(frozen=True)
 class Polygon:
-    """Polígono simple (sin agujeros) dado por sus vértices en orden.
-
-    No hace falta repetir el primer vértice al final.
-    """
+    """Polígono simple (sin agujeros), vértices en orden y sin repetir el primero."""
 
     vertices: Sequence[Point]
 
     def mbr(self) -> MBR:
-        """MBR del polígono (filtro grueso en el R-Tree). Pendiente: issue #22."""
         raise NotImplementedError("Pendiente: issue #22")
 
     def contains(self, point: Point) -> bool:
-        """Point-in-polygon por ray casting (refinamiento). Pendiente: issue #22.
-
-        Definir y documentar qué pasa con los puntos sobre el borde.
-        """
+        """Point-in-polygon por ray casting."""
         raise NotImplementedError("Pendiente: issue #22")
 
     @classmethod
     def from_geojson(cls, geometry: dict) -> list[Polygon]:
-        """Polígonos de una geometría GeoJSON (Polygon o MultiPolygon). Pendiente: issue #22.
-
-        GeoJSON guarda [lon, lat]: invertir el orden al construir cada Point.
-        """
+        """Polygon o MultiPolygon de GeoJSON ([lon, lat])."""
         raise NotImplementedError("Pendiente: issue #22")
