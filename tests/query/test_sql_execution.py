@@ -112,13 +112,20 @@ class TestLogicalPlanner(SQLTestCase):
             "SELECT id, COUNT(*) FROM productos", "SELECT * FROM productos GROUP BY categoria",
             "SELECT id FROM productos WHERE COUNT(*) > 0",
             "SELECT id FROM productos GROUP BY SUM(precio)",
-            "SELECT id FROM productos ORDER BY 2", "SELECT COUNT(DISTINCT id) FROM productos",
+            "SELECT id FROM productos ORDER BY 2", "SELECT COUNT(DISTINCT inexistente) FROM productos",
             "SELECT a.id FROM productos a JOIN productos b ON a.id > b.id",
             "SELECT id FROM productos a JOIN productos b ON a.id=b.id", "BEGIN",
         ]
         for sql in queries:
             with self.subTest(sql=sql), self.assertRaises(SQLSemanticError):
                 planner.plan(parse(sql))
+
+    def test_distinct_aggregates_are_planned(self):
+        _, catalog, executor = self.database()
+        LogicalPlanner(catalog).plan(parse("SELECT COUNT(DISTINCT categoria) FROM productos"))
+        rows = list(executor.execute("SELECT COUNT(DISTINCT categoria) AS n, COUNT(*) AS t FROM productos"))
+        self.assertEqual(len(rows), 1)
+        self.assertLessEqual(rows[0]["n"], rows[0]["t"])
 
 
 class TestSQLStorageIntegration(SQLTestCase):
