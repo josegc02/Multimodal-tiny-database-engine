@@ -70,6 +70,9 @@ class ClusteredBPlusFile:
 
     @latched
     def insert(self, record: Dict[str, Any]) -> RID:
+        # Misma normalización que HeapFile/SequentialFile (p. ej. textos largos se
+        # truncan en un carácter completo) antes de validar la hoja.
+        record = self.schema.deserialize(self.schema.serialize(record))
         key = record[self.key_field]
         if not self.tree.insert(record):
             raise DuplicateKeyError(f"Clave primaria duplicada: {self.key_field} = {key!r}")

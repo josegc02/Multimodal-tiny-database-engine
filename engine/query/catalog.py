@@ -132,9 +132,11 @@ class TableBinding:
                     bounds[name] = (min(low, value), max(high, value))
                 else:
                     bounds[name] = (value, value)
-        self.statistics = TableStats(count, self._pages(count),
-                                     {name: len(values) for name, values in distinct.items()},
-                                     bounds)
+        distinct_counts = {name: len(values) for name, values in distinct.items()}
+        if self.primary_key in distinct_counts:
+            # Una clave primaria es única: tiene exactamente tantos valores como filas.
+            distinct_counts[self.primary_key] = count
+        self.statistics = TableStats(count, self._pages(count), distinct_counts, bounds)
         self._changes_since_analyze = 0
 
     def _pages(self, rows):
@@ -163,7 +165,7 @@ class TableBinding:
                     for name, count in stats.distinct_values.items()}
         if self.primary_key in distinct:
             # La clave primaria es única: tiene tantos valores distintos como filas.
-            distinct[self.primary_key] = min(rows, 1024)
+            distinct[self.primary_key] = rows
         bounds = dict(stats.value_bounds)
         if delta > 0:
             schema = self.storage.schema
