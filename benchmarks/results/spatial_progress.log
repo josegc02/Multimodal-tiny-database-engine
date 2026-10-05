@@ -1,0 +1,31 @@
+[spatial] N=1000: memoria del R-Tree
+[spatial] N=1000 rep=1: Secuencial
+[spatial] N=1000 rep=1: R-Tree
+[spatial] N=1000 rep=1: GiST
+[spatial] N=1000 rep=2: Secuencial
+[spatial] N=1000 rep=2: R-Tree
+[spatial] N=1000 rep=2: GiST
+[spatial] N=1000 rep=3: Secuencial
+[spatial] N=1000 rep=3: R-Tree
+[spatial] N=1000 rep=3: GiST
+[spatial] N=10000: memoria del R-Tree
+[spatial] N=10000 rep=1: Secuencial
+[spatial] N=10000 rep=1: R-Tree
+[spatial] N=10000 rep=1: GiST
+[spatial] N=10000 rep=2: Secuencial
+[spatial] N=10000 rep=2: R-Tree
+[spatial] N=10000 rep=2: GiST
+[spatial] N=10000 rep=3: Secuencial
+[spatial] N=10000 rep=3: R-Tree
+[spatial] N=10000 rep=3: GiST
+[spatial] N=100000: memoria del R-Tree
+[spatial] N=100000 rep=1: Secuencial
+[spatial] N=100000 rep=1: R-Tree
+[spatial] N=100000 rep=1: GiST
+[spatial] N=100000 rep=2: Secuencial
+[spatial] N=100000 rep=2: R-Tree
+[spatial] N=100000 rep=2: GiST
+[spatial] N=100000 rep=3: Secuencial
+[spatial] N=100000 rep=3: R-Tree
+[spatial] N=100000 rep=3: GiST
+Matplotlib is building the font cache; this may take a moment.
