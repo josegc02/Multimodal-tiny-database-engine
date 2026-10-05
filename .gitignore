@@ -28,6 +28,9 @@ benchmarks/results/smoke/
 benchmarks/results/*_progress.log
 benchmarks/results/*_console.txt
 
+# PDF del informe generado localmente (la fuente es docs/informe.md)
+docs/informe.pdf
+
 # Pruebas
 .pytest_cache/
 
