@@ -1,9 +1,12 @@
 # Parte 2: Base de Datos Espacial
 
-Implementados: geometría, métricas, R-Tree y consultas espaciales hasta #23.
-El mapa Leaflet (#24) está integrado. Datasets de entrega (#25), comparación con
-PostGIS (#26) y benchmarks (#27) siguen pendientes. Contratos, criterios
-verificados y ejemplos SQL en [consultas_espaciales.md](consultas_espaciales.md).
+La Parte 2 está completa (issues #18–#27, con las correcciones del #39):
+- geometría, métricas y R-Tree en disco;
+- consultas por radio, k-NN y polígono, con su SQL espacial;
+- mapa Leaflet;
+- datasets, PostGIS y la comparación experimental.
+
+Contratos y ejemplos SQL en [consultas_espaciales.md](consultas_espaciales.md); el mapa en [mapa.md](mapa.md); el diseño y los resultados en las secciones 4 y 5 del [informe](informe.md).
 
 ## Qué pide el enunciado
 
@@ -36,15 +39,6 @@ verificados y ejemplos SQL en [consultas_espaciales.md](consultas_espaciales.md)
 | `postgis/` | PostgreSQL + PostGIS con Docker, esquema y consultas GiST equivalentes | #26 |
 | `benchmarks/bench_spatial.py` | Benchmark Secuencial vs R-Tree vs GiST | #27 |
 | `tests/spatial/` | Pruebas de geometría, métricas, R-Tree y SQL espacial | todos |
-
-## Orden sugerido
-
-1. **#19 Métricas** y la parte de geometría de **#18**: son la base de todo lo demás y se prueban solas.
-2. **#18 R-Tree** (inserción, split, persistencia) y **#25 datasets**, en paralelo.
-3. **#20 rango**, **#21 k-NN** y **#22 polígonos**, comparando siempre contra la búsqueda secuencial (fuerza bruta).
-4. **#23 SQL espacial**, que integra el R-Tree al catálogo y al optimizador.
-5. **#24 mapa** y **#26 PostGIS**, en paralelo.
-6. **#27 benchmark** e informe.
 
 ## Geometría y métricas (#18 y #19)
 
@@ -93,30 +87,28 @@ verificados y ejemplos SQL en [consultas_espaciales.md](consultas_espaciales.md)
   - Si la raíz queda con un solo hijo, el hijo pasa a ser la raíz.
   - Las páginas liberadas se reutilizan.
 - **Búsqueda por rectángulo:** `search_mbr` cuenta en `last_stats` los nodos y hojas visitados, para el plan de ejecución y los benchmarks.
-- **Rendimiento:** 100.000 puntos de Lima se insertan en ~106 s (~1 ms por inserción, el mismo orden que el B+ agrupado). El árbol queda con altura 3, 831 nodos y hojas llenas al 69%. Una ventana de 59 puntos visita 47 de los 831 nodos.
+- **Rendimiento** (corrida oficial, sección 5 del informe): con 100.000 puntos la construcción tarda ~54 s (~0,5 ms por inserción) y el árbol ocupa 839 páginas. Un k-NN visita en promedio 8,6 nodos y una consulta por radio de 1 km tarda ~4 ms.
 - **Pruebas** (`tests/indexes/test_rtree.py`): después de cada operación verifican altura balanceada, ocupación entre m y M, MBRs exactos en cada padre y que ninguna página se pierda ni se duplique. También comparan las búsquedas con fuerza bruta y cubren puntos repetidos y alineados, persistencia y reutilización de páginas.
 
-## Decisiones implementadas y pendientes
+## Decisiones de diseño
 - **Métrica SQL (#23):** ambas formas están implementadas: `USING HAVERSINE | EUCLIDEAN`
   al final de SELECT y tercer argumento explícito en `distancia`, que tiene prioridad.
 - **Polígonos SQL (#23):** `WITHIN(col, POLYGON((lat, lon), ...))`, con borde incluido.
   Los distritos GeoJSON se cargan con `load_districts` en Python.
 - **Tipo `POINT`:** dos `float` de 8 bytes en el registro (16 bytes por punto).
-- **Construcción masiva del R-Tree (opcional):** *bulk loading* STR acelera la construcción frente a insertar punto por punto. Decidir si se agrega para el benchmark (#27).
-- **Mapa (#24):**
-  - Opción 1: `tkintermapview`, un widget Tk con OpenStreetMap integrado en la ventana actual.
-  - Opción 2: Leaflet en el navegador, con un HTML generado o un endpoint local.
-- **Dependencias nuevas:**
-  - `psycopg[binary]`, para el benchmark contra PostGIS;
-  - posiblemente `tkintermapview`.
-  - Se agregan a `requirements.txt` cuando se usen. La CI no levanta PostGIS, así que el benchmark debe poder correr sin él (`--sin-postgis`).
+- **Construcción del R-Tree:** inserción punto por punto (Guttman). El *bulk loading* STR queda como mejora posible: construiría el árbol mucho más rápido que insertar uno a uno.
+- **Mapa (#24):** Leaflet en el navegador, servido por un servidor HTTP local que inicia el frontend (`frontend/panel_mapa.py`, `frontend/mapa.html`). No requiere dependencias de Python.
+- **Dependencias:** `psycopg[binary]` en `requirements-postgis.txt`, solo para el benchmark contra PostGIS. La CI no levanta PostGIS: el benchmark corre sin él con `--sin-postgis` y la prueba de integración se omite si no está definida `BD2_POSTGIS_DSN`.
 
 ## PostgreSQL + PostGIS
 
 ```bash
 docker compose -f postgis/docker-compose.yml up -d     # puerto 5433, usuario/clave bd2/bd2, base "espacial"
+POSTGIS_PORT=5434 docker compose -f postgis/docker-compose.yml up -d   # si el 5433 está ocupado
 docker compose -f postgis/docker-compose.yml down -v    # detener y borrar los datos
 ```
+
+PostGIS calcula las distancias de `geography` sobre el elipsoide WGS84 por defecto. Para comparar con nuestro Haversine se usa la esfera: `ST_DWithin(..., false)`. El operador `<->` ya usa la esfera. Con el elipsoide, los resultados difieren ~0,3% (19 m a 6 km), lo suficiente para cambiar qué puntos quedan dentro del radio.
 
 `postgis/init.sql` crea la extensión, las tablas `puntos` (`geography`, distancias en metros) y `distritos`, y deja comentadas las consultas equivalentes:
 - `ST_DWithin`, para el rango;
@@ -125,11 +117,15 @@ docker compose -f postgis/docker-compose.yml down -v    # detener y borrar los d
 
 ## Comparación experimental
 
-El benchmark de la Parte 2 mide construcción, rango (1/5/10 km), k-NN
-(`k=10/50/100`), espacio de índice y memoria Python para scan secuencial,
-R-Tree y GiST. Usa el mismo dataset y verifica fuera del tiempo medido que los
-IDs de rango y k-NN coincidan con el scan. La corrida completa requiere el
-contenedor y `requirements-postgis.txt`; sin ellos GiST se registra como `NA`.
+`benchmarks/bench_spatial.py` compara la búsqueda secuencial, el R-Tree y GiST.
+
+- **Mediciones:**
+  - construcción del índice;
+  - rango con radio de 1, 5 y 10 km;
+  - k-NN con k = 10, 50 y 100 (promedio de 100 consultas);
+  - espacio del índice, memoria y nodos visitados.
+- **Condiciones de la comparación:** las tres técnicas leen sus resultados de una tabla en disco y usan la misma distancia (Haversine sobre la esfera). Cada resultado se verifica contra la búsqueda secuencial fuera del cronómetro. La metodología completa está en la sección 5.1 del informe.
+- **Sin PostGIS:** la corrida requiere el contenedor y `requirements-postgis.txt`; sin ellos GiST queda como `NA`.
 
 ```bash
 python -m pip install -r requirements.txt

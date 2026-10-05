@@ -176,6 +176,9 @@ class TestSpatialSQL(unittest.TestCase):
         queries = [f"SELECT * FROM tiendas WHERE distancia(ubicacion,{ORIGIN}) < 5000",
                    f"SELECT * FROM tiendas WHERE WITHIN(ubicacion,{POLYGON})",
                    f"SELECT * FROM tiendas ORDER BY distancia(ubicacion,{ORIGIN}) LIMIT 10"]
+        # El mapa lee la tabla una vez y la cachea; se calienta antes para que el
+        # test verifique solo el acceso de la consulta.
+        self.run_sql(queries[0])
         with patch.object(binding.storage, "scan", side_effect=AssertionError("No debe escanear")):
             for q in queries:
                 self.run_sql(q)

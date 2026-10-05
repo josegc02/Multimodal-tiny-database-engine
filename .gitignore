@@ -22,6 +22,15 @@ generated_sql/
 # benchmarks/generate_spatial_datasets.py
 datasets/spatial/generated/
 
+# Salidas de benchmarks que no forman parte de los resultados oficiales:
+# corridas de prueba y registros de consola (los datos están en los CSV).
+benchmarks/results/smoke/
+benchmarks/results/*_progress.log
+benchmarks/results/*_console.txt
+
+# PDF del informe generado localmente (la fuente es docs/informe.md)
+docs/informe.pdf
+
 # Pruebas
 .pytest_cache/
 

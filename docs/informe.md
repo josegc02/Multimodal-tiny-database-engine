@@ -1,13 +1,56 @@
 # Informe del Proyecto — Base de Datos II
 
+Minigestor de base de datos multimodal construido desde cero en Python (UTEC, Base de Datos II, 2026-2). Este informe es incremental y crece con cada entrega:
+- **Partes 1 y 2:** se documentan el diseño arquitectónico, el dominio de datos, los algoritmos y la comparación experimental.
+- **Instalación y uso:** están en el [README](../README.md).
+
+| Sección | Contenido |
+| :--- | :--- |
+| [1. Arquitectura del motor](#1-arquitectura-del-motor) | Componentes, recorrido de una consulta y dominio de datos relacional. |
+| [2. Decisiones de diseño y algoritmos](#2-decisiones-de-diseño-y-algoritmos) | Almacenamiento, índices, concurrencia, SQL, algoritmos externos e interfaz. |
+| [3. Resultados experimentales (Parte 1)](#3-resultados-experimentales-y-benchmarks) | Heap vs Secuencial; B+ agrupado vs no agrupado vs Hash; complejidad. |
+| [4. Diseño de la Parte 2](#4-diseño-e-implementación) | Arquitectura espacial, dominio de datos, métricas, R-Tree, SQL y mapa. |
+| [5. Resultados experimentales (Parte 2)](#5-comparación-experimental-secuencial-vs-r-tree-vs-gist) | Secuencial vs R-Tree vs GiST. |
+
 ## Avance 1: Motor Relacional
 
 ### 1. Arquitectura del Motor
+
+```mermaid
+flowchart LR
+    UI["Frontend Tkinter"] --> M["Motor (fachada)"] --> SE["StatementExecutor<br/>transacciones y locks"]
+    SE --> PARSE["Lexer → Parser → AST"] --> LP["Plan lógico"] --> OPT["Optimizador<br/>por costos"] --> EX["Ejecutor"]
+    EX --> CAT["Catálogo"]
+    CAT --> ST["Almacenamiento"]
+    CAT --> IDX["Índices"]
+    EX --> EXT["Algoritmos externos"]
+    SE --> CC["Concurrencia"]
+```
+
 - **Almacenamiento** (`engine/storage/`): Heap File (*slotted pages*), Archivo Secuencial Paginado y tabla organizada como B+ agrupado.
 - **Índices** (`engine/indexes/`): B+ agrupado, B+ no agrupado y Hash extensible.
 - **Consultas** (`engine/query/`): lexer, parser, plan lógico, optimizador por costos, ejecutor y algoritmos externos.
 - **Concurrencia** (`engine/concurrency/`): locks de granularidad múltiple (IS/IX/S/SIX/X) con 2PL estricto, detección de deadlocks y transacciones con *undo log*.
-- **Frontend** (`frontend/`): interfaz Tkinter de 4 paneles (archivos, consultas, resultados y plan de ejecución) en modo demo.
+- **Frontend** (`frontend/`): interfaz Tkinter (archivos, consultas, resultados y plan de ejecución) en modo demo.
+
+**Recorrido de una consulta:**
+1. El `StatementExecutor` abre la transacción de la sentencia y toma los locks necesarios.
+2. El parser produce el AST, que se convierte en un plan lógico.
+3. El optimizador estima en páginas el costo de cada ruta de acceso (recorrer la tabla, B+, hash) y de cada algoritmo (sort, group by y join, en memoria o externos), y elige el más barato.
+4. El ejecutor produce las filas de forma incremental.
+5. Cada escritura actualiza los índices y las estadísticas a través del catálogo.
+
+#### 1.1 Dominio de datos (Parte 1)
+- **Modelo:** tablas relacionales con registros de largo fijo.
+- **Tipos:**
+  - `INT`: entero de 8 bytes;
+  - `FLOAT`: real de 8 bytes;
+  - `VARCHAR(n)`: n bytes UTF-8, cortados en un carácter completo.
+
+  Los registros no admiten `NULL`.
+- **Restricciones:** `PRIMARY KEY` única y `FOREIGN KEY` con `RESTRICT` o `CASCADE`.
+- **Datos de los experimentos:** registros `(id INT, nombre VARCHAR(20), precio FLOAT)` de 36 bytes, con ids únicos 0..N-1 insertados en orden aleatorio (`benchmarks/generate_datasets.py`, semilla 42).
+- **Datos de la interfaz:** el modo demo crea `cuentas (id, nombre, saldo)` y `productos (id, nombre, precio)`. Cualquier CSV se puede cargar con `COPY` o con el botón **Cargar CSV...**.
 
 ### 2. Decisiones de Diseño y Algoritmos
 
@@ -176,7 +219,7 @@ El pipeline está en `engine/query/`: `lexer` → `parser` (descenso recursivo, 
 
 Implementados en `engine/query/external_algorithms.py` siguiendo el modelo de buffer de **B páginas de R registros** (por defecto B = 8 y R = 128). Los temporales usan un formato binario propio y se eliminan al terminar. Como en PostgreSQL, cada operador trabaja en memoria mientras su entrada cabe en el buffer y solo crea temporales cuando lo excede; así una consulta pequeña no paga el costo de crear archivos.
 
-* **External sort (ORDER BY)**: si la entrada cabe en B·R registros la ordena en memoria (`Sort Method: in-memory` en EXPLAIN ANALYZE). Si no, genera *runs* ordenados de B·R registros y los mezcla con un *merge* k-way de hasta B−1 runs por pasada, con tantas pasadas como haga falta. Admite varias claves, ASC/DESC por clave y posición de NULL; es estable.
+* **External sort (ORDER BY)**: si la entrada cabe en B·R registros la ordena en memoria (`Sort Method: in-memory` en EXPLAIN ANALYZE). Si no, genera *runs* ordenados de B·R registros y los mezcla con un *merge* k-way de hasta B−1 runs por pasada, con tantas pasadas como haga falta. Admite varias claves y ASC/DESC por clave, y es estable. Además ubica los NULL al principio o al final. Las tablas no guardan NULL (sección 1.1), pero sí pueden aparecer en resultados intermedios, por ejemplo un `NULL` literal en el `SELECT` o `MAX` sobre cero filas.
 * **External hash GROUP BY**: agrega en una tabla en memoria mientras los grupos quepan en (B−2)·R. Si se excede, cada grupo ya acumulado se escribe en su partición como estado parcial (cantidad y acumulado, que se combinan al releerlo) y el resto de la entrada se reparte en B−1 particiones con una función hash distinta por nivel y agrega cada partición con una tabla en memoria de hasta (B−2)·R grupos. Si una partición no cabe, se vuelve a particionar; ante *skew* sin progreso recurre a ordenar y agregar en orden. Los agregados DISTINCT eliminan duplicados (grupo, valor) con el mismo mecanismo antes de agregar.
 * **External hash JOIN (Grace)**: si la entrada derecha (el nodo `Hash` del plan) cabe en (B−2)·R registros, construye la tabla en memoria y sondea la izquierda en *streaming*. Si no, particiona ambas entradas con la misma función, construye una tabla sobre la partición más chica y la sondea con la otra; con *skew* procesa bloques de (B−2)·R registros. Cuando el lado derecho tiene un índice de igualdad y el izquierdo es pequeño, el optimizador prefiere el *index nested loop join*.
 
@@ -313,7 +356,14 @@ El costo es **O(log N + k)**: con k fijo, las curvas son casi planas. En el **ag
 #### Ordenamiento (ORDER BY)
 ![](../benchmarks/results/indexes_tiempo_orden.png)
 
-`ORDER BY id` sobre toda la tabla: **0,622 s** (agrupado), **4,02 s** (no agrupado) y **14,55 s** (hash) con 100K registros.
+`ORDER BY id` sobre toda la tabla (tiempo total):
+
+| N | B+ agrupado | B+ no agrupado | Extendible Hash |
+| ---: | ---: | ---: | ---: |
+| 1.000 | 0,007 s | 0,054 s | 0,072 s |
+| 10.000 | 0,057 s | 0,429 s | 1,52 s |
+| 100.000 | 0,622 s | 4,02 s | 14,55 s |
+
 * El agrupado recorre sus hojas encadenadas, que ya están ordenadas: **O(N)**.
 * El no agrupado obtiene el orden de sus hojas, pero hace una lectura aleatoria del heap por cada registro: también **O(N)**, pero 6,5 veces más lento que el agrupado.
 * El hash no aporta orden, así que el motor recurre a `scan` del heap + *external sort* k-way, **O(N log N)**: 23 veces más lento que el agrupado.
@@ -408,3 +458,209 @@ No existe una estructura óptima para todo: cada una equilibra de forma distinta
 * Para **alta tasa de escritura con consultas de punto exacto**, la mejor combinación es **Heap File + Extendible Hash**: inserción O(1) (~115 µs) y búsqueda O(1) (~0,1 ms), a cambio de mantener el índice en RAM. Desde SQL, los índices se mantienen fila por fila en cada INSERT/DELETE.
 * Para **consultas por rango u ordenamiento sobre la clave primaria**, conviene un **B+ agrupado**, o un **Sequential File** si la tabla se lee mucho más de lo que se escribe: su búsqueda binaria supera al heap por más de tres órdenes de magnitud a cambio de insertar ~3 veces más lento.
 * El **B+ no agrupado** se justifica para columnas secundarias con filtros selectivos; en rangos grandes o en ORDER BY de toda la tabla, sus lecturas aleatorias al heap lo vuelven varias veces más lento que el agrupado.
+
+## Entrega parcial: Base de Datos Espacial (Parte 2)
+
+### 4. Diseño e implementación
+
+#### 4.1 Arquitectura de la Parte 2
+La Parte 2 se integra en el motor existente, sin un subsistema aparte:
+
+```mermaid
+flowchart LR
+    SQL["SQL espacial<br/>POINT, POLYGON, distancia, WITHIN"] --> OPT["Optimizador"]
+    OPT -->|"hay índice RTREE"| RT["R-Tree<br/>(engine/indexes/rtree.py)"]
+    OPT -->|"sin índice"| SCAN["Recorrido de la tabla"]
+    RT --> GEO["Geometría y métricas<br/>(engine/spatial/)"]
+    SCAN --> GEO
+    RT --> HEAP["Tabla: registros con POINT"]
+    UI["Frontend"] --> MAPA["Mapa Leaflet<br/>servidor HTTP local"]
+```
+
+- **Tipo `POINT`:** es un tipo de columna más del registro.
+- **R-Tree:** es un índice secundario más del catálogo. Se mantiene en cada INSERT y DELETE, y en el ROLLBACK de las transacciones, igual que el hash y el B+.
+- **Optimizador:** reconoce los predicados espaciales y elige el R-Tree cuando existe. Sin índice, el mismo SQL se resuelve recorriendo la tabla.
+- **Frontend:** agrega el panel de mapa.
+- **Comparación experimental:** usa PostgreSQL + PostGIS en Docker (`postgis/`).
+
+#### 4.2 Dominio de datos espaciales
+- **Puntos:** ubicaciones en grados decimales, `POINT(lat, lon)`, con latitud entre −90 y 90 y longitud entre −180 y 180.
+- **Polígonos:** anillos de vértices `(lat, lon)`, con agujeros opcionales. Se cargan desde GeoJSON (`Polygon`, `MultiPolygon`, `Feature` y `FeatureCollection`), que guarda `[lon, lat]`.
+- **Dataset de los experimentos** (`benchmarks/generate_spatial_datasets.py`, semilla 42): comercios sintéticos en Lima Metropolitana, dentro del rectángulo lat ∈ [−12,30; −11,75], lon ∈ [−77,20; −76,80].
+  - Cada comercio tiene `id`, `nombre` y `categoria`, repartida en partes iguales entre tienda, restaurante, gasolinera, farmacia y banco.
+  - El 78% se agrupa alrededor de cuatro zonas comerciales (Cercado, Miraflores, Los Olivos y La Molina), con una dispersión de ~2 km; el resto se reparte de forma uniforme.
+  - Esa mezcla de zonas densas y afueras casi vacías es la que hace que la poda espacial importe.
+- **Consultas:** 100 centros uniformes en el mismo rectángulo, comunes a todas las técnicas.
+- **Distritos:** `datasets/spatial/distritos_sinteticos_lima.geojson` trae dos polígonos de prueba ("Centro" y "Sur"). No son límites administrativos reales; sirven para probar la carga de GeoJSON y las consultas `WITHIN`.
+- **Carga en el motor y en PostGIS:** el generador también escribe el SQL para el motor (`cargar_motor_N.sql`) y el CSV en orden lon, lat para PostGIS.
+
+#### 4.3 Geometría y métricas de distancia
+- **Coordenadas:** `POINT(lat, lon)` en grados, como en el enunciado. PostGIS y GeoJSON usan el orden `(lon, lat)`, así que el cargador de GeoJSON y el cliente de PostGIS invierten el orden.
+- **`Point` y `MBR`** (`engine/spatial/geometry.py`): validan rangos y valores finitos. El `MBR` calcula área, semiperímetro, unión, *enlargement*, intersección y área de solapamiento (*overlap*). El tipo `POINT` ocupa 16 bytes en el registro (dos `double`).
+- **Las dos métricas devuelven metros** (`engine/spatial/distance.py`), así `distancia(...) < 5000` significa 5 km con cualquiera:
+  - **Haversine:** gran círculo sobre una esfera de radio 6.371.008,8 m. Entre Lima y Cusco da 574,6 km.
+  - **Euclidiana:** trata (lat, lon) como plano y convierte grados a metros con un factor fijo (111.195 m/°). Es exacta norte-sur y sobreestima este-oeste por 1/cos(lat): +2,2% en Lima, +41% a 45° de latitud.
+- **MINDIST punto-MBR:** cota inferior de la distancia a cualquier punto del rectángulo, que usa el R-Tree para podar.
+  - En la Euclidiana se acota cada coordenada.
+  - En la Haversine se mide sobre el meridiano del punto, o sobre el del borde más próximo (considerando el antimeridiano).
+- **Radio → MBR:** el filtro grueso usa un rectángulo que contiene todo el círculo, con la longitud ensanchada según la latitud y la franja completa si toca un polo o el antimeridiano.
+
+#### 4.4 R-Tree en disco
+`engine/indexes/rtree.py` implementa el R-Tree de Guttman:
+- **Nodos y capacidad:** un nodo por página de 4 KB, con M = 177 entradas por hoja (punto + RID) y M = 113 por nodo interno (MBR + página del hijo); el mínimo es m = ⌈0,4·M⌉.
+- **Inserción:** ChooseLeaf baja por el hijo que menos crece. Al desbordarse, un nodo se divide con el **split cuadrático**: como semillas toma el par que más área desperdicia junto y reparte el resto según qué grupo crece menos. Si las áreas empatan en 0 (puntos alineados), desempata por semiperímetro.
+- **Eliminación:** CondenseTree reinserta las entradas de los nodos que quedan con menos de m. Las páginas liberadas se reutilizan.
+- **Persistencia:** el árbol persiste en disco y se reabre. Los contadores de cada consulta (nodos, hojas, candidatos, refinamientos) alimentan EXPLAIN ANALYZE y el benchmark.
+
+#### 4.5 Consultas espaciales
+- **Rango por radio:** filtro por el MBR del círculo y refinamiento con la distancia exacta (`<=` radio).
+- **k-NN:** búsqueda *best-first* con una cola de prioridad de nodos ordenada por MINDIST y un heap con los k mejores puntos. Se detiene cuando el nodo más prometedor ya está más lejos que el k-ésimo vecino. Los empates se resuelven por RID.
+- **Polígono:** filtro por el MBR del polígono y refinamiento con *ray casting*. Incluye el borde y admite agujeros y polígonos cóncavos; los distritos se leen de GeoJSON (`Polygon`, `MultiPolygon`, `Feature`, `FeatureCollection`).
+
+#### 4.6 SQL espacial
+Sintaxis soportada:
+- columna `POINT` y literales `POINT(lat, lon)` y `POLYGON((lat, lon), ...)`;
+- `distancia(col, POINT(...))` en `WHERE` (rango) y en `ORDER BY ... LIMIT k` (k-NN);
+- `WITHIN(col, POLYGON(...))`;
+- métrica con `USING HAVERSINE | EUCLIDEAN` o con un tercer argumento de `distancia`;
+- `CREATE INDEX ... USING RTREE`.
+
+El optimizador usa el R-Tree cuando hay uno vigente y el predicado permite poda; si no, recorre la tabla con el mismo resultado. Los demás filtros del `WHERE` se aplican después. Si un k-NN tiene filtros adicionales, el ejecutor amplía el k pedido al índice hasta reunir k filas que los cumplan. El índice se mantiene fila por fila en el Heap File y se reconstruye al final de la sentencia en el secuencial y el B+ agrupado.
+
+#### 4.7 Mapa
+El panel **Mapa** del frontend levanta un servidor HTTP local y el botón **Abrir mapa** muestra una página Leaflet con OpenStreetMap:
+- Dibuja los puntos de la tabla, resalta los del resultado y muestra el radio o el polígono de la consulta. Un clic en el mapa escribe `POINT(lat, lon)` en el editor.
+- Los puntos de cada tabla se leen una vez y se cachean hasta que una sentencia pueda modificarlos. Así el mapa no agrega un recorrido de la tabla a cada consulta: con 20.000 filas, un k-NN tarda ~5 ms en lugar de ~360 ms.
+- El navegador redibuja solo cuando hay una consulta nueva, conservando el zoom del usuario.
+
+#### 4.8 Validación de corrección
+- **Consultas del R-Tree:** rango, k-NN y polígono se compararon con fuerza bruta en 30 semillas (distintos M, puntos repetidos, k = 0 y k > N, ambas métricas): 0 diferencias.
+- **Punto en polígono:** coincide con la implementación de matplotlib en 60.000 puntos sobre polígonos cóncavos aleatorios.
+- **SQL espacial:** se ejecutó el mismo conjunto de consultas en los tres almacenamientos, con y sin índice RTREE, y se comparó con Python: 0 diferencias. Incluye:
+  - el borde exacto de `<` frente a `<=`;
+  - filtros con AND y OR;
+  - k-NN con `WHERE`, `OFFSET` y `DESC`;
+  - la métrica Euclidiana, `WITHIN` y GROUP BY;
+  - el mantenimiento del índice tras DELETE y ROLLBACK.
+- **PostGIS:** con la distancia esférica, GiST devuelve exactamente los mismos resultados que nuestra búsqueda secuencial y que el R-Tree. Lo verifica el benchmark en cada consulta.
+
+### 5. Comparación experimental: Secuencial vs R-Tree vs GiST
+
+#### 5.1 Metodología
+`benchmarks/bench_spatial.py`; los resultados están en `benchmarks/results/spatial_*`.
+
+**Datos y consultas**
+* **Puntos:** 1.000, 10.000 y 100.000 comercios del dataset descrito en la sección 4.2.
+* **Consultas:** 100 centros, los mismos para las tres técnicas.
+  * Rango con radio de 1, 5 y 10 km.
+  * k-NN con k = 10, 50 y 100.
+
+  Cada tiempo es el promedio por consulta, con 3 repeticiones por tamaño (media ± desviación estándar en las gráficas).
+
+**Condiciones de la comparación**
+* **Origen de los resultados:** las tres técnicas leen de una tabla en disco.
+  * **Secuencial:** recorre un `HeapFile` y calcula la distancia de cada punto.
+  * **R-Tree:** obtiene los RID del índice y lee esos registros del mismo heap.
+  * **GiST:** consulta su tabla en PostgreSQL 16 + PostGIS 3.4 (Docker), con `ST_DWithin` para el rango y `ORDER BY <-> LIMIT k` para k-NN.
+* **Distancia:** Haversine sobre la esfera en las tres. PostGIS mide por defecto sobre el elipsoide WGS84, que a 6 km difiere un 0,3% y cambiaría qué puntos quedan dentro del radio; por eso se usa `ST_DWithin(..., false)`. El operador `<->` ya usa la esfera.
+* **Construcción:**
+  * R-Tree: inserción punto por punto.
+  * GiST: solo `CREATE INDEX`, con la tabla ya cargada.
+  * Secuencial: no construye índice.
+* **Espacio:** tamaño del archivo del R-Tree y `pg_relation_size` del índice GiST. La **memoria** del R-Tree es el pico de `tracemalloc` al construirlo, medido en una pasada aparte porque `tracemalloc` lo hace ~5 veces más lento. La memoria de GiST está en el servidor y no se mide.
+* **Verificación:** fuera del cronómetro, cada resultado del R-Tree y de GiST se compara con la búsqueda secuencial: el rango por conjunto de ids y el k-NN por distancias, con 1 mm de tolerancia. Las 1.800 consultas de cada técnica coincidieron.
+* **Detalle del k-NN en PostGIS:** se ordena solo por `<->`. Si se agrega otra clave de orden (`ORDER BY ubicacion <-> c, id`), PostgreSQL deja de usar el índice y recorre y ordena toda la tabla.
+
+**Entorno:** Windows 11, Python 3.13 y PostGIS en Docker. La corrida tardó 44 minutos y las repeticiones fueron estables: con 100.000 puntos, la construcción del R-Tree tardó entre 53,3 y 53,8 s, y cada consulta secuencial entre 0,59 y 0,81 s. Una corrida anterior se descartó porque la máquina estuvo cargada durante la medición: tardó 78 minutos y una de sus repeticiones salió 6 veces más lenta que las otras.
+
+#### 5.2 Construcción del índice
+![](../benchmarks/results/spatial_tiempo_construccion.png)
+
+| N | R-Tree | GiST |
+| ---: | ---: | ---: |
+| 1.000 | 0,44 s | 0,026 s |
+| 10.000 | 4,4 s | 0,23 s |
+| 100.000 | 54 s | 1,3 s |
+
+**Complejidad:** por el algoritmo, las dos construcciones son O(N log N): N inserciones de costo logarítmico.
+* **R-Tree:** las pendientes log-log medidas son 1,00 y 1,09, coherentes con ese orden.
+* **GiST:** sus pendientes, 0,94 y 0,75, quedan por debajo de 1 porque con N chico pesan costos fijos (`CREATE INDEX`, `ANALYZE` y la ida y vuelta al servidor). Igual que con el ORDER BY del hash (sección 3.4), ese orden se sostiene por el algoritmo, no por la medición.
+
+**Comparación:**
+* **R-Tree:** inserta punto por punto en Python y reescribe una página de 4 KB por inserción; el split cuadrático cuesta O(M²) por división.
+* **GiST:** construye en C con escritura masiva. Es 17 veces más rápido con 1.000 puntos, 19 con 10.000 y 42 con 100.000; la diferencia crece con N.
+
+Un *bulk loading* (por ejemplo STR) reduciría mucho la construcción del R-Tree; queda como mejora posible.
+
+#### 5.3 Consulta por rango
+![](../benchmarks/results/spatial_tiempo_rango_1km.png)
+![](../benchmarks/results/spatial_tiempo_rango_5km.png)
+![](../benchmarks/results/spatial_tiempo_rango_10km.png)
+
+Promedio por consulta con 100.000 puntos; entre paréntesis, la cantidad media de puntos devueltos:
+
+| Radio | Secuencial | R-Tree | GiST |
+| :--- | ---: | ---: | ---: |
+| 1 km (105 puntos, 0,1%) | 716 ms | 4,0 ms | 2,7 ms |
+| 5 km (2.666 puntos, 2,7%) | 606 ms | 87 ms | 11,5 ms |
+| 10 km (10.830 puntos, 10,8%) | 606 ms | 361 ms | 38 ms |
+
+* **Secuencial, O(N):** recorre toda la tabla sin importar el radio. Su tiempo crece unas 10 veces por cada aumento de 10 veces en N (6 ms, 64 ms y ~0,6 s).
+  * Con 100.000 puntos, el radio de 1 km sale un 18% más lento (716 frente a 606 ms) aunque el trabajo es el mismo.
+  * Es la primera medición de cada repetición, así que incluye calentamiento, y además una de sus tres corridas tardó 0,81 s.
+  * Está dentro de la variación de la máquina y no se repite con 1.000 ni con 10.000 puntos.
+* **R-Tree, O(log N + k):** k es la cantidad de puntos devueltos.
+  * Con radios selectivos es 180 veces más rápido que el secuencial (1 km).
+  * La ventaja se reduce a medida que el radio cubre más tabla. Con 100.000 puntos, el filtro por MBR visita en promedio 74 de los 838 nodos (promedio de los tres radios), y luego cada resultado exige leer su registro del heap con un acceso aleatorio.
+  * Con 10 km devuelve el 11% de la tabla y solo es 1,7 veces más rápido que el secuencial.
+  * **Por qué la curva sube casi como el secuencial:** en las gráficas de 5 y 10 km la curva del R-Tree tiene pendiente cercana a 1 (1,10 y 1,04 en 10 km). No contradice O(log N + k): el radio es fijo y los puntos cubren la misma zona, así que k es una fracción constante de N (0,1%, 2,7% y 10,8% según el radio) y crece con N. El término k domina, y el costo por resultado es lineal en k, no en N. Con 1 km, donde k es chico, la pendiente baja a 0,55 y 0,79.
+* **GiST:** sigue el mismo patrón, pero en C. Con 1.000 puntos su ventaja desaparece: cada consulta paga ~1 ms de ida y vuelta entre el cliente y el servidor, y el R-Tree resulta más rápido para 1 km (0,18 ms frente a 1,32 ms).
+
+#### 5.4 Consulta k-NN
+![](../benchmarks/results/spatial_tiempo_knn_10.png)
+![](../benchmarks/results/spatial_tiempo_knn_50.png)
+![](../benchmarks/results/spatial_tiempo_knn_100.png)
+
+| N | k | Secuencial | R-Tree | GiST |
+| ---: | ---: | ---: | ---: | ---: |
+| 1.000 | 10 | 5,7 ms | 1,7 ms | 1,7 ms |
+| 10.000 | 10 | 68 ms | 2,6 ms | 1,7 ms |
+| 100.000 | 10 | 622 ms | 4,5 ms | 1,7 ms |
+| 100.000 | 100 | 631 ms | 11,0 ms | 3,2 ms |
+
+* **Secuencial:** recorre toda la tabla manteniendo un heap de k elementos, O(N log k).
+* **R-Tree:** con 100.000 puntos, la búsqueda *best-first* por MINDIST visita en promedio solo 8,6 nodos (promedio de k = 10, 50 y 100) y se detiene apenas el nodo más prometedor queda más lejos que el k-ésimo vecino. Su tiempo apenas crece con N (de 1,7 a 4,5 ms al multiplicar N por 100) y con 100.000 puntos es 138 veces más rápido que el secuencial.
+* **Un k mayor** cuesta poco más, porque los vecinos adicionales están en las mismas hojas o en las vecinas.
+
+#### 5.5 Espacio y memoria
+![](../benchmarks/results/spatial_espacio_indice.png)
+
+| N | R-Tree (disco) | GiST (disco) | R-Tree (pico de memoria al construir) |
+| ---: | ---: | ---: | ---: |
+| 1.000 | 49 KB | 107 KB | 90 KB |
+| 10.000 | 344 KB | 776 KB | 63 KB |
+| 100.000 | 3,4 MB | 7,5 MB | 129 KB |
+
+* **Disco:** ambos índices crecen O(N). El R-Tree ocupa menos de la mitad que GiST:
+  * cada hoja guarda solo el punto y el RID (23 bytes);
+  * GiST guarda una caja por entrada más la cabecera de cada tupla del índice.
+* **Memoria:** el R-Tree trabaja en disco y solo mantiene en memoria el camino de nodos que está modificando, así que su pico prácticamente no crece con N.
+
+#### 5.6 Cuándo usar cada técnica
+
+| Técnica | Ventajas | Desventajas | Cuándo usarla |
+| :--- | :--- | :--- | :--- |
+| **Búsqueda secuencial** | Sin construcción ni espacio adicional; siempre correcta; no se degrada con inserciones. | O(N) por consulta: ~0,6 s con 100.000 puntos para cualquier radio o k. | Tablas pequeñas (unos pocos miles de puntos), consultas esporádicas o que devuelven gran parte de la tabla. |
+| **R-Tree (propio)** | k-NN casi independiente de N (4,5 ms con 100.000); rango selectivo 180 veces más rápido que el secuencial; índice compacto y en disco, con poca memoria. | Construcción lenta en Python (54 s para 100.000 puntos); con radios grandes el costo lo dominan las lecturas aleatorias de cada resultado. | Consultas selectivas (radios chicos, k-NN) sobre tablas medianas o grandes dentro del motor. |
+| **GiST (PostGIS)** | Lo más rápido en todos los casos con N grande (implementación en C); construcción entre 17 y 42 veces más rápida (crece con N). | Requiere un servidor PostgreSQL; índice ~2 veces más grande; ~1 ms de ida y vuelta por consulta, que pesa con tablas chicas. | Producción y grandes volúmenes, cuando se dispone de PostgreSQL. |
+
+#### 5.7 Conclusiones
+* **La poda espacial funciona:** con 100.000 puntos, el R-Tree resuelve un k-NN visitando ~9 de 838 nodos y un rango de 1 km visitando una fracción de ellos. Eso explica las mejoras de dos órdenes de magnitud frente al recorrido secuencial, cuyo costo es lineal.
+* **El beneficio depende de la selectividad:** mientras más puntos devuelve la consulta, más se acerca el índice al costo del recorrido. Con radios que cubren ~10% de la tabla, el R-Tree solo es 1,7 veces más rápido que el secuencial.
+* **Frente a GiST:** el R-Tree sigue la misma tendencia, pero la diferencia no es constante.
+  * Con 100.000 puntos va de 1,5 veces (1 km) a 9,4 veces (10 km) en rango, y de 2,7 a 3,5 veces en k-NN.
+  * Crece con la cantidad de resultados, porque el R-Tree lee cada uno del heap en Python.
+  * Con 1.000 puntos, en cambio, el R-Tree es más rápido en rangos chicos, porque GiST paga la ida y vuelta al servidor.
+  * En construcción, la diferencia va de 17 a 42 veces y también crece con N, por Python frente a C y la construcción masiva de GiST.
+  * En espacio, el R-Tree es más compacto.
+* **La métrica debe ser la misma en todas las técnicas:** PostGIS usa el elipsoide por defecto, y comparar contra una distancia esférica sin ajustarlo produce resultados distintos cerca del borde del radio.

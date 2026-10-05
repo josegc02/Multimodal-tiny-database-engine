@@ -1,0 +1,33 @@
+{
+  "timestamp_utc": "2026-10-05T02:09:10.910246+00:00",
+  "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "machine": "AMD64",
+  "seed": 42,
+  "sizes": [
+    1000,
+    10000,
+    100000
+  ],
+  "repetitions": 3,
+  "elapsed_seconds": 2649.5723687000573,
+  "matplotlib": "3.10.7",
+  "queries": 100,
+  "radii_m": [
+    1000,
+    5000,
+    10000
+  ],
+  "ks": [
+    10,
+    50,
+    100
+  ],
+  "postgis": true,
+  "distance": "Haversine (esfera R = 6.371.008,8 m); PostGIS con ST_DWithin(..., false) y <->",
+  "sequential": "scan de un HeapFile en disco calculando la distancia exacta",
+  "rtree": "M = 177/113, split cuadrático; los resultados se leen del mismo HeapFile",
+  "gist": "construcción = CREATE INDEX + ANALYZE con la tabla ya cargada; espacio = pg_relation_size",
+  "memory": "R-Tree: pico de tracemalloc al construir, medido en una pasada aparte; GiST: NA (memoria del servidor)",
+  "verification": "rango por ids y k-NN por distancias (tolerancia 1 mm) contra el secuencial, fuera del cronómetro"
+}
