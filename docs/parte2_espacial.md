@@ -87,7 +87,7 @@ Contratos y ejemplos SQL en [consultas_espaciales.md](consultas_espaciales.md); 
   - Si la raíz queda con un solo hijo, el hijo pasa a ser la raíz.
   - Las páginas liberadas se reutilizan.
 - **Búsqueda por rectángulo:** `search_mbr` cuenta en `last_stats` los nodos y hojas visitados, para el plan de ejecución y los benchmarks.
-- **Rendimiento:** 100.000 puntos de Lima se insertan en ~106 s (~1 ms por inserción, el mismo orden que el B+ agrupado). El árbol queda con altura 3, 831 nodos y hojas llenas al 69%. Una ventana de 59 puntos visita 47 de los 831 nodos.
+- **Rendimiento** (corrida oficial, sección 5 del informe): con 100.000 puntos la construcción tarda ~54 s (~0,5 ms por inserción) y el árbol ocupa 839 páginas. Un k-NN visita en promedio 8,6 nodos y una consulta por radio de 1 km tarda ~4 ms.
 - **Pruebas** (`tests/indexes/test_rtree.py`): después de cada operación verifican altura balanceada, ocupación entre m y M, MBRs exactos en cada padre y que ninguna página se pierda ni se duplique. También comparan las búsquedas con fuerza bruta y cubren puntos repetidos y alineados, persistencia y reutilización de páginas.
 
 ## Decisiones de diseño
