@@ -96,5 +96,6 @@
       "load_factor": 0.7689468503937008
     }
   ],
-  "summary": "mediana de las repeticiones; barras de error del mínimo al máximo"
+  "summary": "mediana de las repeticiones; barras de error del mínimo al máximo",
+  "range_rerun": "tiempo_rango_seg se volvió a medir aparte (mismos rangos y código), con cargador y 3 pasadas de calentamiento descartadas"
 }
