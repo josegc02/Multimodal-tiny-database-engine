@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-04T10:47:14.779651+00:00",
+  "timestamp_utc": "2026-10-05T04:24:06.325829+00:00",
   "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
   "platform": "Windows-11-10.0.26200-SP0",
   "machine": "AMD64",
@@ -10,17 +10,19 @@
     100000
   ],
   "repetitions": 3,
-  "elapsed_seconds": 1251.1148437999655,
+  "elapsed_seconds": 579.2300336998887,
   "matplotlib": "3.10.7",
   "page_size": 4096,
   "bplus_clustered_M": 92,
   "bplus_unclustered_M": 254,
   "hash_bucket_capacity": 254,
   "hash_max_depth": 16,
-  "equality_queries": 100,
-  "range_queries": 20,
-  "range_width": "[k, min(N-1, k+100)]",
+  "equality_queries": 1000,
+  "range_queries": 200,
+  "range_width": "[k, k+100], k < N-100",
   "update_pairs": 500,
+  "updates": "eliminar y reinsertar registros existentes elegidos al azar",
+  "timing": "gc.collect() antes y recolector desactivado durante cada medición",
   "results": "todas las consultas devuelven registros completos (no agrupado y hash leen el heap)",
   "ordering": "agrupado: hojas; no agrupado: hojas + heap.get; hash: heap.scan + external_sort",
   "space": "espacio_total = tabla + índice; espacio_adicional = total - heap con los mismos N registros",
@@ -93,5 +95,6 @@
       "entries": 100000,
       "load_factor": 0.7689468503937008
     }
-  ]
+  ],
+  "summary": "mediana de las repeticiones; barras de error del mínimo al máximo"
 }

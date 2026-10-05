@@ -35,10 +35,11 @@ def arguments(description):
     return args
 
 
-def summarize(runs, key_fields, metrics):
+def summarize(runs, key_fields, metrics, center=statistics.fmean):
     """runs: filas de todas las repeticiones. Agrupa por key_fields.
 
-    Para cada métrica numérica escribe <métrica> (media) y <métrica>_std.
+    Para cada métrica numérica escribe <métrica> (media, o el estadístico que
+    indique center), <métrica>_std, <métrica>_min y <métrica>_max.
     Las métricas NA se mantienen NA (operación no soportada o no medida).
     """
     groups = {}
@@ -51,10 +52,12 @@ def summarize(runs, key_fields, metrics):
         for metric in metrics:
             values = [row[metric] for row in rows]
             if any(value == NA for value in values):
-                out[metric], out[metric + "_std"] = NA, NA
+                for suffix in ("", "_std", "_min", "_max"):
+                    out[metric + suffix] = NA
             else:
-                out[metric] = statistics.fmean(values)
+                out[metric] = center(values)
                 out[metric + "_std"] = statistics.stdev(values) if len(values) > 1 else 0.0
+                out[metric + "_min"], out[metric + "_max"] = min(values), max(values)
         summary.append(out)
     return summary
 
@@ -74,7 +77,7 @@ def read_summary(path):
 
 def write_csv(path, rows, fields):
     with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -84,6 +87,8 @@ def series(rows, technique, metric, label=None, scale=1.0, per=None):
 
     per=None grafica el valor tal cual; per="n" lo divide por N (costo por
     registro); per=<número> lo divide por esa cantidad de operaciones.
+    Las barras van del mínimo al máximo de las repeticiones si el CSV los
+    tiene; si no, ± la desviación estándar.
     """
     data = [row for row in rows if row["tecnica"] == technique and row[metric] != NA]
 
@@ -92,9 +97,13 @@ def series(rows, technique, metric, label=None, scale=1.0, per=None):
             return scale / row["n_registros"]
         return scale / per if per else scale
 
-    return (label or technique, [row["n_registros"] for row in data],
-            [row[metric] * factor(row) for row in data],
-            [row.get(metric + "_std", 0.0) * factor(row) for row in data])
+    ys = [row[metric] * factor(row) for row in data]
+    if all(metric + "_min" in row for row in data):
+        errors = [[y - row[metric + "_min"] * factor(row) for y, row in zip(ys, data)],
+                  [row[metric + "_max"] * factor(row) - y for y, row in zip(ys, data)]]
+    else:
+        errors = [row.get(metric + "_std", 0.0) * factor(row) for row in data]
+    return label or technique, [row["n_registros"] for row in data], ys, errors
 
 
 def _numero(value, _position=None):
@@ -105,7 +114,7 @@ def _numero(value, _position=None):
 
 
 def plot(path, title, ylabel, all_series, note=None):
-    """Gráfica log-log con barras de error (desviación estándar)."""
+    """Gráfica log-log con barras de error (ver series)."""
     previous = os.environ.get("MPLCONFIGDIR")
     with tempfile.TemporaryDirectory(prefix="bd2-matplotlib-") as cache:
         if previous is None:
