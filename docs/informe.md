@@ -237,12 +237,12 @@ Las pruebas se ejecutan con scripts de consola independientes del frontend (`ben
 * **Tamaños de dataset**: **1.000**, **10.000** y **100.000** registros.
 * **Datos**: semilla fija **42**; claves únicas 0..N-1 insertadas en orden **aleatorio** (no favorece al Archivo Secuencial). Esquema `id` (int), `nombre` (20 caracteres ASCII) y `precio` (float): **36 bytes por registro**.
 * **Páginas** de **4096 bytes** en todas las estructuras.
-* **Repeticiones**: **3 corridas por tamaño**. Las tablas reportan la **media** y las gráficas muestran barras de error de ± 1 desviación estándar (`*_comparison.csv`; cada corrida está en `*_runs.csv`).
+* **Repeticiones**: **3 corridas por tamaño** (`*_comparison.csv`; cada corrida está en `*_runs.csv`). En almacenamiento, las tablas reportan la **media** y las barras de error son ± 1 desviación estándar. En índices se reporta la **mediana** y las barras van del mínimo al máximo de las tres corridas, para que una corrida aislada con interferencia no mueva la curva.
 * **Costo por operación**: las inserciones, la construcción de índices y las actualizaciones se grafican como **tiempo por operación** (tiempo total dividido por la cantidad de operaciones). Así la complejidad se lee directamente en la gráfica: una curva plana es O(1) u O(log N) y una pendiente 1 es O(N). Los totales siguen en los CSV.
 * **Persistencia del hash**: el índice hash vive en RAM y se guarda como un snapshot JSON completo, una operación O(N). Se mide aparte (`tiempo_snapshot_seg`) para no mezclarla con el costo O(1) de cada inserción o eliminación.
-* **Variación del entorno**: en esta máquina, la misma corrida puede variar entre un 25% y un 30% entre repeticiones (frecuencia del CPU, antivirus, procesos de fondo); por eso se repite cada medición y se grafica la desviación estándar. Se evaluó si el recolector de basura de Python influía en las curvas alternando corridas con el recolector encendido y apagado en la misma sesión: la diferencia fue menor que esa variación (con 100.000 registros hace unas 94 pasadas en total), así que se mide con el recolector activo, como se ejecuta el motor.
+* **Variación del entorno**: en esta máquina, la misma corrida puede variar entre un 25% y un 30% entre repeticiones (frecuencia del CPU, antivirus, procesos de fondo); por eso se repite cada medición. Con la laptop a batería el CPU alterna entre 1,5 y 2,3 GHz y una corrida puede tardar de 2 a 3 veces más, así que la corrida de índices se hizo con el cargador conectado y sin otras aplicaciones abiertas. En ese benchmark cada medición se cronometra con el recolector de basura desactivado (`gc.collect()` antes), porque sus pausas también se suman al ruido.
 * **Gráficas en escala log-log**, y validación de la complejidad con `benchmarks/complexity.py` (sección 3.4).
-* **Entorno**: Windows 11 (AMD64), Python 3.13.5, sin vaciar la caché del sistema operativo. La corrida de almacenamiento tomó **371 s** y la de índices **1.251 s**.
+* **Entorno**: Windows 11 (AMD64), Python 3.13.5, sin vaciar la caché del sistema operativo. La corrida de almacenamiento tomó **371 s** y la de índices **579 s**.
 
 > **Correcciones respecto de versiones anteriores de este informe.** La primera medición (18/09) tenía problemas que invalidaban varias conclusiones:
 > 1. El Archivo Secuencial dejaba **una sola página en `main`** y enviaba el resto de los registros a `aux` (con N=10.000: 1 página en `main` y 101 en `aux`): se comparaba un heap contra otro heap, la búsqueda del secuencial era lineal y el espacio salía idéntico.
@@ -316,42 +316,42 @@ Tras borrar el **35%** de los registros (no cronometrado), `needs_reorganization
 
 | N | B+ agrupado (por inserción) | B+ no agrupado (por inserción) | Extendible Hash (por inserción) | Snapshot del hash (una vez) |
 | ---: | ---: | ---: | ---: | ---: |
-| 1.000 | 982 µs | 1.498 µs | 44,8 µs | 0,015 s |
-| 10.000 | 1.067 µs | 1.756 µs | 70,1 µs | 0,153 s |
-| 100.000 | 1.206 µs | 1.862 µs | 86,7 µs | 1,030 s |
+| 1.000 | 388 µs | 544 µs | 26,1 µs | 0,009 s |
+| 10.000 | 446 µs | 775 µs | 29,1 µs | 0,052 s |
+| 100.000 | 501 µs | 800 µs | 38,7 µs | 0,575 s |
 
-* **B+, O(log N) por inserción**: el costo por inserción casi no cambia con N porque la altura del árbol crece muy lento (2 a 3 niveles con estos M). Construir 100.000 entradas tomó 121 s (agrupado) y 186 s (no agrupado); con la versión original del B+ tomaba 698 s y 443 s.
+* **B+, O(log N) por inserción**: el costo por inserción casi no cambia con N porque la altura del árbol crece muy lento (2 a 3 niveles con estos M). Construir 100.000 entradas tomó 50 s (agrupado) y 80 s (no agrupado); con la versión original del B+ tomaba 698 s y 443 s.
 * El no agrupado es más lento por inserción que el agrupado aunque sus entradas son más chicas: con M = 254 cada escritura de nodo serializa casi el triple de entradas que con M = 92.
-* **Hash, O(1) amortizado por inserción**: entre 14 y 21 veces más barato que el B+ en 100K, porque trabaja en RAM sin escribir páginas. Persistirlo es una operación aparte y **O(N)**: el snapshot JSON completo tardó 0,015 s, 0,153 s y 1,030 s.
+* **Hash, O(1) amortizado por inserción**: entre 13 y 21 veces más barato que el B+ en 100K, porque trabaja en RAM sin escribir páginas. Persistirlo es una operación aparte y **O(N)**: el snapshot JSON completo tardó 0,009 s, 0,052 s y 0,575 s.
 
 #### Búsqueda por igualdad
 ![](../benchmarks/results/indexes_tiempo_igualdad.png)
 
-Promedio por consulta, registro completo:
+Tiempo por consulta (1.000 claves al azar), registro completo:
 
 | N | B+ agrupado | B+ no agrupado | Extendible Hash |
 | ---: | ---: | ---: | ---: |
-| 1.000 | 0,614 ms | 0,952 ms | 0,095 ms |
-| 10.000 | 0,562 ms | 0,898 ms | 0,097 ms |
-| 100.000 | 0,735 ms | 1,020 ms | 0,110 ms |
+| 1.000 | 0,150 ms | 0,463 ms | 0,038 ms |
+| 10.000 | 0,250 ms | 0,437 ms | 0,040 ms |
+| 100.000 | 0,228 ms | 0,495 ms | 0,068 ms |
 
 * **Hash, O(1)**: calcula el bucket (BLAKE2b) en RAM y hace una sola lectura del heap; es el más rápido.
 * **B+ agrupado, O(log N)**: baja la altura del árbol y encuentra el registro en la hoja.
-* **B+ no agrupado, O(log N) + 1 lectura**: baja el árbol y además lee una página del heap; por eso es entre 1,4 y 1,6 veces más lento que el agrupado.
-* Las tres curvas son prácticamente planas entre 1.000 y 100.000 registros, como corresponde a O(1) y O(log N).
+* **B+ no agrupado, O(log N) + 1 lectura**: baja el árbol y además lee una página del heap; por eso es entre 1,7 y 3 veces más lento que el agrupado.
+* **El escalón del log N**: el costo de un B+ depende de su altura, que solo cambia cuando el árbol suma un nivel. El agrupado (M = 92) pasa de 2 a 3 niveles entre 1.000 y 10.000 registros (17 → 161 nodos): por eso su curva sube en ese tramo y queda plana hasta 100.000 (1.585 nodos, siguen siendo 3 niveles). El no agrupado (M = 254) mantiene 2 niveles hasta 10.000 (64 nodos) y pasa a 3 en 100.000 (539 nodos), donde sube levemente. El hash no tiene niveles y queda plano dentro de la variación medida.
 
 #### Búsqueda por rango
 ![](../benchmarks/results/indexes_tiempo_rango.png)
 
-Promedio de 20 rangos `[k, k+100]` (k = 101 registros):
+Tiempo por consulta en 200 rangos `[k, k+100]` (k = 101 registros; todos devuelven exactamente 101 filas):
 
 | N | B+ agrupado | B+ no agrupado |
 | ---: | ---: | ---: |
-| 1.000 | 1,446 ms | 5,463 ms |
-| 10.000 | 1,357 ms | 5,787 ms |
-| 100.000 | 1,519 ms | 4,522 ms |
+| 1.000 | 0,451 ms | 2,133 ms |
+| 10.000 | 0,616 ms | 2,106 ms |
+| 100.000 | 0,574 ms | 2,382 ms |
 
-El costo es **O(log N + k)**: con k fijo, las curvas son casi planas. En el **agrupado** los 101 registros están contiguos en 1 o 2 hojas; el **no agrupado** recorre sus hojas pero debe leer cada uno de los 101 RIDs en una página distinta del heap (los datos se insertaron en orden aleatorio), por eso el agrupado es **entre 3 y 4 veces más rápido**. Las barras de error del no agrupado son amplias (corridas entre 2,2 y 7,5 ms): cada rango hace 101 lecturas aleatorias del heap, que dependen de lo que el sistema operativo tenga en caché. Además, en 100.000 la tercera corrida fue entre 2 y 3 veces más rápida en todas las operaciones del no agrupado (igualdad 0,52 ms frente a ~1,27 ms, ORDER BY 1,8 s frente a ~5 s), un cambio de estado de la máquina que también baja su media. El agrupado, que lee hojas contiguas, varía menos (hasta 0,5 ms). El **Extendible Hash no soporta rangos**: la función hash dispersa claves consecutivas en buckets distintos.
+El costo es **O(log N + k)**: con k = 101 fijo, el término log N aporta como mucho un nivel más del árbol frente a 101 registros leídos, así que las dos curvas son prácticamente planas; el agrupado muestra el mismo escalón que en igualdad entre 1.000 y 10.000. En el **agrupado** los 101 registros están contiguos en 1 o 2 hojas; el **no agrupado** recorre sus hojas pero debe leer cada uno de los 101 RIDs en una página distinta del heap (los datos se insertaron en orden aleatorio), por eso el agrupado es **entre 3 y 5 veces más rápido**. La barra larga del no agrupado en 10.000 corresponde a una sola corrida con interferencia (16 ms por consulta frente a ~2 ms en las otras dos), que no afecta a la mediana. El **Extendible Hash no soporta rangos**: la función hash dispersa claves consecutivas en buckets distintos.
 
 #### Ordenamiento (ORDER BY)
 ![](../benchmarks/results/indexes_tiempo_orden.png)
@@ -360,13 +360,13 @@ El costo es **O(log N + k)**: con k fijo, las curvas son casi planas. En el **ag
 
 | N | B+ agrupado | B+ no agrupado | Extendible Hash |
 | ---: | ---: | ---: | ---: |
-| 1.000 | 0,007 s | 0,054 s | 0,072 s |
-| 10.000 | 0,057 s | 0,429 s | 1,52 s |
-| 100.000 | 0,622 s | 4,02 s | 14,55 s |
+| 1.000 | 0,002 s | 0,016 s | 0,011 s |
+| 10.000 | 0,024 s | 0,173 s | 0,684 s |
+| 100.000 | 0,241 s | 1,939 s | 6,82 s |
 
 * El agrupado recorre sus hojas encadenadas, que ya están ordenadas: **O(N)**.
-* El no agrupado obtiene el orden de sus hojas, pero hace una lectura aleatoria del heap por cada registro: también **O(N)**, pero 6,5 veces más lento que el agrupado.
-* El hash no aporta orden, así que el motor recurre a `scan` del heap + *external sort* k-way, **O(N log N)**: 23 veces más lento que el agrupado.
+* El no agrupado obtiene el orden de sus hojas, pero hace una lectura aleatoria del heap por cada registro: también **O(N)**, pero 8 veces más lento que el agrupado.
+* El hash no aporta orden, así que el motor recurre a `scan` del heap + *external sort* k-way, **O(N log N)**: 28 veces más lento que el agrupado. Con 1.000 registros la entrada cabe en memoria y se ordena sin escribir runs; desde 10.000 el *external sort* genera runs en disco y los mezcla, por eso ese primer tramo es más empinado.
 
 #### Espacio en disco y memoria
 ![](../benchmarks/results/indexes_espacio_adicional.png)
@@ -391,24 +391,24 @@ Como complemento, el espacio total (tabla + índice). Las tres curvas quedan cas
 #### Inserciones y eliminaciones frecuentes
 ![](../benchmarks/results/indexes_tiempo_actualizaciones.png)
 
-500 inserciones + 500 eliminaciones intercaladas, en tabla e índice; costo por operación:
+500 registros existentes elegidos al azar: cada uno se elimina y se vuelve a insertar, en tabla e índice (1.000 operaciones). Costo por operación:
 
 | N | B+ agrupado | B+ no agrupado | Extendible Hash |
 | ---: | ---: | ---: | ---: |
-| 1.000 | 1.794 µs | 2.265 µs | 519 µs |
-| 10.000 | 1.527 µs | 2.103 µs | 262 µs |
-| 100.000 | 1.364 µs | 2.361 µs | 251 µs |
+| 1.000 | 504 µs | 959 µs | 135 µs |
+| 10.000 | 620 µs | 945 µs | 116 µs |
+| 100.000 | 630 µs | 1.050 µs | 133 µs |
 
-* **B+, O(log N) por operación**: los splits, redistribuciones y fusiones actualizan solo los separadores afectados, por lo que el costo no crece con N. Con la versión original, que recalculaba los separadores de todo el camino al eliminar, las mismas operaciones costaban entre 14 y 24 ms cada una en 100K.
-* **Hash, O(1) por operación**: splits y merges locales en RAM. El costo incluye además insertar y borrar la fila en el heap. El valor de 1.000 es mayor porque con un directorio pequeño se producen más splits y merges por operación. La persistencia del snapshot, O(N), se mide aparte (ver construcción).
+* **B+, O(log N) por operación**: el costo sigue a la altura del árbol, con el mismo escalón que en igualdad (el agrupado sube entre 1.000 y 10.000; el no agrupado, entre 10.000 y 100.000). Sube poco porque la mayor parte del costo es reescribir la hoja (en el agrupado, ~66 registros completos), que no depende de N. Los splits, redistribuciones y fusiones actualizan solo los separadores afectados. En una versión anterior del benchmark las claves nuevas eran siempre mayores que todas las existentes, así que todas las operaciones caían en la última hoja y el costo dependía de cuán llena quedaba esa hoja, no de N; ahora las claves se reparten por todo el árbol. Con la versión original, que recalculaba los separadores de todo el camino al eliminar, las mismas operaciones costaban entre 14 y 24 ms cada una en 100K.
+* **Hash, O(1) por operación**: splits y merges locales en RAM; la curva queda plana. El costo incluye además insertar y borrar la fila en el heap. La persistencia del snapshot, O(N), se mide aparte (ver construcción).
 
 #### Resumen y conclusiones de índices
 
 | Técnica | Ventajas | Desventajas | Escenario recomendado |
 | :--- | :--- | :--- | :--- |
-| **B+ Agrupado** | El mejor en rangos (3 a 4× frente al no agrupado) y en ORDER BY (6,5×); igualdad O(log N) sin I/O adicional; actualizaciones O(log N). | Solo uno por tabla (define el orden físico); splits mueven registros completos; ~57% más espacio que un heap. | Clave primaria de tablas con consultas de rango, ordenamientos o recorridos por clave (`CREATE TABLE ... USING BTREE`). |
-| **B+ No Agrupado** | Rangos y orden sobre cualquier columna; permite varios por tabla; claves duplicadas. | Una lectura aleatoria del heap por registro: 3 a 4× más lento que el agrupado en rangos y 6,5× en ORDER BY. | Índices secundarios sobre columnas con filtros de rango selectivos (pocos registros por consulta). |
-| **Extendible Hash** | La igualdad más rápida (0,11 ms en 100K) y las actualizaciones más baratas, O(1); construcción 14 a 21× más barata por inserción. | No soporta rangos ni orden; reside en RAM (23,8 MB para 100K) y su persistencia es un snapshot completo O(N). | Búsquedas exactas y joins por igualdad sobre claves que no se consultan por rango. |
+| **B+ Agrupado** | El mejor en rangos (3 a 5× frente al no agrupado) y en ORDER BY (8×); igualdad O(log N) sin I/O adicional; actualizaciones O(log N). | Solo uno por tabla (define el orden físico); splits mueven registros completos; ~57% más espacio que un heap. | Clave primaria de tablas con consultas de rango, ordenamientos o recorridos por clave (`CREATE TABLE ... USING BTREE`). |
+| **B+ No Agrupado** | Rangos y orden sobre cualquier columna; permite varios por tabla; claves duplicadas. | Una lectura aleatoria del heap por registro: 3 a 5× más lento que el agrupado en rangos y 8× en ORDER BY. | Índices secundarios sobre columnas con filtros de rango selectivos (pocos registros por consulta). |
+| **Extendible Hash** | La igualdad más rápida (0,07 ms en 100K) y las actualizaciones más baratas, O(1); construcción 13 a 21× más barata por inserción. | No soporta rangos ni orden; reside en RAM (23,8 MB para 100K) y su persistencia es un snapshot completo O(N). | Búsquedas exactas y joins por igualdad sobre claves que no se consultan por rango. |
 
 ### 3.4 Validación: complejidad teórica vs medida
 
@@ -426,32 +426,32 @@ Como complemento, el espacio total (tabla + índice). Las tres curvas quedan cas
 | HeapFile | Espacio en disco | O(N) | +0,97 / +1,00 | Sí |
 | SequentialFile | Espacio en disco | O(N) | +1,00 / +0,99 | Sí |
 | SequentialFile | Reorganización | O(N) | +0,36 / +1,01 | Sí |
-| B+ agrupado | Construcción (por inserción) | O(log N) | +0,04 / +0,05 | Sí |
-| B+ no agrupado | Construcción (por inserción) | O(log N) | +0,07 / +0,03 | Sí |
-| Extendible Hash | Construcción (por inserción) | O(1) | +0,19 / +0,09 | Sí |
-| Extendible Hash | Snapshot JSON del hash | O(N) | +1,00 / +0,83 | Sí |
-| B+ agrupado | Igualdad (por consulta) | O(log N) | -0,04 / +0,12 | Sí |
-| B+ no agrupado | Igualdad (por consulta) | O(log N) | -0,03 / +0,06 | Sí |
-| Extendible Hash | Igualdad (por consulta) | O(1) | +0,01 / +0,05 | Sí |
-| B+ agrupado | Rango de 101 claves (por consulta) | O(log N + k) | -0,03 / +0,05 | Sí |
-| B+ no agrupado | Rango de 101 claves (por consulta) | O(log N + k) | +0,03 / -0,11 | Sí |
-| B+ agrupado | ORDER BY tabla completa | O(N) | +0,92 / +1,04 | Sí |
-| B+ no agrupado | ORDER BY tabla completa | O(N) | +0,90 / +0,97 | Sí |
-| Extendible Hash | ORDER BY (scan + external sort) | O(N log N) | +1,33 / +0,98 | Sí |
+| B+ agrupado | Construcción (por inserción) | O(log N) | +0,06 / +0,05 | Sí |
+| B+ no agrupado | Construcción (por inserción) | O(log N) | +0,15 / +0,01 | Sí |
+| Extendible Hash | Construcción (por inserción) | O(1) | +0,05 / +0,12 | Sí |
+| Extendible Hash | Snapshot JSON del hash | O(N) | +0,77 / +1,04 | Sí |
+| B+ agrupado | Igualdad (por consulta) | O(log N) | +0,22 / -0,04 | Sí |
+| B+ no agrupado | Igualdad (por consulta) | O(log N) | -0,03 / +0,05 | Sí |
+| Extendible Hash | Igualdad (por consulta) | O(1) | +0,03 / +0,23 | Sí |
+| B+ agrupado | Rango de 101 claves (por consulta) | O(log N + k) | +0,14 / -0,03 | Sí |
+| B+ no agrupado | Rango de 101 claves (por consulta) | O(log N + k) | -0,01 / +0,05 | Sí |
+| B+ agrupado | ORDER BY tabla completa | O(N) | +1,05 / +1,00 | Sí |
+| B+ no agrupado | ORDER BY tabla completa | O(N) | +1,04 / +1,05 | Sí |
+| Extendible Hash | ORDER BY (scan + external sort) | O(N log N) | +1,80 / +1,00 | Sí |
 | B+ agrupado | Espacio adicional | O(N) | +0,93 / +0,98 | Sí |
 | B+ no agrupado | Espacio adicional | O(N) | +0,97 / +0,92 | Sí |
 | Extendible Hash | Espacio adicional | O(N) | +1,04 / +1,04 | Sí |
-| B+ agrupado | Inserción/eliminación (por operación) | O(log N) | -0,07 / -0,05 | Sí |
-| B+ no agrupado | Inserción/eliminación (por operación) | O(log N) | -0,03 / +0,05 | Sí |
-| Extendible Hash | Inserción/eliminación (por operación) | O(1) | -0,30 / -0,02 | Sí |
+| B+ agrupado | Inserción/eliminación (por operación) | O(log N) | +0,09 / +0,01 | Sí |
+| B+ no agrupado | Inserción/eliminación (por operación) | O(log N) | -0,01 / +0,05 | Sí |
+| Extendible Hash | Inserción/eliminación (por operación) | O(1) | -0,07 / +0,06 | Sí |
 
 Las **26 curvas** coinciden con la teoría en el tramo 10.000 → 100.000. En el tramo 1.000 → 10.000 hay dos que quedarían fuera de rango:
 * **Reorganización (0,36)**: con 1.000 registros domina el costo fijo de crear y sincronizar el archivo nuevo (0,049 s); con N grande la pendiente es 1,01.
-* **Actualizaciones del hash (−0,30)**: con 1.000 registros el directorio es pequeño y cada operación provoca más splits y merges; a partir de 10.000 el costo es plano (−0,02).
+* **ORDER BY con hash (1,80)**: con 1.000 registros la entrada cabe en el buffer y se ordena en memoria; desde 10.000 el *external sort* escribe y mezcla runs en disco. En el último tramo, donde ambos tamaños usan el algoritmo externo, la pendiente es 1,00.
 
 **Límites de esta validación.** Con tres tamaños de dataset la prueba es indicativa, no una demostración:
 * No permite distinguir O(1) de O(log N): entre 1.000 y 100.000 registros, log N crece de ~10 a ~17, una diferencia menor que la variación entre corridas.
-* Tampoco distingue O(N) de O(N log N): el ORDER BY con hash (+0,98 en el último tramo) también sería compatible con O(N). Su complejidad O(N log N) se sostiene por el algoritmo (*external sort*), no por la medición.
+* Tampoco distingue O(N) de O(N log N): el ORDER BY con hash (+1,00 en el último tramo) también sería compatible con O(N). Su complejidad O(N log N) se sostiene por el algoritmo (*external sort*), no por la medición.
 
 ### 3.5 Conclusión general de la Parte 1
 No existe una estructura óptima para todo: cada una equilibra de forma distinta el costo de escritura, la latencia de lectura y el consumo de recursos, y las mediciones son coherentes con la complejidad teórica de cada operación.
