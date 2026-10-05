@@ -4,6 +4,7 @@ import argparse
 import csv
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -96,6 +97,13 @@ def series(rows, technique, metric, label=None, scale=1.0, per=None):
             [row.get(metric + "_std", 0.0) * factor(row) for row in data])
 
 
+def _numero(value, _position=None):
+    """Etiqueta de eje legible: 1.000, 250, 0,5 (en lugar de 10³ o 2×10²)."""
+    if value >= 1 and value == int(value):
+        return f"{value:,.0f}".replace(",", ".")
+    return f"{value:g}".replace(".", ",")
+
+
 def plot(path, title, ylabel, all_series, note=None):
     """Gráfica log-log con barras de error (desviación estándar)."""
     previous = os.environ.get("MPLCONFIGDIR")
@@ -117,6 +125,21 @@ def plot(path, title, ylabel, all_series, note=None):
                                 markerfacecolor="none" if i % 2 else None, capsize=4, label=label)
             ax.set(xscale="log", yscale="log", title=title,
                    xlabel="Registros (N, escala logarítmica)", ylabel=ylabel + " (escala logarítmica)")
+            # Marcas con el número escrito, más densas cuanto menos décadas abarca
+            # la gráfica, para poder leer los valores; en el eje X, los tamaños medidos.
+            from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
+            low, high = ax.get_ylim()
+            decades = math.log10(high / low) if low > 0 else 10
+            subs = ((1.0,) if decades > 4 else (1.0, 2.0, 5.0) if decades > 1.5
+                    else (1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0))
+            ax.yaxis.set_major_locator(LogLocator(base=10, subs=subs))
+            ax.yaxis.set_major_formatter(FuncFormatter(_numero))
+            ax.yaxis.set_minor_formatter(NullFormatter())
+            sizes = sorted({x for _, xs, _, _ in all_series for x in xs})
+            if sizes:
+                ax.set_xticks(sizes)
+                ax.xaxis.set_major_formatter(FuncFormatter(_numero))
+                ax.xaxis.set_minor_formatter(NullFormatter())
             if note:
                 ax.text(0.01, -0.16, note, transform=ax.transAxes, fontsize=8, color="0.35")
             ax.legend()
