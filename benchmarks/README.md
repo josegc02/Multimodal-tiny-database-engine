@@ -17,7 +17,11 @@ La comparación espacial se ejecuta de forma análoga:
 ```
 
 Con PostGIS iniciado desde `postgis/docker-compose.yml`, instalar también
-`requirements-postgis.txt` y omitir `--sin-postgis` para medir GiST.
+`requirements-postgis.txt` y omitir `--sin-postgis` para medir GiST (con
+`--postgis-dsn` si se usa otro puerto). La metodología espacial está en la
+sección 5.1 de `docs/informe.md`: secuencial sobre un `HeapFile` en disco, el
+R-Tree lee sus resultados del mismo heap, PostGIS con distancia esférica y en
+GiST solo se cronometra `CREATE INDEX`.
 Por defecto usan **1.000, 10.000 y 100.000 registros**, **3 repeticiones** por
 tamaño, semilla **42**, y escriben en `benchmarks/results/`. Para validar con
 menos datos sin pisar la corrida oficial:
