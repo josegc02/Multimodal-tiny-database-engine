@@ -219,7 +219,7 @@ El pipeline está en `engine/query/`: `lexer` → `parser` (descenso recursivo, 
 
 Implementados en `engine/query/external_algorithms.py` siguiendo el modelo de buffer de **B páginas de R registros** (por defecto B = 8 y R = 128). Los temporales usan un formato binario propio y se eliminan al terminar. Como en PostgreSQL, cada operador trabaja en memoria mientras su entrada cabe en el buffer y solo crea temporales cuando lo excede; así una consulta pequeña no paga el costo de crear archivos.
 
-* **External sort (ORDER BY)**: si la entrada cabe en B·R registros la ordena en memoria (`Sort Method: in-memory` en EXPLAIN ANALYZE). Si no, genera *runs* ordenados de B·R registros y los mezcla con un *merge* k-way de hasta B−1 runs por pasada, con tantas pasadas como haga falta. Admite varias claves, ASC/DESC por clave y posición de NULL; es estable.
+* **External sort (ORDER BY)**: si la entrada cabe en B·R registros la ordena en memoria (`Sort Method: in-memory` en EXPLAIN ANALYZE). Si no, genera *runs* ordenados de B·R registros y los mezcla con un *merge* k-way de hasta B−1 runs por pasada, con tantas pasadas como haga falta. Admite varias claves y ASC/DESC por clave, y es estable. Además ubica los NULL al principio o al final. Las tablas no guardan NULL (sección 1.1), pero sí pueden aparecer en resultados intermedios, por ejemplo un `NULL` literal en el `SELECT` o `MAX` sobre cero filas.
 * **External hash GROUP BY**: agrega en una tabla en memoria mientras los grupos quepan en (B−2)·R. Si se excede, cada grupo ya acumulado se escribe en su partición como estado parcial (cantidad y acumulado, que se combinan al releerlo) y el resto de la entrada se reparte en B−1 particiones con una función hash distinta por nivel y agrega cada partición con una tabla en memoria de hasta (B−2)·R grupos. Si una partición no cabe, se vuelve a particionar; ante *skew* sin progreso recurre a ordenar y agregar en orden. Los agregados DISTINCT eliminan duplicados (grupo, valor) con el mismo mecanismo antes de agregar.
 * **External hash JOIN (Grace)**: si la entrada derecha (el nodo `Hash` del plan) cabe en (B−2)·R registros, construye la tabla en memoria y sondea la izquierda en *streaming*. Si no, particiona ambas entradas con la misma función, construye una tabla sobre la partición más chica y la sondea con la otra; con *skew* procesa bloques de (B−2)·R registros. Cuando el lado derecho tiene un índice de igualdad y el izquierdo es pequeño, el optimizador prefiere el *index nested loop join*.
 
@@ -356,7 +356,14 @@ El costo es **O(log N + k)**: con k fijo, las curvas son casi planas. En el **ag
 #### Ordenamiento (ORDER BY)
 ![](../benchmarks/results/indexes_tiempo_orden.png)
 
-`ORDER BY id` sobre toda la tabla: **0,622 s** (agrupado), **4,02 s** (no agrupado) y **14,55 s** (hash) con 100K registros.
+`ORDER BY id` sobre toda la tabla (tiempo total):
+
+| N | B+ agrupado | B+ no agrupado | Extendible Hash |
+| ---: | ---: | ---: | ---: |
+| 1.000 | 0,007 s | 0,054 s | 0,072 s |
+| 10.000 | 0,057 s | 0,429 s | 1,52 s |
+| 100.000 | 0,622 s | 4,02 s | 14,55 s |
+
 * El agrupado recorre sus hojas encadenadas, que ya están ordenadas: **O(N)**.
 * El no agrupado obtiene el orden de sus hojas, pero hace una lectura aleatoria del heap por cada registro: también **O(N)**, pero 6,5 veces más lento que el agrupado.
 * El hash no aporta orden, así que el motor recurre a `scan` del heap + *external sort* k-way, **O(N log N)**: 23 veces más lento que el agrupado.
@@ -575,9 +582,13 @@ El panel **Mapa** del frontend levanta un servidor HTTP local y el botón **Abri
 | 10.000 | 4,4 s | 0,23 s |
 | 100.000 | 54 s | 1,3 s |
 
-Las dos construcciones crecen como O(N log N): N inserciones de costo logarítmico.
+**Complejidad:** por el algoritmo, las dos construcciones son O(N log N): N inserciones de costo logarítmico.
+* **R-Tree:** las pendientes log-log medidas son 1,00 y 1,09, coherentes con ese orden.
+* **GiST:** sus pendientes, 0,94 y 0,75, quedan por debajo de 1 porque con N chico pesan costos fijos (`CREATE INDEX`, `ANALYZE` y la ida y vuelta al servidor). Igual que con el ORDER BY del hash (sección 3.4), ese orden se sostiene por el algoritmo, no por la medición.
+
+**Comparación:**
 * **R-Tree:** inserta punto por punto en Python y reescribe una página de 4 KB por inserción; el split cuadrático cuesta O(M²) por división.
-* **GiST:** construye en C con escritura masiva, unas 40 veces más rápido.
+* **GiST:** construye en C con escritura masiva. Es 17 veces más rápido con 1.000 puntos, 19 con 10.000 y 42 con 100.000; la diferencia crece con N.
 
 Un *bulk loading* (por ejemplo STR) reduciría mucho la construcción del R-Tree; queda como mejora posible.
 
@@ -595,10 +606,14 @@ Promedio por consulta con 100.000 puntos; entre paréntesis, la cantidad media d
 | 10 km (10.830 puntos, 10,8%) | 606 ms | 361 ms | 38 ms |
 
 * **Secuencial, O(N):** recorre toda la tabla sin importar el radio. Su tiempo crece unas 10 veces por cada aumento de 10 veces en N (6 ms, 64 ms y ~0,6 s).
+  * Con 100.000 puntos, el radio de 1 km sale un 18% más lento (716 frente a 606 ms) aunque el trabajo es el mismo.
+  * Es la primera medición de cada repetición, así que incluye calentamiento, y además una de sus tres corridas tardó 0,81 s.
+  * Está dentro de la variación de la máquina y no se repite con 1.000 ni con 10.000 puntos.
 * **R-Tree, O(log N + k):** k es la cantidad de puntos devueltos.
   * Con radios selectivos es 180 veces más rápido que el secuencial (1 km).
-  * La ventaja se reduce a medida que el radio cubre más tabla: el filtro por MBR visita en promedio 74 de los 839 nodos, y luego cada resultado exige leer su registro del heap con un acceso aleatorio.
+  * La ventaja se reduce a medida que el radio cubre más tabla. Con 100.000 puntos, el filtro por MBR visita en promedio 74 de los 838 nodos (promedio de los tres radios), y luego cada resultado exige leer su registro del heap con un acceso aleatorio.
   * Con 10 km devuelve el 11% de la tabla y solo es 1,7 veces más rápido que el secuencial.
+  * **Por qué la curva sube casi como el secuencial:** en las gráficas de 5 y 10 km la curva del R-Tree tiene pendiente cercana a 1 (1,10 y 1,04 en 10 km). No contradice O(log N + k): el radio es fijo y los puntos cubren la misma zona, así que k es una fracción constante de N (0,1%, 2,7% y 10,8% según el radio) y crece con N. El término k domina, y el costo por resultado es lineal en k, no en N. Con 1 km, donde k es chico, la pendiente baja a 0,55 y 0,79.
 * **GiST:** sigue el mismo patrón, pero en C. Con 1.000 puntos su ventaja desaparece: cada consulta paga ~1 ms de ida y vuelta entre el cliente y el servidor, y el R-Tree resulta más rápido para 1 km (0,18 ms frente a 1,32 ms).
 
 #### 5.4 Consulta k-NN
@@ -614,7 +629,7 @@ Promedio por consulta con 100.000 puntos; entre paréntesis, la cantidad media d
 | 100.000 | 100 | 631 ms | 11,0 ms | 3,2 ms |
 
 * **Secuencial:** recorre toda la tabla manteniendo un heap de k elementos, O(N log k).
-* **R-Tree:** la búsqueda *best-first* por MINDIST visita en promedio solo 8,6 nodos y se detiene apenas el nodo más prometedor queda más lejos que el k-ésimo vecino. Su tiempo apenas crece con N (de 1,7 a 4,5 ms al multiplicar N por 100) y con 100.000 puntos es 138 veces más rápido que el secuencial.
+* **R-Tree:** con 100.000 puntos, la búsqueda *best-first* por MINDIST visita en promedio solo 8,6 nodos (promedio de k = 10, 50 y 100) y se detiene apenas el nodo más prometedor queda más lejos que el k-ésimo vecino. Su tiempo apenas crece con N (de 1,7 a 4,5 ms al multiplicar N por 100) y con 100.000 puntos es 138 veces más rápido que el secuencial.
 * **Un k mayor** cuesta poco más, porque los vecinos adicionales están en las mismas hojas o en las vecinas.
 
 #### 5.5 Espacio y memoria
@@ -637,10 +652,15 @@ Promedio por consulta con 100.000 puntos; entre paréntesis, la cantidad media d
 | :--- | :--- | :--- | :--- |
 | **Búsqueda secuencial** | Sin construcción ni espacio adicional; siempre correcta; no se degrada con inserciones. | O(N) por consulta: ~0,6 s con 100.000 puntos para cualquier radio o k. | Tablas pequeñas (unos pocos miles de puntos), consultas esporádicas o que devuelven gran parte de la tabla. |
 | **R-Tree (propio)** | k-NN casi independiente de N (4,5 ms con 100.000); rango selectivo 180 veces más rápido que el secuencial; índice compacto y en disco, con poca memoria. | Construcción lenta en Python (54 s para 100.000 puntos); con radios grandes el costo lo dominan las lecturas aleatorias de cada resultado. | Consultas selectivas (radios chicos, k-NN) sobre tablas medianas o grandes dentro del motor. |
-| **GiST (PostGIS)** | Lo más rápido en todos los casos con N grande (implementación en C); construcción ~40 veces más rápida. | Requiere un servidor PostgreSQL; índice ~2 veces más grande; ~1 ms de ida y vuelta por consulta, que pesa con tablas chicas. | Producción y grandes volúmenes, cuando se dispone de PostgreSQL. |
+| **GiST (PostGIS)** | Lo más rápido en todos los casos con N grande (implementación en C); construcción entre 17 y 42 veces más rápida (crece con N). | Requiere un servidor PostgreSQL; índice ~2 veces más grande; ~1 ms de ida y vuelta por consulta, que pesa con tablas chicas. | Producción y grandes volúmenes, cuando se dispone de PostgreSQL. |
 
 #### 5.7 Conclusiones
-* **La poda espacial funciona:** con 100.000 puntos, el R-Tree resuelve un k-NN visitando ~9 de 839 nodos y un rango de 1 km visitando una fracción de ellos. Eso explica las mejoras de dos órdenes de magnitud frente al recorrido secuencial, cuyo costo es lineal.
+* **La poda espacial funciona:** con 100.000 puntos, el R-Tree resuelve un k-NN visitando ~9 de 838 nodos y un rango de 1 km visitando una fracción de ellos. Eso explica las mejoras de dos órdenes de magnitud frente al recorrido secuencial, cuyo costo es lineal.
 * **El beneficio depende de la selectividad:** mientras más puntos devuelve la consulta, más se acerca el índice al costo del recorrido. Con radios que cubren ~10% de la tabla, el R-Tree solo es 1,7 veces más rápido que el secuencial.
-* **Frente a GiST:** el R-Tree sigue la misma tendencia; la diferencia constante (1,5 a 10 veces en consultas y ~40 en construcción) se explica por Python frente a C y por la construcción masiva de GiST. En espacio, el R-Tree es más compacto.
+* **Frente a GiST:** el R-Tree sigue la misma tendencia, pero la diferencia no es constante.
+  * Con 100.000 puntos va de 1,5 veces (1 km) a 9,4 veces (10 km) en rango, y de 2,7 a 3,5 veces en k-NN.
+  * Crece con la cantidad de resultados, porque el R-Tree lee cada uno del heap en Python.
+  * Con 1.000 puntos, en cambio, el R-Tree es más rápido en rangos chicos, porque GiST paga la ida y vuelta al servidor.
+  * En construcción, la diferencia va de 17 a 42 veces y también crece con N, por Python frente a C y la construcción masiva de GiST.
+  * En espacio, el R-Tree es más compacto.
 * **La métrica debe ser la misma en todas las técnicas:** PostGIS usa el elipsoide por defecto, y comparar contra una distancia esférica sin ajustarlo produce resultados distintos cerca del borde del radio.
