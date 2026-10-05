@@ -238,13 +238,12 @@ datasets/spatial/               # Polígonos de distritos (GeoJSON) y datos gene
 postgis/                        # docker-compose, esquema SQL y cliente de PostGIS
 tests/                          # storage, indexes, query, concurrency, spatial y frontend
 docs/                           # Informe y documentación técnica
+scripts/                        # Automatización de GitHub (etiquetas e issues por avance)
 ```
 
-Otros archivos de la raíz:
+Otros archivos:
 - **`requirements.txt`:** dependencias (matplotlib, tabulate); `requirements-postgis.txt` agrega psycopg.
-- **`setup_avance1.*` y `setup_avance2.*`:** crean las etiquetas e issues de cada avance en GitHub (requieren `gh`).
-- **`generar_insert_1000.py` e `insert_1000.sql`:** datos de ejemplo para probar la interfaz.
-- **`Estructura base anterior/`:** primera versión del proyecto (parser en C++), conservada como referencia.
+- **`scripts/`:** `setup_avance1.*` y `setup_avance2.*` crean las etiquetas, el milestone y los issues de cada avance en GitHub (requieren `gh`). No forman parte del motor.
 
 ---
 

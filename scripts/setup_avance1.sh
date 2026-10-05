@@ -4,8 +4,8 @@
 # Automatiza: labels + milestone + 10 issues de la Parte 1 (Avance 1 - Semana 6)
 # Requiere: GitHub CLI instalado y autenticado (gh auth login)
 # Uso: ejecutar DENTRO del repo local (git clone ya hecho, remote configurado)
-#      chmod +x setup_avance1.sh
-#      ./setup_avance1.sh
+#      chmod +x scripts/setup_avance1.sh
+#      ./scripts/setup_avance1.sh
 # =============================================================================
 
 set -e  # detener el script si algo falla

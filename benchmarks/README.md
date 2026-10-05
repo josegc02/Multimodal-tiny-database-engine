@@ -24,7 +24,7 @@ R-Tree lee sus resultados del mismo heap, PostGIS con distancia esférica y en
 GiST solo se cronometra `CREATE INDEX`.
 Por defecto usan **1.000, 10.000 y 100.000 registros**, **3 repeticiones** por
 tamaño, semilla **42**, y escriben en `benchmarks/results/`. Para validar con
-menos datos sin pisar la corrida oficial:
+menos datos sin pisar la corrida oficial (la carpeta `smoke/` no se versiona):
 
 ```bash
 .venv/bin/python benchmarks/bench_storage.py --sizes 200 1000 5000 --repetitions 1 --output-dir benchmarks/results/smoke
