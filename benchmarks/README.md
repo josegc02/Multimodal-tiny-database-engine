@@ -33,10 +33,13 @@ menos datos sin pisar la corrida oficial (la carpeta `smoke/` no se versiona):
 
 Salidas por suite (`storage_*` e `indexes_*`):
 
-- `*_comparison.csv`: media y desviación estándar (`<métrica>_std`) de las repeticiones.
+- `*_comparison.csv`: valor central de las repeticiones (media en `storage_*`,
+  mediana en `indexes_*`), desviación estándar (`<métrica>_std`) y, en
+  `indexes_*`, mínimo y máximo (`<métrica>_min`, `<métrica>_max`).
 - `*_runs.csv`: cada repetición por separado.
 - `*_metadata.json`: entorno, configuración, estadísticas estructurales y duración.
-- PNG en escala **log-log** con barras de error (± 1 desviación estándar).
+- PNG en escala **log-log** con barras de error: del mínimo al máximo de las
+  repeticiones en `indexes_*` y ± 1 desviación estándar en `storage_*`.
   Inserción, construcción de índices y actualizaciones se grafican **por
   operación** (total ÷ cantidad de operaciones): una curva plana es O(1) u
   O(log N) y una pendiente 1 es O(N). Los CSV guardan los totales.
@@ -68,10 +71,14 @@ archivos de datos se crean con `tempfile.mkdtemp()` y se borran al terminar.
   caracteres y precios (36 B por registro); todas las técnicas reciben el mismo
   orden y las mismas claves de consulta.
 - **Variación del entorno**: en Windows, la misma corrida puede variar ±25–30%
-  entre repeticiones (frecuencia del CPU, antivirus, procesos de fondo). Por
-  eso se repite 3 veces y se grafica la desviación estándar. El recolector de
-  basura queda activo: un experimento alternando encendido/apagado en la misma
-  sesión no mostró diferencias mayores que esa variación.
+  entre repeticiones (frecuencia del CPU, antivirus, procesos de fondo); con la
+  laptop a batería el CPU alterna entre 1,5 y 2,3 GHz y una repetición puede
+  tardar 2 a 3 veces más. Conviene correr con el cargador conectado, en modo
+  de máximo rendimiento y sin otras aplicaciones abiertas. Cada medición se
+  repite 3 veces.
+- **Índices**: se resume con la **mediana** de las 3 repeticiones, para que una
+  repetición aislada con interferencia no mueva la curva, y cada medición se
+  cronometra con el recolector de basura desactivado (`gc.collect()` antes).
 
 ### Storage (`bench_storage.py`)
 
@@ -94,7 +101,8 @@ archivos de datos se crean con `tempfile.mkdtemp()` y se borran al terminar.
   (clave + RID de 8 B) y el hash buckets de 254 entradas.
 - **Todas las consultas devuelven registros completos**: el agrupado los tiene en
   sus hojas; el no agrupado y el hash leen cada RID de un `HeapFile` real.
-- **Igualdad**: 100 claves. **Rango**: 20 rangos `[k, k+100]`. El hash no
+- **Igualdad**: 1000 claves al azar. **Rango**: 200 rangos `[k, k+100]` con
+  `k < N − 100`, así todos devuelven exactamente 101 registros. El hash no
   soporta rangos (NA).
 - **Ordenamiento** (`ORDER BY id` de toda la tabla): agrupado recorre hojas, no
   agrupado recorre hojas y lee cada RID, y el hash, que no aporta orden, usa
@@ -102,8 +110,10 @@ archivos de datos se crean con `tempfile.mkdtemp()` y se borran al terminar.
 - **Espacio**: `espacio_total_bytes` = tabla + índice (el agrupado es un solo
   archivo). `espacio_adicional_bytes` = total − heap con los mismos N registros.
   `memoria_estimada_bytes` solo aplica al hash (`sys.getsizeof` del grafo).
-- **Actualizaciones**: 500 claves nuevas, cada inserción seguida de su
-  eliminación, en tabla e índice (1000 operaciones).
+- **Actualizaciones**: 500 registros existentes elegidos al azar; cada uno se
+  elimina y se vuelve a insertar, en tabla e índice (1000 operaciones). Las
+  claves quedan repartidas por todo el árbol; con claves nuevas mayores que
+  todas, todas las operaciones caerían en la última hoja.
 - **Durabilidad**: el B+ escribe y hace `flush` de cada página modificada; el
   hash trabaja en RAM y persiste un snapshot JSON completo, que es O(N). Ese
   snapshot se mide aparte (`tiempo_snapshot_seg`) y queda fuera de la

@@ -7,9 +7,11 @@ sus hojas; el no agrupado y el hash resuelven cada RID en un HeapFile real.
 Cada estructura usa el máximo de entradas que cabe en una página de 4096 B.
 """
 
+import gc
 import os
 from pathlib import Path
 import random
+import statistics
 import shutil
 import sys
 import tempfile
@@ -44,8 +46,8 @@ METRICS = ["tiempo_construccion_seg", "tiempo_snapshot_seg", "tiempo_igualdad_se
            "espacio_total_bytes", "espacio_adicional_bytes", "memoria_estimada_bytes",
            "tiempo_actualizaciones_seg"]
 FIELDS = ["tecnica", "n_registros", "repeticiones"] + [
-    name for metric in METRICS for name in (metric, metric + "_std")]
-EQUALITY_QUERIES, RANGE_QUERIES, RANGE_WIDTH, UPDATE_PAIRS = 100, 20, 100, 500
+    name for metric in METRICS for name in (metric, metric + "_std", metric + "_min", metric + "_max")]
+EQUALITY_QUERIES, RANGE_QUERIES, RANGE_WIDTH, UPDATE_PAIRS = 1000, 200, 100, 500
 
 
 def retained_size(root):
@@ -75,12 +77,26 @@ def _check(condition, message):
         raise RuntimeError(message)
 
 
+def _timed(operation):
+    """(segundos, resultado) de operation(), sin pausas del recolector de basura."""
+    gc.collect()
+    gc.disable()
+    try:
+        start = time.perf_counter()
+        result = operation()
+        return time.perf_counter() - start, result
+    finally:
+        gc.enable()
+
+
 def benchmark(n, seed, repetition):
     records = generate_records(n, seed)
-    keys = random.Random(seed + 1).sample(range(n), EQUALITY_QUERIES)
-    rng = random.Random(seed + 2)
-    ranges = [(start, min(n - 1, start + RANGE_WIDTH)) for start in (rng.randrange(n) for _ in range(RANGE_QUERIES))]
-    updates = [{**record, "id": n + record["id"]} for record in generate_records(UPDATE_PAIRS, seed + 3)]
+    rng = random.Random(seed + 1)
+    keys = [rng.randrange(n) for _ in range(EQUALITY_QUERIES)]
+    # Todos los rangos devuelven exactamente RANGE_WIDTH + 1 filas.
+    ranges = [(start, start + RANGE_WIDTH) for start in (rng.randrange(n - RANGE_WIDTH) for _ in range(RANGE_QUERIES))]
+    # Registros existentes repartidos por todo el árbol: se eliminan y se vuelven a insertar.
+    updates = random.Random(seed + 3).sample(records, UPDATE_PAIRS)
     rows, structures = [], []
     directory = tempfile.mkdtemp(prefix="bd2-indexes-")
     try:
@@ -106,12 +122,10 @@ def benchmark(n, seed, repetition):
                 # 1. Construcción: N inserciones. La persistencia del hash (snapshot
                 #    JSON completo, O(N)) se mide aparte para no mezclarla con el
                 #    costo O(1) de cada inserción.
-                start = time.perf_counter()
                 if clustered:
-                    inserted = sum(index.insert(record) for record in records)
+                    construction, inserted = _timed(lambda: sum(index.insert(record) for record in records))
                 else:
-                    inserted = sum(index.insert(key, rid) for key, rid in entries)
-                construction = time.perf_counter() - start
+                    construction, inserted = _timed(lambda: sum(index.insert(key, rid) for key, rid in entries))
                 snapshot = NA
                 if hashed:
                     start = time.perf_counter()
@@ -120,22 +134,19 @@ def benchmark(n, seed, repetition):
                 _check(inserted == n, "No se insertaron todos los registros/pares")
 
                 # 2. Igualdad: registro completo por clave.
-                start = time.perf_counter()
                 if clustered:
-                    found = [[index.search(key)] for key in keys]
+                    equality, found = _timed(lambda: [[index.search(key)] for key in keys])
                 else:
-                    found = [fetch(index.search(key)) for key in keys]
-                equality = time.perf_counter() - start
+                    equality, found = _timed(lambda: [fetch(index.search(key)) for key in keys])
                 _check(all([r["id"] for r in result] == [key] for key, result in zip(keys, found)),
                        "Resultados de igualdad incorrectos")
 
                 # 3. Rango [k, k+100]: registros completos en orden de clave.
                 range_seconds = NA
                 if not hashed:
-                    start = time.perf_counter()
-                    found = [index.range_search(low, high) if clustered else fetch(index.range_search(low, high))
-                             for low, high in ranges]
-                    range_seconds = time.perf_counter() - start
+                    range_seconds, found = _timed(lambda: [
+                        index.range_search(low, high) if clustered else fetch(index.range_search(low, high))
+                        for low, high in ranges])
                     for (low, high), result in zip(ranges, found):
                         _check([r["id"] for r in result] == list(range(low, high + 1)),
                                "Resultados de rango incorrectos")
@@ -143,14 +154,13 @@ def benchmark(n, seed, repetition):
                 # 4. Ordenamiento (ORDER BY id) de toda la tabla.
                 #    Hash no puede aportar orden: se mide lo que haría el motor
                 #    (scan del heap + external sort k-way), marcado en la gráfica.
-                start = time.perf_counter()
                 if clustered:
-                    ordered = list(index.scan())
+                    order_seconds, ordered = _timed(lambda: list(index.scan()))
                 elif hashed:
-                    ordered = list(external_sort((record for _, record in heap.scan()), "id"))
+                    order_seconds, ordered = _timed(
+                        lambda: list(external_sort((record for _, record in heap.scan()), "id")))
                 else:
-                    ordered = fetch(index.iter_ordered())
-                order_seconds = time.perf_counter() - start
+                    order_seconds, ordered = _timed(lambda: fetch(index.iter_ordered()))
                 _check([r["id"] for r in ordered] == list(range(n)), "ORDER BY incorrecto")
 
                 # 5. Espacio: tabla + índice, y lo que se agrega sobre un heap con los mismos datos.
@@ -165,23 +175,31 @@ def benchmark(n, seed, repetition):
                     structures.append({"tecnica": technique, "n_registros": n, "M": tree.header.M,
                                        "allocated_node_pages": tree.header.number_pages - 1})
 
-                # 6. 500 ciclos inserción + eliminación de tabla e índice.
-                start = time.perf_counter()
-                inserted = deleted = 0
-                for record in updates:
-                    if clustered:
-                        inserted += index.insert(record)
-                        deleted += index.delete(record["id"])
-                    else:
-                        rid = heap.insert(record)
-                        inserted += index.insert(record["id"], rid)
-                        deleted += bool(index.delete(record["id"], rid))
-                        heap.delete(rid)
-                changes = time.perf_counter() - start
+                # 6. 500 ciclos eliminación + reinserción de registros existentes,
+                #    en tabla e índice, en posiciones al azar del árbol.
+                rids = dict(entries) if heap else None
+
+                def update_cycles():
+                    inserted = deleted = 0
+                    for record in updates:
+                        key = record["id"]
+                        if clustered:
+                            deleted += index.delete(key)
+                            inserted += index.insert(record)
+                        else:
+                            deleted += bool(index.delete(key, rids[key]))
+                            heap.delete(rids[key])
+                            rids[key] = heap.insert(record)
+                            inserted += index.insert(key, rids[key])
+                    return inserted, deleted
+
+                changes, (inserted, deleted) = _timed(update_cycles)
                 if hashed:
                     index.flush()  # fuera del cronómetro: ya se midió en tiempo_snapshot_seg
-                _check(inserted == UPDATE_PAIRS and deleted == UPDATE_PAIRS, "Falló el ciclo inserción/eliminación")
-                _check(not any(index.search(record["id"]) for record in updates), "Quedaron claves temporales")
+                _check(inserted == UPDATE_PAIRS and deleted == UPDATE_PAIRS, "Falló el ciclo eliminación/inserción")
+                for record in updates:
+                    found = [index.search(record["id"])] if clustered else fetch(index.search(record["id"]))
+                    _check(found == [record], "Registro reinsertado incorrecto")
 
                 rows.append({"tecnica": technique, "n_registros": n,
                              "tiempo_construccion_seg": construction, "tiempo_snapshot_seg": snapshot,
@@ -213,14 +231,15 @@ def plots(rows, out):
           series(rows, "B+ no agrupado", "tiempo_construccion_seg", "B+ no agrupado — O(log N)", us, per="n"),
           series(rows, "Extendible Hash", "tiempo_construccion_seg", "Extendible Hash — O(1) amortizado", us, per="n")],
          note="Tiempo total de N inserciones dividido por N. El snapshot del hash se reporta aparte (tiempo_snapshot_seg).")
-    plot(out / "indexes_tiempo_igualdad.png", "Búsqueda por igualdad (promedio de 100, registro completo)",
+    plot(out / "indexes_tiempo_igualdad.png", f"Búsqueda por igualdad (promedio de {EQUALITY_QUERIES}, registro completo)",
          "Milisegundos por consulta",
          [series(rows, "B+ agrupado", "tiempo_igualdad_seg", "B+ agrupado — O(log N)", 1000, per=EQUALITY_QUERIES),
           series(rows, "B+ no agrupado", "tiempo_igualdad_seg", "B+ no agrupado — O(log N) + 1 lectura", 1000,
                  per=EQUALITY_QUERIES),
           series(rows, "Extendible Hash", "tiempo_igualdad_seg", "Extendible Hash — O(1)", 1000, per=EQUALITY_QUERIES)],
          note="El agrupado lee el registro de su hoja; el no agrupado y el hash leen cada RID del heap.")
-    plot(out / "indexes_tiempo_rango.png", "Búsqueda por rango de 101 claves (promedio de 20, registros completos)",
+    plot(out / "indexes_tiempo_rango.png",
+         f"Búsqueda por rango de {RANGE_WIDTH + 1} claves (promedio de {RANGE_QUERIES}, registros completos)",
          "Milisegundos por consulta",
          [series(rows, "B+ agrupado", "tiempo_rango_seg", "B+ agrupado — O(log N + k)", 1000, per=RANGE_QUERIES),
           series(rows, "B+ no agrupado", "tiempo_rango_seg", "B+ no agrupado — O(log N + k lecturas)", 1000,
@@ -244,7 +263,8 @@ def plots(rows, out):
                  per=2 * UPDATE_PAIRS),
           series(rows, "Extendible Hash", "tiempo_actualizaciones_seg", "Extendible Hash — O(1)", us,
                  per=2 * UPDATE_PAIRS)],
-         note="500 inserciones + 500 eliminaciones en tabla e índice. Sin el snapshot del hash.")
+         note=f"{UPDATE_PAIRS} eliminaciones + {UPDATE_PAIRS} reinserciones de claves al azar en tabla e índice. "
+              "Sin el snapshot del hash.")
 
 
 def main():
@@ -261,7 +281,8 @@ def main():
             runs.extend(result)
             if rep == 1:
                 structures.extend(stats)
-    rows = summarize(runs, ("tecnica", "n_registros"), METRICS)
+    # Mediana: una repetición aislada con interferencia del sistema no mueve la curva.
+    rows = summarize(runs, ("tecnica", "n_registros"), METRICS, center=statistics.median)
     os.makedirs(args.output_dir, exist_ok=True)
     write_csv(args.output_dir / "indexes_comparison.csv", rows, FIELDS)
     write_csv(args.output_dir / "indexes_runs.csv", runs, ["tecnica", "n_registros"] + METRICS)
@@ -276,7 +297,10 @@ def main():
         "page_size": PAGE_SIZE, "bplus_clustered_M": ORDER_CLUSTERED, "bplus_unclustered_M": ORDER_UNCLUSTERED,
         "hash_bucket_capacity": HASH_BUCKET, "hash_max_depth": 16,
         "equality_queries": EQUALITY_QUERIES, "range_queries": RANGE_QUERIES,
-        "range_width": f"[k, min(N-1, k+{RANGE_WIDTH})]", "update_pairs": UPDATE_PAIRS,
+        "range_width": f"[k, k+{RANGE_WIDTH}], k < N-{RANGE_WIDTH}", "update_pairs": UPDATE_PAIRS,
+        "updates": "eliminar y reinsertar registros existentes elegidos al azar",
+        "timing": "gc.collect() antes y recolector desactivado durante cada medición",
+        "summary": "mediana de las repeticiones; barras de error del mínimo al máximo",
         "results": "todas las consultas devuelven registros completos (no agrupado y hash leen el heap)",
         "ordering": "agrupado: hojas; no agrupado: hojas + heap.get; hash: heap.scan + external_sort",
         "space": "espacio_total = tabla + índice; espacio_adicional = total - heap con los mismos N registros",
