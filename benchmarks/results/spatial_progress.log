@@ -28,4 +28,3 @@
 [spatial] N=100000 rep=3: Secuencial
 [spatial] N=100000 rep=3: R-Tree
 [spatial] N=100000 rep=3: GiST
-Matplotlib is building the font cache; this may take a moment.
