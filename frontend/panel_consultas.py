@@ -5,11 +5,9 @@ from tkinter import filedialog, ttk
 
 from frontend.csv_sql import sql_para_csv
 
-
 SQL_EJEMPLO = """-- Escribe tu consulta aqui
 SELECT * FROM cuentas;
 """
-
 
 class PanelConsultas(ttk.LabelFrame):
     """Panel con un editor de texto para escribir SQL."""
@@ -31,12 +29,18 @@ class PanelConsultas(ttk.LabelFrame):
                               font=("Consolas", 10))
         self.editor.pack(side="left", fill="both", expand=True)
 
+        # --- CONFIGURACIÓN DE DESHACER/REHACER ---
+        self.editor.config(undo=True, maxundo=-1, autoseparators=True)
+        self.editor.bind("<Control-z>", self._deshacer)
+        self.editor.bind("<Control-y>", self._rehacer)
+
         scroll_y = ttk.Scrollbar(frame_editor, orient="vertical",
                                  command=self.editor.yview)
         scroll_y.pack(side="right", fill="y")
         self.editor.configure(yscrollcommand=scroll_y.set)
 
         self.editor.insert("1.0", SQL_EJEMPLO)
+        self.editor.edit_reset()
 
         frame_botones = ttk.Frame(self)
         frame_botones.pack(fill="x", padx=4, pady=(0, 4))
@@ -53,7 +57,12 @@ class PanelConsultas(ttk.LabelFrame):
                                     command=self.cargar_csv)
         self.boton_csv.pack(side="left")
 
-        self.editor.bind("<Control-Return>", lambda e: self.ejecutar())
+        # --- ATAJOS DE TECLADO ---
+        self.editor.bind("<Control-Return>", self._atajo_ejecutar)
+        self.editor.bind("<F5>", self._atajo_ejecutar)
+        self.editor.bind("<Control-l>", self._seleccionar_linea)
+        self.editor.bind("<Alt-Up>", self._mover_linea_arriba)
+        self.editor.bind("<Alt-Down>", self._mover_linea_abajo)
 
     def set_on_ejecutar(self, callback):
         self.on_ejecutar = callback
@@ -66,17 +75,21 @@ class PanelConsultas(ttk.LabelFrame):
             self.boton_ejecutar.state(["!disabled"])
 
     def get_sql(self) -> str:
+        """Obtiene el SQL. Si hay texto seleccionado, devuelve solo esa selección."""
+        try:
+            seleccion = self.editor.get("sel.first", "sel.last").strip()
+            if seleccion:
+                return seleccion
+        except tk.TclError:
+            pass
         return self.editor.get("1.0", tk.END).strip()
 
     def set_sql(self, sql: str):
         self.editor.delete("1.0", tk.END)
         self.editor.insert("1.0", sql)
+        self.editor.edit_reset()
 
     def cargar_csv(self):
-        """Elige un CSV y escribe en el editor el SQL para cargarlo.
-
-        No ejecuta: el usuario revisa el CREATE TABLE sugerido y pulsa Ejecutar.
-        """
         path = filedialog.askopenfilename(
             title="Cargar CSV", initialdir=self.base_dir,
             filetypes=[("Archivos CSV", "*.csv *.txt"), ("Todos los archivos", "*.*")])
@@ -93,6 +106,69 @@ class PanelConsultas(ttk.LabelFrame):
 
     def limpiar(self):
         self.editor.delete("1.0", tk.END)
+        self.editor.edit_reset()
+
+    def _deshacer(self, event):
+        try:
+            self.editor.edit_undo()
+        except tk.TclError:
+            pass
+        return "break"
+
+    def _rehacer(self, event):
+        try:
+            self.editor.edit_redo()
+        except tk.TclError:
+            pass
+        return "break"
+
+    def _atajo_ejecutar(self, event):
+        self.ejecutar()
+        return "break"
+
+    def _seleccionar_linea(self, event):
+        self.editor.tag_remove("sel", "1.0", tk.END)
+        indice_cursor = self.editor.index("insert")
+        inicio_linea = self.editor.index(f"{indice_cursor} linestart")
+        fin_linea = self.editor.index(f"{indice_cursor} lineend")
+        self.editor.tag_add("sel", inicio_linea, fin_linea)
+        self.editor.mark_set("insert", fin_linea)
+        return "break"
+
+    def _mover_linea_arriba(self, event):
+        indice = self.editor.index("insert")
+        num_linea = int(indice.split(".")[0])
+
+        if num_linea <= 1:
+            return "break"
+
+        texto_actual = self.editor.get(f"{num_linea}.0", f"{num_linea}.end")
+        texto_arriba = self.editor.get(f"{num_linea-1}.0", f"{num_linea-1}.end")
+
+        self.editor.replace(f"{num_linea-1}.0", f"{num_linea-1}.end", texto_actual)
+        self.editor.replace(f"{num_linea}.0", f"{num_linea}.end", texto_arriba)
+
+        columna = len(texto_actual)
+        self.editor.mark_set("insert", f"{num_linea-1}.{columna}")
+        return "break"
+
+    def _mover_linea_abajo(self, event):
+        indice = self.editor.index("insert")
+        num_linea = int(indice.split(".")[0])
+
+        total_lineas = int(self.editor.index("end-1c").split(".")[0])
+        if num_linea >= total_lineas:
+            return "break"
+
+        texto_actual = self.editor.get(f"{num_linea}.0", f"{num_linea}.end")
+        texto_abajo = self.editor.get(f"{num_linea+1}.0", f"{num_linea+1}.end")
+
+        self.editor.replace(f"{num_linea+1}.0", f"{num_linea+1}.end", texto_actual)
+        self.editor.replace(f"{num_linea}.0", f"{num_linea}.end", texto_abajo)
+
+        columna = len(texto_actual)
+        self.editor.mark_set("insert", f"{num_linea+1}.{columna}")
+        return "break"
 
     def ejecutar(self):
         if self.on_ejecutar is None:

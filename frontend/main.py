@@ -26,29 +26,56 @@ class Aplicacion(tk.Tk):
         # Crear el motor
         self.motor = Motor()
 
-        # Crear los 4 paneles
-        self.panel_archivos = PanelArchivos(self)
+        # --- CREACIÓN DEL LAYOUT TIPO PGADMIN ---
+
+        # 1. Contenedor principal horizontal (Izquierda vs Derecha)
+        self.main_paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        self.main_paned.pack(fill=tk.BOTH, expand=True)
+
+        # 2. Panel Izquierdo (Barra lateral)
+        self.sidebar_frame = ttk.Frame(self.main_paned, width=250)
+        self.main_paned.add(self.sidebar_frame, weight=1)
+
+        # 3. Panel Derecho (Área de trabajo)
+        self.workspace_frame = ttk.Frame(self.main_paned)
+        self.main_paned.add(self.workspace_frame, weight=4)
+
+        # 4. Contenedor vertical para el área de trabajo (Arriba vs Abajo)
+        self.workspace_paned = ttk.PanedWindow(self.workspace_frame, orient=tk.VERTICAL)
+        self.workspace_paned.pack(fill=tk.BOTH, expand=True)
+
+        # 5. Zona Superior del área de trabajo (Pestañas)
+        self.top_notebook = ttk.Notebook(self.workspace_paned)
+        self.workspace_paned.add(self.top_notebook, weight=3)
+
+        # 6. Zona Inferior del área de trabajo (Pestañas)
+        self.bottom_notebook = ttk.Notebook(self.workspace_paned)
+        self.workspace_paned.add(self.bottom_notebook, weight=2)
+
+        # --- INSTANCIACIÓN DE LOS PANELES ---
+        self.panel_archivos = PanelArchivos(self.sidebar_frame)
         self.panel_consultas = PanelConsultas(self, on_ejecutar=self._on_ejecutar, base_dir=PROJECT_DIR)
         self.panel_resultados = PanelResultados(self)
         self.panel_plan = PanelPlanEjecucion(self)
+
+        # El mapa ahora es nativo
         self.panel_mapa = PanelMapa(self)
         self.panel_mapa.on_click = self._mapa_click
 
-        # Layout: 2x2
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
-        self.grid_rowconfigure(2, weight=0)
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=1)
+        # --- COLOCACIÓN VISUAL DE LOS PANELES ---
 
-        # Colocarlos
-        self.panel_archivos.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
-        self.panel_consultas.grid(row=0, column=1, sticky="nsew", padx=2, pady=2)
-        self.panel_resultados.grid(row=1, column=0, sticky="nsew", padx=2, pady=2)
-        self.panel_plan.grid(row=1, column=1, sticky="nsew", padx=2, pady=2)
-        self.panel_mapa.grid(row=2, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
+        # Sidebar
+        self.panel_archivos.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
 
-        # Conectar paneles con el motor
+        # Pestañas Superiores (Consulta SQL y Mapa)
+        self.top_notebook.add(self.panel_consultas, text="Consulta SQL")
+        self.top_notebook.add(self.panel_mapa, text="Mapa")
+
+        # Pestañas Inferiores (Resultados y Plan)
+        self.bottom_notebook.add(self.panel_resultados, text="Resultados")
+        self.bottom_notebook.add(self.panel_plan, text="Plan de Ejecución")
+
+        # --- CONEXIÓN CON EL MOTOR ---
         self.panel_archivos.set_catalog(self.motor.catalog)
         self.panel_consultas.obtener_tablas = lambda: set(self.motor.catalog.tables)
         self.panel_consultas.on_error = self.panel_resultados.mostrar_error
@@ -81,13 +108,14 @@ class Aplicacion(tk.Tk):
             self.panel_resultados.mostrar_mensaje("Sin resultados")
 
         # El plan solo aparece cuando se ejecuta EXPLAIN / EXPLAIN ANALYZE:
-        # Resultados muestra el texto y este panel el análisis por nodo.
         if resultado.plan_nodos:
             self.panel_plan.mostrar_plan(resultado.plan_nodos, analyze=resultado.tiempos[1] is not None,
                                          tiempos=resultado.tiempos)
         else:
             self.panel_plan.limpiar()
+
         self.panel_archivos.refresh()
+        # Le quitamos el '#' para que se actualice el mapa
         self.panel_mapa.actualizar(resultado.mapa)
 
     def _mapa_click(self, lat, lon):

@@ -1,139 +1,281 @@
-"""Panel de mapa: servidor local con Leaflet (frontend/mapa.html) y estado de la última consulta.
+"""Panel de mapa nativo usando tkintermapview optimizado con figuras y botón de centrado."""
 
-El navegador pide cada segundo la versión del estado y solo descarga y redibuja
-cuando cambió, de modo que el mapa no pierde el zoom del usuario.
-"""
-
-from __future__ import annotations
-
-import json
-import threading
-import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+import tkinter as tk
 from tkinter import ttk
-
-HTML = Path(__file__).with_name("mapa.html")
-EMPTY = {"table": None, "points": [], "highlighted": [], "circle": None, "polygon": None}
-
-
-class MapServer:
-    """API local: GET / (página), GET /api/version, GET /api/state y POST /api/click."""
-
-    def __init__(self, on_click=None):
-        self.on_click = on_click
-        self._lock = threading.Lock()
-        self.version = 0
-        self._state, self._json = dict(EMPTY), json.dumps(EMPTY)
-        self._points_source, self._points_json = None, "[]"
-        server = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                if self.path == "/":
-                    self.respond("text/html; charset=utf-8", HTML.read_text(encoding="utf-8"))
-                elif self.path == "/api/version":
-                    self.respond("application/json", json.dumps({"version": server.version}))
-                elif self.path == "/api/state":
-                    with server._lock:
-                        body = server._json
-                    self.respond("application/json", body)
-                else:
-                    self.send_error(404)
-
-            def do_POST(self):
-                if self.path != "/api/click":
-                    self.send_error(404)
-                    return
-                try:
-                    size = int(self.headers.get("Content-Length", 0))
-                    data = json.loads(self.rfile.read(size))
-                    lat, lon = float(data["lat"]), float(data["lng"])
-                except (ValueError, TypeError, KeyError):
-                    self.send_error(400)
-                    return
-                if server.on_click:
-                    server.on_click(lat, lon)
-                self.respond("application/json", "{}")
-
-            def respond(self, kind, body):
-                data = body.encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", kind)
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-
-            def log_message(self, *_):
-                pass
-
-        self.http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.http.server_port}/"
-        threading.Thread(target=self.http.serve_forever, daemon=True).start()
-
-    @property
-    def state(self):
-        return self._state
-
-    def publish(self, **changes):
-        """Actualiza el estado y arma su JSON una vez por versión.
-
-        `points` es una lista de tuplas (id, lat, lon, etiqueta). Solo se vuelve a
-        serializar si es otra lista: entre consultas a la misma tabla no cambia.
-        """
-        with self._lock:
-            points = changes.pop("points", self._state["points"])
-            if points is not self._points_source:
-                self._points_source = points
-                self._points_json = json.dumps([{"id": p[0], "lat": p[1], "lon": p[2], "label": str(p[3])}
-                                                for p in points])
-            self._state = {**self._state, **changes, "points": points}
-            rest = json.dumps({key: value for key, value in self._state.items() if key != "points"})
-            self._json = rest[:-1] + ', "points": ' + self._points_json + "}"
-            self.version += 1
-
-    def close(self):
-        self.http.shutdown()
-        self.http.server_close()
-
+import tkintermapview
+import math
 
 class PanelMapa(ttk.LabelFrame):
-    """Barra con el estado del mapa y el botón para abrirlo en el navegador.
-
-    Uso:
-        panel.actualizar(resultado.mapa)        # tras cada SELECT sobre una tabla con POINT
-        panel.on_click = lambda lat, lon: ...   # clic en el mapa
-    """
+    """Panel que incrusta un mapa interactivo nativo directamente en tkinter."""
 
     def __init__(self, master):
-        super().__init__(master, text="Mapa")
+        super().__init__(master, text="Mapa Espacial")
         self.on_click = None
-        self.server = MapServer(self._clicked)
-        self.status = ttk.Label(self, text="Sin datos espaciales", anchor="w")
-        self.status.pack(side="left", fill="x", expand=True, padx=8, pady=8)
-        ttk.Button(self, text="Abrir mapa",
-                   command=lambda: webbrowser.open_new_tab(self.server.url)).pack(side="right", padx=8, pady=8)
 
-    def _clicked(self, lat, lon):
-        # Llega desde el hilo del servidor: se pasa al hilo de Tk con after().
-        def apply():
-            self.status.config(text=f"Punto seleccionado: POINT({lat:.6f}, {lon:.6f})")
-            if self.on_click:
-                self.on_click(lat, lon)
-        self.status.after(0, apply)
+        # Barra de estado superior
+        frame_estado = ttk.Frame(self)
+        frame_estado.pack(side="top", fill="x", padx=2, pady=2)
+
+        self.status = ttk.Label(frame_estado, text="Sin datos espaciales", anchor="w")
+        self.status.pack(side="left", fill="x", expand=True, padx=4)
+
+        # El widget del mapa nativo
+        self.mapa = tkintermapview.TkinterMapView(self, corner_radius=0)
+        self.mapa.pack(fill="both", expand=True)
+
+        # --- BOTÓN PARA CENTRAR LA VISTA ---
+        self.btn_centrar = tk.Button(
+            self, text="⦿", font=("Arial", 9, "bold"),
+            bg="#ffffff", fg="#333333", cursor="hand2", relief="raised",
+            command=self._centrar_mapa
+        )
+        # Lo colocamos flotando en la esquina inferior derecha del mapa
+        self.btn_centrar.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
+
+        # --- AJUSTE DE FLUIDEZ ---
+        if hasattr(self.mapa, 'image_load_thread_pool') and isinstance(self.mapa.image_load_thread_pool, list):
+            self.mapa.image_load_thread_pool = self.mapa.image_load_thread_pool[:4]
+
+        # --- SERVIDOR DE MAPAS (Google Maps) ---
+        self.mapa.set_tile_server("https://mt0.google.com/vt/lyrs=m&hl=en&x={x}&y={y}&z={z}&s=Ga", max_zoom=22)
+
+        # Configuración inicial (Lima, Perú)
+        self.mapa.set_position(-12.0464, -77.0428)
+        self.mapa.set_zoom(12)
+
+        # Eventos
+        self.mapa.add_right_click_menu_command(label="Insertar POINT aquí", command=self._clicked_derecho)
+
+        # Variables de estado
+        self.marcadores_dict = {}
+        self.tabla_actual = None
+        self.figura_circulo = None
+        self.figura_poligono = None
+
+        # Coordenadas para el botón de centrar
+        self.centro_busqueda = None
+        self.zoom_busqueda = 11
+
+    def _clicked_derecho(self, coords):
+        lat, lon = coords
+        self._notificar_clic(lat, lon)
+
+    def _notificar_clic(self, lat, lon):
+        self.status.config(text=f"Punto seleccionado: POINT({lat:.6f}, {lon:.6f})")
+        if self.on_click:
+            self.on_click(lat, lon)
+
+    def _centrar_mapa(self):
+        """Vuelve a centrar el mapa en la vista de la última consulta."""
+        if self.centro_busqueda:
+            lat, lon = self.centro_busqueda
+            self.mapa.set_position(lat, lon)
+            self.mapa.set_zoom(self.zoom_busqueda)
 
     def actualizar(self, payload):
         if payload is None:
             return
-        self.server.publish(table=payload.get("table"), points=payload["points"],
-                            highlighted=payload["result_ids"], circle=payload.get("circle"),
-                            polygon=payload.get("polygon"))
-        self.status.config(text=f"{len(payload['points'])} punto(s), {len(payload['result_ids'])} en el "
-                                "resultado; pulsa «Abrir mapa» para verlos")
+
+        points = payload.get("points", [])
+        result_ids = set(payload.get("result_ids", []))
+        tabla_nombre = payload.get("table")
+
+        # Extraer datos de figuras
+        circle_data = payload.get("circle")
+        polygon_data = payload.get("polygon")
+
+        if tabla_nombre != self.tabla_actual or not points:
+            self.limpiar()
+            self.tabla_actual = tabla_nombre
+
+        # Borrar TODOS los marcadores anteriores
+        for m in self.marcadores_dict.values():
+            try:
+                m.delete()
+            except Exception:
+                pass
+        self.marcadores_dict.clear()
+
+        # --- DIBUJADO INTELIGENTE ---
+        # Si hay demasiados puntos, solo dibujamos los que están en el resultado (rojos)
+        dibujar_todos = len(points) < 100
+
+        puntos_dibujados = []
+        for p in points:
+            p_id, lat, lon, label = p
+
+            if not dibujar_todos and p_id not in result_ids:
+                continue
+
+            color = "red" if p_id in result_ids else "blue"
+            marcador = self.mapa.set_marker(lat, lon, text=str(label), marker_color_circle=color)
+            self.marcadores_dict[p_id] = marcador
+            puntos_dibujados.append(p)
+
+        # Manejo del Círculo (Radio)
+        if circle_data:
+            self._dibujar_circulo(circle_data)
+            # Si el motor envía el círculo, el centro de búsqueda es el centro del círculo
+            try:
+                self.centro_busqueda = (float(circle_data[0]), float(circle_data[1]))
+                self.zoom_busqueda = 12
+            except:
+                pass
+        else:
+            if self.figura_circulo:
+                self.figura_circulo.delete()
+                self.figura_circulo = None
+
+        # Manejo del Polígono
+        if polygon_data:
+            self._dibujar_poligono(polygon_data)
+        else:
+            if self.figura_poligono:
+                self.figura_poligono.delete()
+                self.figura_poligono = None
+
+        self.status.config(text=f"{len(points)} punto(s), {len(result_ids)} en el resultado")
+
+        # Ajustar la vista
+        if puntos_dibujados:
+            self._ajustar_vista(puntos_dibujados)
+
+    def _dibujar_circulo(self, circle_data):
+        if self.figura_circulo:
+            try:
+                self.figura_circulo.delete()
+            except Exception:
+                pass
+            finally:
+                self.figura_circulo = None
+
+        try:
+            if not isinstance(circle_data, (list, tuple)) or len(circle_data) < 3:
+                return
+
+            lat = circle_data[0]
+            lon = circle_data[1]
+            radio = circle_data[2]
+
+            if isinstance(lat, str) and lat == "lat":
+                return
+
+            lat = float(lat)
+            lon = float(lon)
+            radio = float(radio)
+
+            puntos_circulo = self._generar_puntos_circulo(lat, lon, radio)
+
+            def dibujar():
+                try:
+                    if self.winfo_exists():
+                        self.figura_circulo = self.mapa.set_polygon(
+                            puntos_circulo,
+                            outline_color="red",
+                            fill_color=None,
+                            border_width=2
+                        )
+                except Exception as e:
+                    print(f"No se pudo dibujar el círculo: {e}")
+
+            self.after(100, dibujar)
+
+        except Exception as e:
+            print(f"Nota: No se pudo dibujar el círculo (datos inválidos): {e}")
+
+    def _dibujar_poligono(self, polygon_data):
+        if self.figura_poligono:
+            try:
+                self.figura_poligono.delete()
+            except Exception:
+                pass
+            finally:
+                self.figura_poligono = None
+
+        # Calcular el centro del polígono para el botón de centrar
+        try:
+            lats = [p[0] for p in polygon_data]
+            lons = [p[1] for p in polygon_data]
+            self.centro_busqueda = (sum(lats)/len(lats), sum(lons)/len(lons))
+            self.zoom_busqueda = 9
+        except:
+            pass
+
+        def dibujar():
+            try:
+                if self.winfo_exists():
+                    self.figura_poligono = self.mapa.set_polygon(
+                        polygon_data,
+                        outline_color="green",
+                        fill_color=None,
+                        border_width=2
+                    )
+            except Exception as e:
+                print(f"No se pudo dibujar el polígono: {e}")
+
+        self.after(100, dibujar)
+
+    def _generar_puntos_circulo(self, lat_centro, lon_centro, radio_metros, num_puntos=36):
+        R = 6378137.0
+        lat_rad = math.radians(lat_centro)
+        lon_rad = math.radians(lon_centro)
+        puntos = []
+
+        for i in range(num_puntos):
+            angulo = (i * 360.0) / num_puntos
+            angulo_rad = math.radians(angulo)
+            lat_punto = math.asin(math.sin(lat_rad) * math.cos(radio_metros / R) +
+                                  math.cos(lat_rad) * math.sin(radio_metros / R) * math.cos(angulo_rad))
+            lon_punto = lon_rad + math.atan2(math.sin(angulo_rad) * math.sin(radio_metros / R) * math.cos(lat_rad),
+                                             math.cos(radio_metros / R) - math.sin(lat_rad) * math.sin(lat_punto))
+            puntos.append((math.degrees(lat_punto), math.degrees(lon_punto)))
+        return puntos
+
+    def _ajustar_vista(self, points):
+        if not points:
+            return
+
+        if len(points) == 1:
+            self.centro_busqueda = (points[0][1], points[0][2])
+            self.zoom_busqueda = 14
+            self.mapa.set_position(*self.centro_busqueda)
+            self.mapa.set_zoom(self.zoom_busqueda)
+            return
+
+        avg_lat = sum(p[1] for p in points) / len(points)
+        avg_lon = sum(p[2] for p in points) / len(points)
+
+        self.centro_busqueda = (avg_lat, avg_lon)
+        self.zoom_busqueda = 10
+
+        self.after(100, lambda: self.mapa.set_position(avg_lat, avg_lon))
+        self.after(150, lambda: self.mapa.set_zoom(self.zoom_busqueda))
 
     def limpiar(self):
-        self.server.publish(**EMPTY)
+        for m in self.marcadores_dict.values():
+            try:
+                m.delete()
+            except Exception:
+                pass
+        self.marcadores_dict.clear()
+
+        if self.figura_circulo:
+            try:
+                self.figura_circulo.delete()
+            except Exception:
+                pass
+            self.figura_circulo = None
+
+        if self.figura_poligono:
+            try:
+                self.figura_poligono.delete()
+            except Exception:
+                pass
+            self.figura_poligono = None
+
+        self.tabla_actual = None
+        self.centro_busqueda = None
         self.status.config(text="Sin datos espaciales")
 
     def close(self):
-        self.server.close()
+        pass
