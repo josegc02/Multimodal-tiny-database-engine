@@ -1,8 +1,8 @@
 """Panel de archivos: muestra las tablas cargadas y su estructura."""
 
 import tkinter as tk
-from tkinter import ttk
-
+import ttkbootstrap as ttk
+from tkinter import ttk as ttk_classic
 
 class PanelArchivos(ttk.LabelFrame):
     """Panel que lista las tablas y sus esquemas."""
@@ -14,15 +14,17 @@ class PanelArchivos(ttk.LabelFrame):
         self.refresh()
 
     def _construir(self):
-        # Usamos un PanedWindow vertical
-        paned = ttk.PanedWindow(self, orient=tk.VERTICAL)
+        # 1. Usamos ttk_classic aquí para evitar el bug de ttkbootstrap
+        paned = ttk_classic.PanedWindow(self, orient=tk.VERTICAL)
         paned.pack(fill="both", expand=True, padx=2, pady=2)
 
         # --- Parte Superior: Lista de tablas ---
         frame_arriba = ttk.Frame(paned)
         paned.add(frame_arriba, weight=1)
 
-        self.lista = tk.Listbox(frame_arriba, exportselection=False)
+        # Colores oscuros para que combine con el tema
+        self.lista = tk.Listbox(frame_arriba, exportselection=False,
+                                bg="#2b2b2b", fg="#ffffff", selectbackground="#0d6efd")
         self.lista.pack(side="left", fill="both", expand=True)
 
         scroll_lista = ttk.Scrollbar(frame_arriba, orient="vertical", command=self.lista.yview)
@@ -40,8 +42,10 @@ class PanelArchivos(ttk.LabelFrame):
         frame_texto = ttk.Frame(frame_abajo)
         frame_texto.pack(fill="both", expand=True, pady=2)
 
+        # Colores oscuros para el texto
         self.texto_esquema = tk.Text(frame_texto, height=10, width=30,
-                                     state="disabled", font=("Consolas", 9), wrap="word")
+                                     state="disabled", font=("Consolas", 9), wrap="word",
+                                     bg="#2b2b2b", fg="#ffffff")
         self.texto_esquema.pack(side="left", fill="both", expand=True)
 
         scroll_texto = ttk.Scrollbar(frame_texto, orient="vertical", command=self.texto_esquema.yview)

@@ -1,7 +1,8 @@
 """Ventana principal del frontend con los 4 paneles requeridos."""
 
 import tkinter as tk
-from tkinter import ttk
+import ttkbootstrap as ttk
+from tkinter import ttk as ttk_classic # Importamos el ttk clásico para solucionar el error del PanedWindow
 
 from frontend.motor import PROJECT_DIR, Motor
 from frontend.panel_archivos import PanelArchivos
@@ -11,25 +12,24 @@ from frontend.panel_plan_ejecucion import PanelPlanEjecucion
 from frontend.panel_mapa import PanelMapa
 
 
-class Aplicacion(tk.Tk):
+class Aplicacion(ttk.Window):
     """Ventana principal del minigestor."""
 
     def __init__(self):
-        super().__init__()
+        # Aquí defines el tema (puedes probar "darkly", "cosmo", "flatly", "cyborg", etc.)
+        super().__init__(themename="solar")
+
         self.title("MiniGestor de Base de Datos Multimodal")
         self.geometry("1200x900")
         self.minsize(900, 600)
-
-        style = ttk.Style(self)
-        style.theme_use("clam")
 
         # Crear el motor
         self.motor = Motor()
 
         # --- CREACIÓN DEL LAYOUT TIPO PGADMIN ---
 
-        # 1. Contenedor principal horizontal (Izquierda vs Derecha)
-        self.main_paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        # 1. Contenedor principal horizontal (Usamos ttk_classic porque ttkbootstrap tiene un bug aquí)
+        self.main_paned = ttk_classic.PanedWindow(self, orient=tk.HORIZONTAL)
         self.main_paned.pack(fill=tk.BOTH, expand=True)
 
         # 2. Panel Izquierdo (Barra lateral)
@@ -40,15 +40,15 @@ class Aplicacion(tk.Tk):
         self.workspace_frame = ttk.Frame(self.main_paned)
         self.main_paned.add(self.workspace_frame, weight=4)
 
-        # 4. Contenedor vertical para el área de trabajo (Arriba vs Abajo)
-        self.workspace_paned = ttk.PanedWindow(self.workspace_frame, orient=tk.VERTICAL)
+        # 4. Contenedor vertical para el área de trabajo (Usamos ttk_classic aquí también)
+        self.workspace_paned = ttk_classic.PanedWindow(self.workspace_frame, orient=tk.VERTICAL)
         self.workspace_paned.pack(fill=tk.BOTH, expand=True)
 
-        # 5. Zona Superior del área de trabajo (Pestañas)
+        # 5. Zona Superior del área de trabajo (Pestañas modernas)
         self.top_notebook = ttk.Notebook(self.workspace_paned)
         self.workspace_paned.add(self.top_notebook, weight=3)
 
-        # 6. Zona Inferior del área de trabajo (Pestañas)
+        # 6. Zona Inferior del área de trabajo (Pestañas modernas)
         self.bottom_notebook = ttk.Notebook(self.workspace_paned)
         self.workspace_paned.add(self.bottom_notebook, weight=2)
 

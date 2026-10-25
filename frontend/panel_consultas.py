@@ -1,8 +1,8 @@
 """Panel de consultas: editor donde el usuario escribe SQL."""
 
 import tkinter as tk
-from tkinter import filedialog, ttk
-
+from tkinter import filedialog
+import ttkbootstrap as ttk
 from frontend.csv_sql import sql_para_csv
 
 SQL_EJEMPLO = """-- Escribe tu consulta aqui
