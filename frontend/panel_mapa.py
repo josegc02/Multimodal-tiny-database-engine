@@ -8,11 +8,11 @@ import math
 from frontend.mapa_datos import encuadre, seleccionar_puntos
 
 
-class PanelMapa(ttk.LabelFrame):
+class PanelMapa(ttk.Frame):
     """Panel que incrusta un mapa interactivo nativo directamente en tkinter."""
 
     def __init__(self, master):
-        super().__init__(master, text="Mapa Espacial")
+        super().__init__(master)
         self.on_click = None
 
         # Barra de estado superior

@@ -260,6 +260,14 @@ class TestVentanaTk(DemoDirMixin, unittest.TestCase):
             self.assertEqual(str(widget.cget("bg")), fondo)
         self.assertEqual(app.style.lookup("Treeview", "fieldbackground"), app.style.colors.bg)
 
+    def test_numeros_a_la_derecha_y_texto_a_la_izquierda(self):
+        tabla = self.ejecutar("CREATE TABLE t (id INT PRIMARY KEY, nombre VARCHAR(5)); "
+                              "INSERT INTO t VALUES (1, 'a');").tree
+        self.ejecutar("SELECT * FROM t;")
+        self.assertEqual(tabla.column("id", "anchor"), "e")
+        self.assertEqual(tabla.heading("id", "anchor"), "e")
+        self.assertEqual(tabla.column("nombre", "anchor"), "w")
+
     def test_deshacer_recupera_el_texto_reemplazado(self):
         consultas = self.app.panel_consultas
         for reemplazar in (lambda: consultas.set_sql("otra"), consultas.limpiar):

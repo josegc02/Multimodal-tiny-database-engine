@@ -100,7 +100,7 @@ class PanelArchivos(ttk.LabelFrame):
 
         if binding.indexes:
             lineas.append("")
-            lineas.append("Indices:")
+            lineas.append("Índices:")
             for campo, registro in binding.indexes.items():
                 info = registro.metadata
                 tipo = type(registro.index).__name__
@@ -118,7 +118,7 @@ class PanelArchivos(ttk.LabelFrame):
             lineas.append(f"Clave primaria: {binding.primary_key} ({binding.primary_key_name})")
         if binding.foreign_keys:
             lineas.append("")
-            lineas.append("Llaves foraneas:")
+            lineas.append("Llaves foráneas:")
             for fk in binding.foreign_keys:
                 lineas.append(f"  - {fk.column} -> {fk.ref_table}({fk.ref_column}) ON DELETE {fk.on_delete}")
         referencias = self.catalog.referencing(nombre) if hasattr(self.catalog, "referencing") else []
@@ -132,7 +132,7 @@ class PanelArchivos(ttk.LabelFrame):
         if stats is not None:
             lineas.append("")
             lineas.append(f"Filas: {stats.rows}")
-            lineas.append(f"Paginas: {stats.pages}")
+            lineas.append(f"Páginas: {stats.pages}")
 
         self._mostrar_esquema("\n".join(lineas))
 

@@ -4,7 +4,13 @@ import tkinter as tk
 from tkinter import ttk
 
 
-class PanelResultados(ttk.LabelFrame):
+def es_numerica(valores):
+    """True si la columna solo tiene números (los NULL no cuentan)."""
+    presentes = [v for v in valores if v is not None]
+    return bool(presentes) and all(type(v) in (int, float) for v in presentes)
+
+
+class PanelResultados(ttk.Frame):
     """Panel con un Treeview para mostrar filas y columnas.
 
     Uso:
@@ -14,7 +20,7 @@ class PanelResultados(ttk.LabelFrame):
     """
 
     def __init__(self, master):
-        super().__init__(master, text="Resultados")
+        super().__init__(master)
         self._construir()
 
     def _construir(self):
@@ -67,14 +73,16 @@ class PanelResultados(ttk.LabelFrame):
         self.tree["columns"] = list(columnas)
         es_plan = list(columnas) == ["QUERY PLAN"]
         self.tree.configure(style="Plan.Treeview" if es_plan else "Treeview")
-        for col in columnas:
-            self.tree.heading(col, text=col)
+        for i, col in enumerate(columnas):
+            # Números a la derecha para comparar magnitudes, texto a la izquierda.
+            alineacion = "e" if es_numerica(fila[i] for fila in filas) else "w"
+            self.tree.heading(col, text=col, anchor=alineacion)
             if es_plan:
                 # Ancho según la línea más larga para que no se corte el plan.
                 largo = max((len(str(fila[0])) for fila in filas), default=40)
                 self.tree.column(col, width=max(400, largo * 8), stretch=True, anchor="w")
             else:
-                self.tree.column(col, width=100, anchor="w")
+                self.tree.column(col, width=100, anchor=alineacion)
 
         for fila in filas:
             self.tree.insert("", tk.END, values=tuple(fila))

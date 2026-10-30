@@ -9,11 +9,11 @@ SQL_EJEMPLO = """-- Escribe tu consulta aqui
 SELECT * FROM cuentas;
 """
 
-class PanelConsultas(ttk.LabelFrame):
+class PanelConsultas(ttk.Frame):
     """Panel con un editor de texto para escribir SQL."""
 
     def __init__(self, master, on_ejecutar=None, base_dir=None):
-        super().__init__(master, text="Consultas")
+        super().__init__(master)
         self.on_ejecutar = on_ejecutar
         self.base_dir = base_dir
         self.obtener_tablas = set
@@ -49,7 +49,7 @@ class PanelConsultas(ttk.LabelFrame):
                                         command=self.limpiar)
         self.boton_limpiar.pack(side="right", padx=(4, 0))
 
-        self.boton_ejecutar = ttk.Button(frame_botones, text="Ejecutar",
+        self.boton_ejecutar = ttk.Button(frame_botones, text="Ejecutar", bootstyle="primary",
                                          command=self.ejecutar)
         self.boton_ejecutar.pack(side="right")
 

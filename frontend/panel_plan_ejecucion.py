@@ -82,7 +82,7 @@ def filas_analisis(nodos):
     return filas
 
 
-class PanelPlanEjecucion(ttk.LabelFrame):
+class PanelPlanEjecucion(ttk.Frame):
     """Árbol de operadores con costos, filas y tiempos.
 
     Uso:
@@ -91,7 +91,7 @@ class PanelPlanEjecucion(ttk.LabelFrame):
     """
 
     def __init__(self, master):
-        super().__init__(master, text="Plan de ejecucion")
+        super().__init__(master)
         self._construir()
         self.limpiar()
 
