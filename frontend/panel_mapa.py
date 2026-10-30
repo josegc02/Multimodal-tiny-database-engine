@@ -51,6 +51,9 @@ class PanelMapa(ttk.LabelFrame):
                                                pass_coords=True)
         # Con la pestaña oculta el mapa no conoce su tamaño: se encuadra al mostrarla.
         self.bind("<Map>", self._al_mostrar)
+        # add="+": tkintermapview usa este mismo evento para actualizar sus dimensiones.
+        self.mapa.bind("<Configure>", self._al_redimensionar, add="+")
+        self.redimension = None
 
         # Variables de estado
         self.marcadores_dict = {}
@@ -83,6 +86,16 @@ class PanelMapa(ttk.LabelFrame):
     def _al_mostrar(self, event):
         if self.encuadre_pendiente:
             self._centrar_mapa()
+
+    def _al_redimensionar(self, event):
+        # El encuadre depende del tamaño: se repite cuando el tamaño deja de cambiar.
+        if self.redimension is not None:
+            self.after_cancel(self.redimension)
+        self.redimension = self.after(150, self._tras_redimensionar)
+
+    def _tras_redimensionar(self):
+        self.redimension = None
+        self._centrar_mapa()
 
     def actualizar(self, payload):
         if payload is None:

@@ -11,7 +11,8 @@ resalta los identificadores incluidos en el resultado:
 - `WITHIN(..., POLYGON(...))` dibuja el polígono.
 
 La vista se encuadra sobre la figura y los resultados de la consulta; el botón
-**⦿** vuelve a ese encuadre. Si la pestaña estaba oculta, encuadra al abrirla.
+**⦿** vuelve a ese encuadre. También se repite al abrir la pestaña si estaba
+oculta y al cambiar el tamaño del mapa.
 
 El clic derecho > **Insertar POINT aquí** escribe `POINT(lat, lon)` en el editor
 SQL y vuelve a la pestaña **Consulta SQL**.
