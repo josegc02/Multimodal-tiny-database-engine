@@ -5,7 +5,7 @@ Proyecto de Base de Datos II (UTEC, 2026-2): un gestor de bases de datos constru
 | Parte | Estado | Contenido |
 | :--- | :--- | :--- |
 | **1. Relacional** | Completa | Heap File, Archivo Secuencial y tabla B+ agrupada; índices B+ y Hash extensible; SQL con optimizador por costos; transacciones con control de concurrencia; interfaz gráfica; comparación experimental. |
-| **2. Espacial** | Completa | R-Tree en disco con consultas por radio, k-NN y polígonos; métricas Euclidiana y Haversine; SQL espacial; mapa interactivo (Leaflet); comparación contra GiST de PostGIS. |
+| **2. Espacial** | Completa | R-Tree en disco con consultas por radio, k-NN y polígonos; métricas Euclidiana y Haversine; SQL espacial; mapa interactivo (tkintermapview); comparación contra GiST de PostGIS. |
 | 3–5 | Pendientes | Texto, multimedia y aplicación. |
 
 El diseño, los algoritmos y los resultados experimentales están en el [informe](docs/informe.md).
@@ -17,7 +17,7 @@ El diseño, los algoritmos y los resultados experimentales están en el [informe
 ### Requisitos
 - **Python 3.12 o superior.** Probado con 3.13 en Windows 11 y Ubuntu.
 - **Tkinter**, para la interfaz gráfica. Viene con el instalador oficial de Python en Windows; en Ubuntu: `sudo apt install python3-tk`.
-- **Un navegador con Internet**, solo para el mapa (descarga Leaflet y los mapas de OpenStreetMap).
+- **Internet**, solo para el fondo del mapa (el panel descarga los mosaicos; los datos son locales).
 - **Opcional:** Docker, para la comparación con PostgreSQL + PostGIS.
 
 ### Instalación básica
@@ -60,7 +60,7 @@ python -m frontend.main
 | **Consultas** | Editor SQL (`Ctrl+Enter` ejecuta) y botón **Cargar CSV...**, que genera el `CREATE TABLE` y el `COPY` de un archivo para revisarlos antes de ejecutar. |
 | **Resultados** | Filas de la consulta. Con `EXPLAIN` muestra el `QUERY PLAN` en texto, como `psql`. |
 | **Plan de ejecución** | Con `EXPLAIN [ANALYZE]`, el mismo plan como tabla por operador: costo, filas estimadas y reales, tiempos y loops. |
-| **Mapa** | El botón **Abrir mapa** muestra en el navegador los puntos de la última tabla espacial consultada, con los resultados resaltados y el radio o polígono de la consulta. Un clic en el mapa escribe `POINT(lat, lon)` en el editor. |
+| **Mapa** | La pestaña **Mapa** muestra los puntos de la última tabla espacial consultada, con los resultados resaltados y el radio o polígono de la consulta. El clic derecho > **Insertar POINT aquí** escribe `POINT(lat, lon)` en el editor. |
 
 > **Modo demo.** Al iniciar, el frontend vacía `demo_data/` (solo los archivos que genera el motor) y crea las tablas de ejemplo `cuentas` y `productos`. Lo creado en una sesión no se conserva al cerrar la aplicación. La capa de almacenamiento sí puede reabrir sus archivos; los tests de reapertura lo verifican.
 
@@ -166,7 +166,6 @@ Por defecto usan 1.000, 10.000 y 100.000 registros y 3 repeticiones; los resulta
 ```mermaid
 flowchart TD
     UI["Frontend Tkinter<br/>(Archivos, Consultas, Resultados, Plan, Mapa)"] --> M["Motor (fachada)"]
-    UI -.HTTP local.-> MAP["Mapa Leaflet en el navegador"]
     M --> SE["StatementExecutor<br/>sesión, transacciones y locks"]
     SE --> P["Lexer → Parser → AST"]
     P --> LP["LogicalPlanner"]
@@ -229,7 +228,7 @@ frontend/
 ├── motor.py                    # Fachada entre la interfaz y el motor
 ├── panel_*.py                  # Paneles: archivos, consultas, resultados, plan y mapa
 ├── csv_sql.py                  # SQL sugerido para cargar un CSV
-├── mapa.html, mapa_datos.py    # Página Leaflet y datos que publica el mapa
+├── mapa_datos.py               # Datos que recibe el panel de mapa
 benchmarks/
 ├── bench_storage.py, bench_indexes.py, complexity.py, concurrency_demo.py   # Parte 1
 ├── bench_spatial.py, generate_spatial_datasets.py                          # Parte 2
@@ -242,7 +241,7 @@ scripts/                        # Automatización de GitHub (etiquetas e issues 
 ```
 
 Otros archivos:
-- **`requirements.txt`:** dependencias (matplotlib, tabulate); `requirements-postgis.txt` agrega psycopg.
+- **`requirements.txt`:** dependencias (matplotlib, tabulate, ttkbootstrap, tkintermapview); `requirements-postgis.txt` agrega psycopg.
 - **`scripts/`:** `setup_avance1.*` y `setup_avance2.*` crean las etiquetas, el milestone y los issues de cada avance en GitHub (requieren `gh`). No forman parte del motor.
 
 ---

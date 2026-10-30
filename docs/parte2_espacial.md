@@ -3,7 +3,7 @@
 La Parte 2 está completa (issues #18–#27, con las correcciones del #39):
 - geometría, métricas y R-Tree en disco;
 - consultas por radio, k-NN y polígono, con su SQL espacial;
-- mapa Leaflet;
+- mapa nativo con tkintermapview;
 - datasets, PostGIS y la comparación experimental.
 
 Contratos y ejemplos SQL en [consultas_espaciales.md](consultas_espaciales.md); el mapa en [mapa.md](mapa.md); el diseño y los resultados en las secciones 4 y 5 del [informe](informe.md).
@@ -97,7 +97,7 @@ Contratos y ejemplos SQL en [consultas_espaciales.md](consultas_espaciales.md); 
   Los distritos GeoJSON se cargan con `load_districts` en Python.
 - **Tipo `POINT`:** dos `float` de 8 bytes en el registro (16 bytes por punto).
 - **Construcción del R-Tree:** inserción punto por punto (Guttman). El *bulk loading* STR queda como mejora posible: construiría el árbol mucho más rápido que insertar uno a uno.
-- **Mapa (#24):** Leaflet en el navegador, servido por un servidor HTTP local que inicia el frontend (`frontend/panel_mapa.py`, `frontend/mapa.html`). No requiere dependencias de Python.
+- **Mapa (#24):** panel nativo de Tkinter con `tkintermapview` (`frontend/panel_mapa.py`, `frontend/mapa_datos.py`).
 - **Dependencias:** `psycopg[binary]` en `requirements-postgis.txt`, solo para el benchmark contra PostGIS. La CI no levanta PostGIS: el benchmark corre sin él con `--sin-postgis` y la prueba de integración se omite si no está definida `BD2_POSTGIS_DSN`.
 
 ## PostgreSQL + PostGIS
