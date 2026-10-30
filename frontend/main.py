@@ -18,7 +18,7 @@ class Aplicacion(ttk.Window):
 
     def __init__(self):
         # Aquí defines el tema (puedes probar "darkly", "cosmo", "flatly", "cyborg", etc.)
-        super().__init__(themename="solar")
+        super().__init__(themename="pydata-light")
 
         self.title("MiniGestor de Base de Datos Multimodal")
         self.geometry("1200x900")
