@@ -347,11 +347,11 @@ Tiempo por consulta en 200 rangos `[k, k+100]` (k = 101 registros; todos devuelv
 
 | N | B+ agrupado | B+ no agrupado |
 | ---: | ---: | ---: |
-| 1.000 | 0,451 ms | 2,133 ms |
-| 10.000 | 0,616 ms | 2,106 ms |
-| 100.000 | 0,574 ms | 2,382 ms |
+| 1.000 | 0,507 ms | 1,615 ms |
+| 10.000 | 0,585 ms | 1,810 ms |
+| 100.000 | 0,646 ms | 2,485 ms |
 
-El costo es **O(log N + k)**: con k = 101 fijo, el término log N aporta como mucho un nivel más del árbol frente a 101 registros leídos, así que las dos curvas son prácticamente planas; el agrupado muestra el mismo escalón que en igualdad entre 1.000 y 10.000. En el **agrupado** los 101 registros están contiguos en 1 o 2 hojas; el **no agrupado** recorre sus hojas pero debe leer cada uno de los 101 RIDs en una página distinta del heap (los datos se insertaron en orden aleatorio), por eso el agrupado es **entre 3 y 5 veces más rápido**. La barra larga del no agrupado en 10.000 corresponde a una sola corrida con interferencia (16 ms por consulta frente a ~2 ms en las otras dos), que no afecta a la mediana. El **Extendible Hash no soporta rangos**: la función hash dispersa claves consecutivas en buckets distintos.
+El costo es **O(log N + k)**: con k = 101 fijo, el término log N aporta como mucho un nivel más del árbol frente a 101 registros leídos, así que las dos curvas suben muy poco (pendientes entre +0,04 y +0,14). En el **agrupado** los 101 registros están contiguos en 1 o 2 hojas; el **no agrupado** recorre sus hojas pero debe leer cada uno de los 101 RIDs en una página distinta del heap (los datos se insertaron en orden aleatorio), por eso el agrupado es **entre 3 y 4 veces más rápido**. En el no agrupado, el tramo 10.000 → 100.000 sube algo más porque el árbol pasa a 3 niveles y el heap crece a 4 MB, con lecturas más dispersas. Esta medición se repitió aparte, con el cargador conectado y una pasada de calentamiento descartada: en la corrida general, una repetición en 10.000 tuvo interferencia (16 ms por consulta frente a ~2 ms en las otras dos). El **Extendible Hash no soporta rangos**: la función hash dispersa claves consecutivas en buckets distintos.
 
 #### Ordenamiento (ORDER BY)
 ![](../benchmarks/results/indexes_tiempo_orden.png)
@@ -406,8 +406,8 @@ Como complemento, el espacio total (tabla + índice). Las tres curvas quedan cas
 
 | Técnica | Ventajas | Desventajas | Escenario recomendado |
 | :--- | :--- | :--- | :--- |
-| **B+ Agrupado** | El mejor en rangos (3 a 5× frente al no agrupado) y en ORDER BY (8×); igualdad O(log N) sin I/O adicional; actualizaciones O(log N). | Solo uno por tabla (define el orden físico); splits mueven registros completos; ~57% más espacio que un heap. | Clave primaria de tablas con consultas de rango, ordenamientos o recorridos por clave (`CREATE TABLE ... USING BTREE`). |
-| **B+ No Agrupado** | Rangos y orden sobre cualquier columna; permite varios por tabla; claves duplicadas. | Una lectura aleatoria del heap por registro: 3 a 5× más lento que el agrupado en rangos y 8× en ORDER BY. | Índices secundarios sobre columnas con filtros de rango selectivos (pocos registros por consulta). |
+| **B+ Agrupado** | El mejor en rangos (3 a 4× frente al no agrupado) y en ORDER BY (8×); igualdad O(log N) sin I/O adicional; actualizaciones O(log N). | Solo uno por tabla (define el orden físico); splits mueven registros completos; ~57% más espacio que un heap. | Clave primaria de tablas con consultas de rango, ordenamientos o recorridos por clave (`CREATE TABLE ... USING BTREE`). |
+| **B+ No Agrupado** | Rangos y orden sobre cualquier columna; permite varios por tabla; claves duplicadas. | Una lectura aleatoria del heap por registro: 3 a 4× más lento que el agrupado en rangos y 8× en ORDER BY. | Índices secundarios sobre columnas con filtros de rango selectivos (pocos registros por consulta). |
 | **Extendible Hash** | La igualdad más rápida (0,07 ms en 100K) y las actualizaciones más baratas, O(1); construcción 13 a 21× más barata por inserción. | No soporta rangos ni orden; reside en RAM (23,8 MB para 100K) y su persistencia es un snapshot completo O(N). | Búsquedas exactas y joins por igualdad sobre claves que no se consultan por rango. |
 
 ### 3.4 Validación: complejidad teórica vs medida
@@ -433,8 +433,8 @@ Como complemento, el espacio total (tabla + índice). Las tres curvas quedan cas
 | B+ agrupado | Igualdad (por consulta) | O(log N) | +0,22 / -0,04 | Sí |
 | B+ no agrupado | Igualdad (por consulta) | O(log N) | -0,03 / +0,05 | Sí |
 | Extendible Hash | Igualdad (por consulta) | O(1) | +0,03 / +0,23 | Sí |
-| B+ agrupado | Rango de 101 claves (por consulta) | O(log N + k) | +0,14 / -0,03 | Sí |
-| B+ no agrupado | Rango de 101 claves (por consulta) | O(log N + k) | -0,01 / +0,05 | Sí |
+| B+ agrupado | Rango de 101 claves (por consulta) | O(log N + k) | +0,06 / +0,04 | Sí |
+| B+ no agrupado | Rango de 101 claves (por consulta) | O(log N + k) | +0,05 / +0,14 | Sí |
 | B+ agrupado | ORDER BY tabla completa | O(N) | +1,05 / +1,00 | Sí |
 | B+ no agrupado | ORDER BY tabla completa | O(N) | +1,04 / +1,05 | Sí |
 | Extendible Hash | ORDER BY (scan + external sort) | O(N log N) | +1,80 / +1,00 | Sí |
