@@ -85,9 +85,13 @@ class PanelConsultas(ttk.LabelFrame):
         return self.editor.get("1.0", tk.END).strip()
 
     def set_sql(self, sql: str):
+        # Un solo paso de deshacer: Ctrl+Z recupera el texto que había.
+        self.editor.edit_separator()
+        self.editor.config(autoseparators=False)
         self.editor.delete("1.0", tk.END)
         self.editor.insert("1.0", sql)
-        self.editor.edit_reset()
+        self.editor.config(autoseparators=True)
+        self.editor.edit_separator()
 
     def cargar_csv(self):
         path = filedialog.askopenfilename(
@@ -105,8 +109,7 @@ class PanelConsultas(ttk.LabelFrame):
         self.editor.focus_set()
 
     def limpiar(self):
-        self.editor.delete("1.0", tk.END)
-        self.editor.edit_reset()
+        self.set_sql("")
 
     def _deshacer(self, event):
         try:

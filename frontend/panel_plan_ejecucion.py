@@ -96,8 +96,7 @@ class PanelPlanEjecucion(ttk.LabelFrame):
         self.limpiar()
 
     def _construir(self):
-        self.ayuda = tk.Label(self, text=AYUDA, justify="left", anchor="nw", fg="#666666",
-                              font=("Consolas", 10))
+        self.ayuda = ttk.Label(self, text=AYUDA, justify="left", anchor="nw", font=("Consolas", 10))
 
         self.frame_arbol = ttk.Frame(self)
         frame = ttk.Frame(self.frame_arbol)
@@ -117,9 +116,10 @@ class PanelPlanEjecucion(ttk.LabelFrame):
 
         cursiva = tkfont.nametofont("TkDefaultFont").copy()
         cursiva.configure(slant="italic")
-        self.arbol.tag_configure("detalle", foreground="#666666", font=cursiva)
-        self.arbol.tag_configure("medio", background="#fff3cd")
-        self.arbol.tag_configure("alto", background="#f8d7da")
+        self.arbol.tag_configure("detalle", font=cursiva)
+        # Fondos claros en cualquier tema: el texto no puede heredar el del tema oscuro.
+        self.arbol.tag_configure("medio", background="#fff3cd", foreground="#212529")
+        self.arbol.tag_configure("alto", background="#f8d7da", foreground="#212529")
 
         self.pie = ttk.Label(self.frame_arbol, anchor="w", justify="left")
         self.pie.pack(fill="x", pady=(4, 0))

@@ -22,9 +22,7 @@ class PanelArchivos(ttk.LabelFrame):
         frame_arriba = ttk.Frame(paned)
         paned.add(frame_arriba, weight=1)
 
-        # Colores oscuros para que combine con el tema
-        self.lista = tk.Listbox(frame_arriba, exportselection=False,
-                                bg="#2b2b2b", fg="#ffffff", selectbackground="#0d6efd")
+        self.lista = tk.Listbox(frame_arriba, exportselection=False)
         self.lista.pack(side="left", fill="both", expand=True)
 
         scroll_lista = ttk.Scrollbar(frame_arriba, orient="vertical", command=self.lista.yview)
@@ -42,10 +40,8 @@ class PanelArchivos(ttk.LabelFrame):
         frame_texto = ttk.Frame(frame_abajo)
         frame_texto.pack(fill="both", expand=True, pady=2)
 
-        # Colores oscuros para el texto
         self.texto_esquema = tk.Text(frame_texto, height=10, width=30,
-                                     state="disabled", font=("Consolas", 9), wrap="word",
-                                     bg="#2b2b2b", fg="#ffffff")
+                                     state="disabled", font=("Consolas", 9), wrap="word")
         self.texto_esquema.pack(side="left", fill="both", expand=True)
 
         scroll_texto = ttk.Scrollbar(frame_texto, orient="vertical", command=self.texto_esquema.yview)

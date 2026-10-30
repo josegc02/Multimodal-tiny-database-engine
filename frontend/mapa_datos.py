@@ -3,6 +3,13 @@
 from engine.query import ast
 from engine.spatial.geometry import Point, Polygon
 
+# Desde este tamaño de tabla solo se dibujan los resultados, no el contexto.
+LIMITE_CONTEXTO = 100
+# Cada marcador es texto y canvas en el hilo de Tk: más que esto congela la ventana.
+MAX_MARCADORES = 500
+MARGEN_ENCUADRE = 0.1
+LADO_MINIMO_ENCUADRE = 0.002
+
 
 def columna_punto(binding):
     """Primera columna POINT de la tabla, o None."""
@@ -60,6 +67,27 @@ def centro_knn(statement):
         if center:
             return {"lat": center.lat, "lon": center.lon, "radius": 0}
     return None
+
+
+def seleccionar_puntos(points, result_ids):
+    """Puntos a dibujar: sin contexto en tablas grandes y nunca más de MAX_MARCADORES."""
+    if len(points) >= LIMITE_CONTEXTO:
+        points = [p for p in points if p[0] in result_ids]
+    return points[:MAX_MARCADORES]
+
+
+def encuadre(coordenadas):
+    """Esquinas (arriba-izquierda, abajo-derecha) que contienen las coordenadas, o None."""
+    if not coordenadas:
+        return None
+    lats = [lat for lat, _ in coordenadas]
+    lons = [lon for _, lon in coordenadas]
+    lat_centro, lon_centro = (min(lats) + max(lats)) / 2, (min(lons) + max(lons)) / 2
+    # Un solo punto no tiene extensión: el lado mínimo fija el zoom máximo.
+    medio_alto = max(max(lats) - min(lats), LADO_MINIMO_ENCUADRE) * (0.5 + MARGEN_ENCUADRE)
+    medio_ancho = max(max(lons) - min(lons), LADO_MINIMO_ENCUADRE) * (0.5 + MARGEN_ENCUADRE)
+    return ((lat_centro + medio_alto, lon_centro - medio_ancho),
+            (lat_centro - medio_alto, lon_centro + medio_ancho))
 
 
 def _centro(expression):

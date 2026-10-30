@@ -5,6 +5,9 @@ from tkinter import ttk
 import tkintermapview
 import math
 
+from frontend.mapa_datos import encuadre, seleccionar_puntos
+
+
 class PanelMapa(ttk.LabelFrame):
     """Panel que incrusta un mapa interactivo nativo directamente en tkinter."""
 
@@ -44,17 +47,21 @@ class PanelMapa(ttk.LabelFrame):
         self.mapa.set_zoom(12)
 
         # Eventos
-        self.mapa.add_right_click_menu_command(label="Insertar POINT aquí", command=self._clicked_derecho)
+        self.mapa.add_right_click_menu_command(label="Insertar POINT aquí", command=self._clicked_derecho,
+                                               pass_coords=True)
+        # Con la pestaña oculta el mapa no conoce su tamaño: se encuadra al mostrarla.
+        self.bind("<Map>", self._al_mostrar)
 
         # Variables de estado
         self.marcadores_dict = {}
         self.tabla_actual = None
         self.figura_circulo = None
         self.figura_poligono = None
+        self.marcador_centro = None
 
-        # Coordenadas para el botón de centrar
-        self.centro_busqueda = None
-        self.zoom_busqueda = 11
+        # Vista del botón de centrar
+        self.encuadre = None
+        self.encuadre_pendiente = False
 
     def _clicked_derecho(self, coords):
         lat, lon = coords
@@ -66,11 +73,16 @@ class PanelMapa(ttk.LabelFrame):
             self.on_click(lat, lon)
 
     def _centrar_mapa(self):
-        """Vuelve a centrar el mapa en la vista de la última consulta."""
-        if self.centro_busqueda:
-            lat, lon = self.centro_busqueda
-            self.mapa.set_position(lat, lon)
-            self.mapa.set_zoom(self.zoom_busqueda)
+        """Vuelve a encuadrar el mapa en la vista de la última consulta."""
+        if self.encuadre is None:
+            return
+        self.encuadre_pendiente = not self.winfo_viewable()
+        if not self.encuadre_pendiente:
+            self.mapa.fit_bounding_box(*self.encuadre)
+
+    def _al_mostrar(self, event):
+        if self.encuadre_pendiente:
+            self._centrar_mapa()
 
     def actualizar(self, payload):
         if payload is None:
@@ -80,140 +92,55 @@ class PanelMapa(ttk.LabelFrame):
         result_ids = set(payload.get("result_ids", []))
         tabla_nombre = payload.get("table")
 
-        # Extraer datos de figuras
-        circle_data = payload.get("circle")
-        polygon_data = payload.get("polygon")
-
         if tabla_nombre != self.tabla_actual or not points:
             self.limpiar()
             self.tabla_actual = tabla_nombre
 
-        # Borrar TODOS los marcadores anteriores
-        for m in self.marcadores_dict.values():
-            try:
-                m.delete()
-            except Exception:
-                pass
-        self.marcadores_dict.clear()
+        # Borrar TODOS los dibujos anteriores
+        self._borrar_dibujos()
 
         # --- DIBUJADO INTELIGENTE ---
-        # Si hay demasiados puntos, solo dibujamos los que están en el resultado (rojos)
-        dibujar_todos = len(points) < 100
-
-        puntos_dibujados = []
-        for p in points:
-            p_id, lat, lon, label = p
-
-            if not dibujar_todos and p_id not in result_ids:
-                continue
-
+        dibujados = seleccionar_puntos(points, result_ids)
+        for p_id, lat, lon, label in dibujados:
             color = "red" if p_id in result_ids else "blue"
-            marcador = self.mapa.set_marker(lat, lon, text=str(label), marker_color_circle=color)
-            self.marcadores_dict[p_id] = marcador
-            puntos_dibujados.append(p)
+            self.marcadores_dict[p_id] = self.mapa.set_marker(lat, lon, text=str(label), marker_color_circle=color)
 
-        # Manejo del Círculo (Radio)
-        if circle_data:
-            self._dibujar_circulo(circle_data)
-            # Si el motor envía el círculo, el centro de búsqueda es el centro del círculo
-            try:
-                self.centro_busqueda = (float(circle_data[0]), float(circle_data[1]))
-                self.zoom_busqueda = 12
-            except:
-                pass
-        else:
-            if self.figura_circulo:
-                self.figura_circulo.delete()
-                self.figura_circulo = None
+        figuras = self._dibujar_circulo(payload.get("circle")) + self._dibujar_poligono(payload.get("polygon"))
 
-        # Manejo del Polígono
-        if polygon_data:
-            self._dibujar_poligono(polygon_data)
-        else:
-            if self.figura_poligono:
-                self.figura_poligono.delete()
-                self.figura_poligono = None
+        estado = f"{len(points)} punto(s), {len(result_ids)} en el resultado"
+        if len(dibujados) < len(points):
+            estado += f" ({len(dibujados)} dibujados)"
+        self.status.config(text=estado)
 
-        self.status.config(text=f"{len(points)} punto(s), {len(result_ids)} en el resultado")
-
-        # Ajustar la vista
-        if puntos_dibujados:
-            self._ajustar_vista(puntos_dibujados)
+        # Ajustar la vista: la consulta manda; sin figura ni resultados, los puntos dibujados.
+        resultado = [(lat, lon) for p_id, lat, lon, _ in dibujados if p_id in result_ids]
+        self.encuadre = encuadre(figuras + resultado or [(p[1], p[2]) for p in dibujados])
+        self._centrar_mapa()
 
     def _dibujar_circulo(self, circle_data):
-        if self.figura_circulo:
-            try:
-                self.figura_circulo.delete()
-            except Exception:
-                pass
-            finally:
-                self.figura_circulo = None
+        """Dibuja el centro y, si hay radio, el círculo. Devuelve sus coordenadas."""
+        if not circle_data:
+            return []
 
-        try:
-            if not isinstance(circle_data, (list, tuple)) or len(circle_data) < 3:
-                return
+        lat, lon, radio = circle_data["lat"], circle_data["lon"], circle_data["radius"]
+        self.marcador_centro = self.mapa.set_marker(lat, lon, text="Consulta", marker_color_circle="white",
+                                                    marker_color_outside="#2e7d32")
+        if radio <= 0:
+            return [(lat, lon)]
 
-            lat = circle_data[0]
-            lon = circle_data[1]
-            radio = circle_data[2]
-
-            if isinstance(lat, str) and lat == "lat":
-                return
-
-            lat = float(lat)
-            lon = float(lon)
-            radio = float(radio)
-
-            puntos_circulo = self._generar_puntos_circulo(lat, lon, radio)
-
-            def dibujar():
-                try:
-                    if self.winfo_exists():
-                        self.figura_circulo = self.mapa.set_polygon(
-                            puntos_circulo,
-                            outline_color="red",
-                            fill_color=None,
-                            border_width=2
-                        )
-                except Exception as e:
-                    print(f"No se pudo dibujar el círculo: {e}")
-
-            self.after(100, dibujar)
-
-        except Exception as e:
-            print(f"Nota: No se pudo dibujar el círculo (datos inválidos): {e}")
+        puntos_circulo = self._generar_puntos_circulo(lat, lon, radio)
+        self.figura_circulo = self.mapa.set_polygon(puntos_circulo, outline_color="red", fill_color=None,
+                                                    border_width=2)
+        return puntos_circulo
 
     def _dibujar_poligono(self, polygon_data):
-        if self.figura_poligono:
-            try:
-                self.figura_poligono.delete()
-            except Exception:
-                pass
-            finally:
-                self.figura_poligono = None
+        """Dibuja el polígono de WITHIN. Devuelve sus coordenadas."""
+        if not polygon_data:
+            return []
 
-        # Calcular el centro del polígono para el botón de centrar
-        try:
-            lats = [p[0] for p in polygon_data]
-            lons = [p[1] for p in polygon_data]
-            self.centro_busqueda = (sum(lats)/len(lats), sum(lons)/len(lons))
-            self.zoom_busqueda = 9
-        except:
-            pass
-
-        def dibujar():
-            try:
-                if self.winfo_exists():
-                    self.figura_poligono = self.mapa.set_polygon(
-                        polygon_data,
-                        outline_color="green",
-                        fill_color=None,
-                        border_width=2
-                    )
-            except Exception as e:
-                print(f"No se pudo dibujar el polígono: {e}")
-
-        self.after(100, dibujar)
+        self.figura_poligono = self.mapa.set_polygon(polygon_data, outline_color="green", fill_color=None,
+                                                     border_width=2)
+        return list(polygon_data)
 
     def _generar_puntos_circulo(self, lat_centro, lon_centro, radio_metros, num_puntos=36):
         R = 6378137.0
@@ -231,50 +158,19 @@ class PanelMapa(ttk.LabelFrame):
             puntos.append((math.degrees(lat_punto), math.degrees(lon_punto)))
         return puntos
 
-    def _ajustar_vista(self, points):
-        if not points:
-            return
-
-        if len(points) == 1:
-            self.centro_busqueda = (points[0][1], points[0][2])
-            self.zoom_busqueda = 14
-            self.mapa.set_position(*self.centro_busqueda)
-            self.mapa.set_zoom(self.zoom_busqueda)
-            return
-
-        avg_lat = sum(p[1] for p in points) / len(points)
-        avg_lon = sum(p[2] for p in points) / len(points)
-
-        self.centro_busqueda = (avg_lat, avg_lon)
-        self.zoom_busqueda = 10
-
-        self.after(100, lambda: self.mapa.set_position(avg_lat, avg_lon))
-        self.after(150, lambda: self.mapa.set_zoom(self.zoom_busqueda))
+    def _borrar_dibujos(self):
+        figuras = [self.figura_circulo, self.figura_poligono, self.marcador_centro]
+        for dibujo in [*self.marcadores_dict.values(), *figuras]:
+            if dibujo:
+                dibujo.delete()
+        self.marcadores_dict.clear()
+        self.figura_circulo = self.figura_poligono = self.marcador_centro = None
 
     def limpiar(self):
-        for m in self.marcadores_dict.values():
-            try:
-                m.delete()
-            except Exception:
-                pass
-        self.marcadores_dict.clear()
-
-        if self.figura_circulo:
-            try:
-                self.figura_circulo.delete()
-            except Exception:
-                pass
-            self.figura_circulo = None
-
-        if self.figura_poligono:
-            try:
-                self.figura_poligono.delete()
-            except Exception:
-                pass
-            self.figura_poligono = None
-
+        self._borrar_dibujos()
         self.tabla_actual = None
-        self.centro_busqueda = None
+        self.encuadre = None
+        self.encuadre_pendiente = False
         self.status.config(text="Sin datos espaciales")
 
     def close(self):

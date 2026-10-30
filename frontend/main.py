@@ -1,6 +1,7 @@
 """Ventana principal del frontend con los 4 paneles requeridos."""
 
 import tkinter as tk
+from tkinter import font as tkfont
 import ttkbootstrap as ttk
 from tkinter import ttk as ttk_classic # Importamos el ttk clásico para solucionar el error del PanedWindow
 
@@ -75,13 +76,28 @@ class Aplicacion(ttk.Window):
         self.bottom_notebook.add(self.panel_resultados, text="Resultados")
         self.bottom_notebook.add(self.panel_plan, text="Plan de Ejecución")
 
+        self._aplicar_tema()
+
         # --- CONEXIÓN CON EL MOTOR ---
         self.panel_archivos.set_catalog(self.motor.catalog)
         self.panel_consultas.obtener_tablas = lambda: set(self.motor.catalog.tables)
-        self.panel_consultas.on_error = self.panel_resultados.mostrar_error
+        self.panel_consultas.on_error = self._mostrar_error
 
         # Registrar cierre limpio
         self.protocol("WM_DELETE_WINDOW", self._on_cerrar)
+
+    def _aplicar_tema(self):
+        """Colores del tema en lo que ttkbootstrap no estiliza: widgets tk y fondo de Treeview."""
+        colores = self.style.colors
+        # La altura por defecto de las filas no escala con el DPI de la pantalla.
+        alto_fila = tkfont.nametofont("TkDefaultFont").metrics("linespace") + 4
+        self.style.configure("Treeview", fieldbackground=colores.bg, rowheight=alto_fila)
+
+        tema = dict(bg=colores.inputbg, fg=colores.fg, selectbackground=colores.selectbg,
+                    selectforeground=colores.selectfg)
+        self.panel_archivos.lista.configure(**tema)
+        for texto in (self.panel_archivos.texto_esquema, self.panel_consultas.editor):
+            texto.configure(insertbackground=colores.fg, **tema)
 
     def _on_cerrar(self):
         """Cierra los storages antes de salir."""
@@ -96,7 +112,7 @@ class Aplicacion(ttk.Window):
         resultado = self.motor.ejecutar(sql)
 
         if resultado.tiene_error:
-            self.panel_resultados.mostrar_error(resultado.error)
+            self._mostrar_error(resultado.error)
             self.panel_plan.limpiar()
             return
 
@@ -111,14 +127,21 @@ class Aplicacion(ttk.Window):
         if resultado.plan_nodos:
             self.panel_plan.mostrar_plan(resultado.plan_nodos, analyze=resultado.tiempos[1] is not None,
                                          tiempos=resultado.tiempos)
+            self.bottom_notebook.select(self.panel_plan)
         else:
             self.panel_plan.limpiar()
+            self.bottom_notebook.select(self.panel_resultados)
 
         self.panel_archivos.refresh()
         # Le quitamos el '#' para que se actualice el mapa
         self.panel_mapa.actualizar(resultado.mapa)
 
+    def _mostrar_error(self, error):
+        self.panel_resultados.mostrar_error(error)
+        self.bottom_notebook.select(self.panel_resultados)
+
     def _mapa_click(self, lat, lon):
+        self.top_notebook.select(self.panel_consultas)
         self.panel_consultas.editor.insert("insert", f"POINT({lat:.6f}, {lon:.6f})")
         self.panel_consultas.editor.focus_set()
 
