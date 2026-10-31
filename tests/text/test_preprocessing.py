@@ -1,6 +1,6 @@
 import unittest
 
-from engine.text.preprocessing import quitar_stopwords, quitar_tildes, stopwords, tokenizar
+from engine.text.preprocessing import quitar_stopwords, quitar_tildes, stemizar, stopwords, tokenizar
 
 
 class TestTokenizar(unittest.TestCase):
@@ -75,6 +75,32 @@ class TestStopwords(unittest.TestCase):
         self.assertEqual(quitar_tildes("canción"), "cancion")
         self.assertEqual(quitar_tildes("pingüino"), "pinguino")
         self.assertEqual(quitar_tildes("año"), "año")
+
+
+class TestStemizar(unittest.TestCase):
+    def test_variantes_comparten_raiz(self):
+        grupos = (("corriendo", "corrió", "corrieron", "correr"), ("casa", "casas"), ("niño", "niña"),
+                  ("canción", "canciones"), ("computadora", "computadoras", "computación"))
+        for grupo in grupos:
+            with self.subTest(grupo=grupo):
+                self.assertEqual(len(set(stemizar(list(grupo)))), 1)
+
+    def test_el_resultado_no_tiene_tildes(self):
+        self.assertEqual(stemizar(["canción", "pingüino", "árboles"]), ["cancion", "pinguin", "arbol"])
+        self.assertEqual(stemizar(["café"], "en"), ["cafe"])
+
+    def test_conserva_la_enie(self):
+        self.assertEqual(stemizar(["niño", "caña"]), ["niñ", "cañ"])
+
+    def test_no_altera_numeros_ni_siglas(self):
+        self.assertEqual(stemizar(["2024", "3.14", "mp3", "onu"]), ["2024", "3.14", "mp3", "onu"])
+
+    def test_usa_el_stemmer_del_idioma(self):
+        self.assertEqual(stemizar(["running", "runs"], "en"), ["run", "run"])
+
+    def test_idioma_no_soportado(self):
+        with self.assertRaises(ValueError):
+            stemizar(["casa"], "fr")
 
 
 if __name__ == "__main__":
