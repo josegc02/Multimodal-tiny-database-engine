@@ -474,7 +474,7 @@ flowchart LR
     RT --> GEO["Geometría y métricas<br/>(engine/spatial/)"]
     SCAN --> GEO
     RT --> HEAP["Tabla: registros con POINT"]
-    UI["Frontend"] --> MAPA["Mapa Leaflet<br/>servidor HTTP local"]
+    UI["Frontend"] --> MAPA["Panel de mapa<br/>tkintermapview"]
 ```
 
 - **Tipo `POINT`:** es un tipo de columna más del registro.
@@ -528,8 +528,8 @@ Sintaxis soportada:
 El optimizador usa el R-Tree cuando hay uno vigente y el predicado permite poda; si no, recorre la tabla con el mismo resultado. Los demás filtros del `WHERE` se aplican después. Si un k-NN tiene filtros adicionales, el ejecutor amplía el k pedido al índice hasta reunir k filas que los cumplan. El índice se mantiene fila por fila en el Heap File y se reconstruye al final de la sentencia en el secuencial y el B+ agrupado.
 
 #### 4.7 Mapa
-El panel **Mapa** del frontend levanta un servidor HTTP local y el botón **Abrir mapa** muestra una página Leaflet con OpenStreetMap:
-- Dibuja los puntos de la tabla, resalta los del resultado y muestra el radio o el polígono de la consulta. Un clic en el mapa escribe `POINT(lat, lon)` en el editor.
+La pestaña **Mapa** del frontend integra un mapa nativo de Tkinter (`tkintermapview`):
+- Dibuja los puntos de la tabla, resalta los del resultado y muestra el radio o el polígono de la consulta. El clic derecho > **Insertar POINT aquí** escribe `POINT(lat, lon)` en el editor.
 - Los puntos de cada tabla se leen una vez y se cachean hasta que una sentencia pueda modificarlos. Así el mapa no agrega un recorrido de la tabla a cada consulta: con 20.000 filas, un k-NN tarda ~5 ms en lugar de ~360 ms.
 - El navegador redibuja solo cuando hay una consulta nueva, conservando el zoom del usuario.
 

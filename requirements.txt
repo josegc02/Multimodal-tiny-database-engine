@@ -1,3 +1,6 @@
 # Dependencias principales del proyecto
 matplotlib>=3.8.0
 tabulate>=0.9.0
+
+ttkbootstrap~=2.2.6
+tkintermapview~=1.30

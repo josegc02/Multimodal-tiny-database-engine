@@ -1,41 +1,58 @@
 """Panel de archivos: muestra las tablas cargadas y su estructura."""
 
 import tkinter as tk
-from tkinter import ttk
-
+import ttkbootstrap as ttk
+from tkinter import ttk as ttk_classic
 
 class PanelArchivos(ttk.LabelFrame):
     """Panel que lista las tablas y sus esquemas."""
 
     def __init__(self, master, catalog=None):
-        super().__init__(master, text="Archivos")
+        super().__init__(master, text="Explorador de Objetos")
         self.catalog = catalog
         self._construir()
         self.refresh()
 
     def _construir(self):
-        # Lista de tablas (izquierda)
-        self.lista = tk.Listbox(self, exportselection=False)
-        self.lista.pack(side="left", fill="both", expand=True, padx=4, pady=4)
+        # 1. Usamos ttk_classic aquí para evitar el bug de ttkbootstrap
+        paned = ttk_classic.PanedWindow(self, orient=tk.VERTICAL)
+        paned.pack(fill="both", expand=True, padx=2, pady=2)
+
+        # --- Parte Superior: Lista de tablas ---
+        frame_arriba = ttk.Frame(paned)
+        paned.add(frame_arriba, weight=1)
+
+        self.lista = tk.Listbox(frame_arriba, exportselection=False)
+        self.lista.pack(side="left", fill="both", expand=True)
+
+        scroll_lista = ttk.Scrollbar(frame_arriba, orient="vertical", command=self.lista.yview)
+        scroll_lista.pack(side="right", fill="y")
+        self.lista.config(yscrollcommand=scroll_lista.set)
+
         self.lista.bind("<<ListboxSelect>>", self._on_seleccion)
 
-        # Esquema de la tabla seleccionada (derecha)
-        frame_derecha = ttk.Frame(self)
-        frame_derecha.pack(side="right", fill="both", expand=True, padx=4, pady=4)
+        # --- Parte Inferior: Esquema de la tabla ---
+        frame_abajo = ttk.Frame(paned)
+        paned.add(frame_abajo, weight=2)
 
-        ttk.Label(frame_derecha, text="Esquema:").pack(anchor="w")
+        ttk.Label(frame_abajo, text="Propiedades / Esquema:").pack(anchor="w", padx=2, pady=(2,0))
 
-        self.texto_esquema = tk.Text(frame_derecha, height=10, width=30,
-                                     state="disabled", font=("Consolas", 10))
-        self.texto_esquema.pack(fill="both", expand=True)
+        frame_texto = ttk.Frame(frame_abajo)
+        frame_texto.pack(fill="both", expand=True, pady=2)
+
+        self.texto_esquema = tk.Text(frame_texto, height=10, width=30,
+                                     state="disabled", font=("Consolas", 9), wrap="word")
+        self.texto_esquema.pack(side="left", fill="both", expand=True)
+
+        scroll_texto = ttk.Scrollbar(frame_texto, orient="vertical", command=self.texto_esquema.yview)
+        scroll_texto.pack(side="right", fill="y")
+        self.texto_esquema.config(yscrollcommand=scroll_texto.set)
 
     def set_catalog(self, catalog):
-        """Asigna el catalogo y refresca la lista de tablas."""
         self.catalog = catalog
         self.refresh()
 
     def refresh(self):
-        """Recarga la lista de tablas conservando la tabla seleccionada."""
         seleccion = self.lista.curselection()
         anterior = self.lista.get(seleccion[0]) if seleccion else None
         self.lista.delete(0, tk.END)
@@ -50,14 +67,13 @@ class PanelArchivos(ttk.LabelFrame):
         if not nombres:
             self._mostrar_esquema("")
             return
-        # Conserva la selección; si no había (inicio o tabla borrada), muestra la primera.
+
         posicion = nombres.index(anterior) if anterior in nombres else 0
         self.lista.selection_set(posicion)
         self.lista.see(posicion)
         self._on_seleccion(None)
 
     def _on_seleccion(self, event):
-        """Muestra el esquema de la tabla seleccionada."""
         seleccion = self.lista.curselection()
         if not seleccion:
             return
@@ -70,7 +86,6 @@ class PanelArchivos(ttk.LabelFrame):
             self._mostrar_esquema(f"Error: {e}")
             return
 
-        # Construir el texto del esquema
         lineas = [f"Tabla: {nombre}", ""]
         lineas.append(f"Storage: {type(storage).__name__}")
         if hasattr(storage, "filepath"):
@@ -85,7 +100,7 @@ class PanelArchivos(ttk.LabelFrame):
 
         if binding.indexes:
             lineas.append("")
-            lineas.append("Indices:")
+            lineas.append("Índices:")
             for campo, registro in binding.indexes.items():
                 info = registro.metadata
                 tipo = type(registro.index).__name__
@@ -103,7 +118,7 @@ class PanelArchivos(ttk.LabelFrame):
             lineas.append(f"Clave primaria: {binding.primary_key} ({binding.primary_key_name})")
         if binding.foreign_keys:
             lineas.append("")
-            lineas.append("Llaves foraneas:")
+            lineas.append("Llaves foráneas:")
             for fk in binding.foreign_keys:
                 lineas.append(f"  - {fk.column} -> {fk.ref_table}({fk.ref_column}) ON DELETE {fk.on_delete}")
         referencias = self.catalog.referencing(nombre) if hasattr(self.catalog, "referencing") else []
@@ -113,17 +128,15 @@ class PanelArchivos(ttk.LabelFrame):
             for fk in referencias:
                 lineas.append(f"  - {fk.table}.{fk.column} ({fk.on_delete})")
 
-        # Info adicional de estadisticas
         stats = binding.statistics
         if stats is not None:
             lineas.append("")
             lineas.append(f"Filas: {stats.rows}")
-            lineas.append(f"Paginas: {stats.pages}")
+            lineas.append(f"Páginas: {stats.pages}")
 
         self._mostrar_esquema("\n".join(lineas))
 
     def _mostrar_esquema(self, texto):
-        """Escribe texto en el area de esquema."""
         self.texto_esquema.config(state="normal")
         self.texto_esquema.delete("1.0", tk.END)
         if texto:

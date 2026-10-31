@@ -1,139 +1,190 @@
-"""Panel de mapa: servidor local con Leaflet (frontend/mapa.html) y estado de la última consulta.
+"""Panel de mapa nativo usando tkintermapview optimizado con figuras y botón de centrado."""
 
-El navegador pide cada segundo la versión del estado y solo descarga y redibuja
-cuando cambió, de modo que el mapa no pierde el zoom del usuario.
-"""
-
-from __future__ import annotations
-
-import json
-import threading
-import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+import tkinter as tk
 from tkinter import ttk
+import tkintermapview
+import math
 
-HTML = Path(__file__).with_name("mapa.html")
-EMPTY = {"table": None, "points": [], "highlighted": [], "circle": None, "polygon": None}
-
-
-class MapServer:
-    """API local: GET / (página), GET /api/version, GET /api/state y POST /api/click."""
-
-    def __init__(self, on_click=None):
-        self.on_click = on_click
-        self._lock = threading.Lock()
-        self.version = 0
-        self._state, self._json = dict(EMPTY), json.dumps(EMPTY)
-        self._points_source, self._points_json = None, "[]"
-        server = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                if self.path == "/":
-                    self.respond("text/html; charset=utf-8", HTML.read_text(encoding="utf-8"))
-                elif self.path == "/api/version":
-                    self.respond("application/json", json.dumps({"version": server.version}))
-                elif self.path == "/api/state":
-                    with server._lock:
-                        body = server._json
-                    self.respond("application/json", body)
-                else:
-                    self.send_error(404)
-
-            def do_POST(self):
-                if self.path != "/api/click":
-                    self.send_error(404)
-                    return
-                try:
-                    size = int(self.headers.get("Content-Length", 0))
-                    data = json.loads(self.rfile.read(size))
-                    lat, lon = float(data["lat"]), float(data["lng"])
-                except (ValueError, TypeError, KeyError):
-                    self.send_error(400)
-                    return
-                if server.on_click:
-                    server.on_click(lat, lon)
-                self.respond("application/json", "{}")
-
-            def respond(self, kind, body):
-                data = body.encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", kind)
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-
-            def log_message(self, *_):
-                pass
-
-        self.http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.http.server_port}/"
-        threading.Thread(target=self.http.serve_forever, daemon=True).start()
-
-    @property
-    def state(self):
-        return self._state
-
-    def publish(self, **changes):
-        """Actualiza el estado y arma su JSON una vez por versión.
-
-        `points` es una lista de tuplas (id, lat, lon, etiqueta). Solo se vuelve a
-        serializar si es otra lista: entre consultas a la misma tabla no cambia.
-        """
-        with self._lock:
-            points = changes.pop("points", self._state["points"])
-            if points is not self._points_source:
-                self._points_source = points
-                self._points_json = json.dumps([{"id": p[0], "lat": p[1], "lon": p[2], "label": str(p[3])}
-                                                for p in points])
-            self._state = {**self._state, **changes, "points": points}
-            rest = json.dumps({key: value for key, value in self._state.items() if key != "points"})
-            self._json = rest[:-1] + ', "points": ' + self._points_json + "}"
-            self.version += 1
-
-    def close(self):
-        self.http.shutdown()
-        self.http.server_close()
+from frontend.mapa_datos import encuadre, seleccionar_puntos
 
 
-class PanelMapa(ttk.LabelFrame):
-    """Barra con el estado del mapa y el botón para abrirlo en el navegador.
-
-    Uso:
-        panel.actualizar(resultado.mapa)        # tras cada SELECT sobre una tabla con POINT
-        panel.on_click = lambda lat, lon: ...   # clic en el mapa
-    """
+class PanelMapa(ttk.Frame):
+    """Panel que incrusta un mapa interactivo nativo directamente en tkinter."""
 
     def __init__(self, master):
-        super().__init__(master, text="Mapa")
+        super().__init__(master)
         self.on_click = None
-        self.server = MapServer(self._clicked)
-        self.status = ttk.Label(self, text="Sin datos espaciales", anchor="w")
-        self.status.pack(side="left", fill="x", expand=True, padx=8, pady=8)
-        ttk.Button(self, text="Abrir mapa",
-                   command=lambda: webbrowser.open_new_tab(self.server.url)).pack(side="right", padx=8, pady=8)
 
-    def _clicked(self, lat, lon):
-        # Llega desde el hilo del servidor: se pasa al hilo de Tk con after().
-        def apply():
-            self.status.config(text=f"Punto seleccionado: POINT({lat:.6f}, {lon:.6f})")
-            if self.on_click:
-                self.on_click(lat, lon)
-        self.status.after(0, apply)
+        # Barra de estado superior
+        frame_estado = ttk.Frame(self)
+        frame_estado.pack(side="top", fill="x", padx=2, pady=2)
+
+        self.status = ttk.Label(frame_estado, text="Sin datos espaciales", anchor="w")
+        self.status.pack(side="left", fill="x", expand=True, padx=4)
+
+        # El widget del mapa nativo
+        self.mapa = tkintermapview.TkinterMapView(self, corner_radius=0)
+        self.mapa.pack(fill="both", expand=True)
+
+        # --- BOTÓN PARA CENTRAR LA VISTA ---
+        self.btn_centrar = tk.Button(
+            self, text="⦿", font=("Arial", 9, "bold"),
+            bg="#ffffff", fg="#333333", cursor="hand2", relief="raised",
+            command=self._centrar_mapa
+        )
+        # Lo colocamos flotando en la esquina inferior derecha del mapa
+        self.btn_centrar.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
+
+        # --- AJUSTE DE FLUIDEZ ---
+        if hasattr(self.mapa, 'image_load_thread_pool') and isinstance(self.mapa.image_load_thread_pool, list):
+            self.mapa.image_load_thread_pool = self.mapa.image_load_thread_pool[:4]
+
+        # --- SERVIDOR DE MAPAS (Google Maps) ---
+        self.mapa.set_tile_server("https://mt0.google.com/vt/lyrs=m&hl=en&x={x}&y={y}&z={z}&s=Ga", max_zoom=22)
+
+        # Configuración inicial (Lima, Perú)
+        self.mapa.set_position(-12.0464, -77.0428)
+        self.mapa.set_zoom(12)
+
+        # Eventos
+        self.mapa.add_right_click_menu_command(label="Insertar POINT aquí", command=self._clicked_derecho,
+                                               pass_coords=True)
+        # Con la pestaña oculta el mapa no conoce su tamaño: se encuadra al mostrarla.
+        self.bind("<Map>", self._al_mostrar)
+        # add="+": tkintermapview usa este mismo evento para actualizar sus dimensiones.
+        self.mapa.bind("<Configure>", self._al_redimensionar, add="+")
+        self.redimension = None
+
+        # Variables de estado
+        self.marcadores_dict = {}
+        self.tabla_actual = None
+        self.figura_circulo = None
+        self.figura_poligono = None
+        self.marcador_centro = None
+
+        # Vista del botón de centrar
+        self.encuadre = None
+        self.encuadre_pendiente = False
+
+    def _clicked_derecho(self, coords):
+        lat, lon = coords
+        self._notificar_clic(lat, lon)
+
+    def _notificar_clic(self, lat, lon):
+        self.status.config(text=f"Punto seleccionado: POINT({lat:.6f}, {lon:.6f})")
+        if self.on_click:
+            self.on_click(lat, lon)
+
+    def _centrar_mapa(self):
+        """Vuelve a encuadrar el mapa en la vista de la última consulta."""
+        if self.encuadre is None:
+            return
+        self.encuadre_pendiente = not self.winfo_viewable()
+        if not self.encuadre_pendiente:
+            self.mapa.fit_bounding_box(*self.encuadre)
+
+    def _al_mostrar(self, event):
+        if self.encuadre_pendiente:
+            self._centrar_mapa()
+
+    def _al_redimensionar(self, event):
+        # El encuadre depende del tamaño: se repite cuando el tamaño deja de cambiar.
+        if self.redimension is not None:
+            self.after_cancel(self.redimension)
+        self.redimension = self.after(150, self._tras_redimensionar)
+
+    def _tras_redimensionar(self):
+        self.redimension = None
+        self._centrar_mapa()
 
     def actualizar(self, payload):
         if payload is None:
             return
-        self.server.publish(table=payload.get("table"), points=payload["points"],
-                            highlighted=payload["result_ids"], circle=payload.get("circle"),
-                            polygon=payload.get("polygon"))
-        self.status.config(text=f"{len(payload['points'])} punto(s), {len(payload['result_ids'])} en el "
-                                "resultado; pulsa «Abrir mapa» para verlos")
+
+        points = payload.get("points", [])
+        result_ids = set(payload.get("result_ids", []))
+        tabla_nombre = payload.get("table")
+
+        if tabla_nombre != self.tabla_actual or not points:
+            self.limpiar()
+            self.tabla_actual = tabla_nombre
+
+        # Borrar TODOS los dibujos anteriores
+        self._borrar_dibujos()
+
+        # --- DIBUJADO INTELIGENTE ---
+        dibujados = seleccionar_puntos(points, result_ids)
+        for p_id, lat, lon, label in dibujados:
+            color = "red" if p_id in result_ids else "blue"
+            self.marcadores_dict[p_id] = self.mapa.set_marker(lat, lon, text=str(label), marker_color_circle=color)
+
+        figuras = self._dibujar_circulo(payload.get("circle")) + self._dibujar_poligono(payload.get("polygon"))
+
+        estado = f"{len(points)} punto(s), {len(result_ids)} en el resultado"
+        if len(dibujados) < len(points):
+            estado += f" ({len(dibujados)} dibujados)"
+        self.status.config(text=estado)
+
+        # Ajustar la vista: la consulta manda; sin figura ni resultados, los puntos dibujados.
+        resultado = [(lat, lon) for p_id, lat, lon, _ in dibujados if p_id in result_ids]
+        self.encuadre = encuadre(figuras + resultado or [(p[1], p[2]) for p in dibujados])
+        self._centrar_mapa()
+
+    def _dibujar_circulo(self, circle_data):
+        """Dibuja el centro y, si hay radio, el círculo. Devuelve sus coordenadas."""
+        if not circle_data:
+            return []
+
+        lat, lon, radio = circle_data["lat"], circle_data["lon"], circle_data["radius"]
+        self.marcador_centro = self.mapa.set_marker(lat, lon, text="Consulta", marker_color_circle="white",
+                                                    marker_color_outside="#2e7d32")
+        if radio <= 0:
+            return [(lat, lon)]
+
+        puntos_circulo = self._generar_puntos_circulo(lat, lon, radio)
+        self.figura_circulo = self.mapa.set_polygon(puntos_circulo, outline_color="red", fill_color=None,
+                                                    border_width=2)
+        return puntos_circulo
+
+    def _dibujar_poligono(self, polygon_data):
+        """Dibuja el polígono de WITHIN. Devuelve sus coordenadas."""
+        if not polygon_data:
+            return []
+
+        self.figura_poligono = self.mapa.set_polygon(polygon_data, outline_color="green", fill_color=None,
+                                                     border_width=2)
+        return list(polygon_data)
+
+    def _generar_puntos_circulo(self, lat_centro, lon_centro, radio_metros, num_puntos=36):
+        R = 6378137.0
+        lat_rad = math.radians(lat_centro)
+        lon_rad = math.radians(lon_centro)
+        puntos = []
+
+        for i in range(num_puntos):
+            angulo = (i * 360.0) / num_puntos
+            angulo_rad = math.radians(angulo)
+            lat_punto = math.asin(math.sin(lat_rad) * math.cos(radio_metros / R) +
+                                  math.cos(lat_rad) * math.sin(radio_metros / R) * math.cos(angulo_rad))
+            lon_punto = lon_rad + math.atan2(math.sin(angulo_rad) * math.sin(radio_metros / R) * math.cos(lat_rad),
+                                             math.cos(radio_metros / R) - math.sin(lat_rad) * math.sin(lat_punto))
+            puntos.append((math.degrees(lat_punto), math.degrees(lon_punto)))
+        return puntos
+
+    def _borrar_dibujos(self):
+        figuras = [self.figura_circulo, self.figura_poligono, self.marcador_centro]
+        for dibujo in [*self.marcadores_dict.values(), *figuras]:
+            if dibujo:
+                dibujo.delete()
+        self.marcadores_dict.clear()
+        self.figura_circulo = self.figura_poligono = self.marcador_centro = None
 
     def limpiar(self):
-        self.server.publish(**EMPTY)
+        self._borrar_dibujos()
+        self.tabla_actual = None
+        self.encuadre = None
+        self.encuadre_pendiente = False
         self.status.config(text="Sin datos espaciales")
 
     def close(self):
-        self.server.close()
+        pass

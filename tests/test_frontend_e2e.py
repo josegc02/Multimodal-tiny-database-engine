@@ -149,19 +149,30 @@ class TestTodosLosModelos(DemoDirMixin, unittest.TestCase):
                     self.verificar(storage, index)
 
 
-class TestVentanaTk(DemoDirMixin, unittest.TestCase):
-    """Maneja la ventana real (se omite si no hay pantalla, p. ej. en CI Linux)."""
+class TestVentanaTk(unittest.TestCase):
+    """Maneja la ventana real (se omite si no hay pantalla, p. ej. en CI Linux).
 
-    def setUp(self):
-        self.use_temp_demo_dir()
+    Una sola ventana para toda la clase: ttkbootstrap admite una raíz por proceso.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        demo = tempfile.mkdtemp()
+        cls.addClassCleanup(shutil.rmtree, demo, True)
+        cls.addClassCleanup(setattr, motor_module, "DEMO_DIR", motor_module.DEMO_DIR)
+        motor_module.DEMO_DIR = demo
         import tkinter
         from frontend.main import Aplicacion
         try:
-            self.app = Aplicacion()
+            cls.app = Aplicacion()
         except tkinter.TclError as error:
-            self.skipTest(f"sin pantalla: {error}")
-        self.app.withdraw()
-        self.addCleanup(self.app._on_cerrar)
+            raise unittest.SkipTest(f"sin pantalla: {error}")
+        cls.app.withdraw()
+        cls.addClassCleanup(cls.app._on_cerrar)
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
 
     def ejecutar(self, sql):
         self.app.panel_consultas.set_sql(sql)
@@ -205,6 +216,85 @@ class TestVentanaTk(DemoDirMixin, unittest.TestCase):
         app.update()
         filas = [resultados.tree.item(i, "values") for i in resultados.tree.get_children()]
         self.assertEqual(sorted(filas), [("1", "10.5"), ("2", "20.0")])
+
+    def tiendas(self):
+        self.ejecutar("CREATE TABLE tiendas (id INT PRIMARY KEY, p POINT); "
+                      "INSERT INTO tiendas VALUES (1, POINT(-12, -77)), (2, POINT(-12.2, -77.2));")
+
+    def test_mapa_dibuja_radio_centro_y_poligono(self):
+        self.tiendas()
+        mapa = self.app.panel_mapa
+
+        self.ejecutar("SELECT id FROM tiendas WHERE distancia(p, POINT(-12, -77)) < 5000;")
+        self.assertIsNotNone(mapa.figura_circulo)
+        self.assertIsNotNone(mapa.marcador_centro)
+        (norte, _), (sur, _) = mapa.encuadre
+        self.assertAlmostEqual((norte + sur) / 2, -12, places=3)  # encuadra el círculo
+
+        self.ejecutar("SELECT id FROM tiendas ORDER BY distancia(p, POINT(-12.1, -77.1)) LIMIT 1;")
+        self.assertIsNone(mapa.figura_circulo)  # k-NN: radio 0, solo el centro
+        self.assertIsNotNone(mapa.marcador_centro)
+
+        self.ejecutar("SELECT id FROM tiendas WHERE WITHIN(p, POLYGON((-13, -78), (-11, -78), (-11, -76)));")
+        self.assertIsNotNone(mapa.figura_poligono)
+        self.assertIsNone(mapa.marcador_centro)
+
+        self.ejecutar("SELECT id FROM tiendas;")
+        self.assertIsNone(mapa.figura_poligono)
+        self.assertEqual(len(self.app.panel_mapa.mapa.canvas_polygon_list), 0)
+
+    def test_menu_del_mapa_recibe_coordenadas_y_escribe_en_el_editor(self):
+        app = self.app
+        comando = app.panel_mapa.mapa.right_click_menu_commands[0]
+        self.assertTrue(comando["pass_coords"])
+
+        app.top_notebook.select(app.panel_mapa)
+        app.panel_consultas.set_sql("")
+        comando["command"]((-12.5, -77.25))
+        self.assertEqual(app.panel_consultas.get_sql(), "POINT(-12.500000, -77.250000)")
+        self.assertEqual(app.top_notebook.select(), str(app.panel_consultas))
+
+    def test_el_panel_inferior_muestra_lo_ultimo_que_se_ejecuto(self):
+        app = self.app
+        app.bottom_notebook.select(app.panel_plan)
+        resultados = self.ejecutar("SELECT * FROM no_existe;")
+        self.assertTrue(resultados.mensaje.cget("text").startswith("Error:"))
+        self.assertEqual(app.bottom_notebook.select(), str(app.panel_resultados))
+
+        self.ejecutar("EXPLAIN SELECT * FROM cuentas;")
+        self.assertEqual(app.bottom_notebook.select(), str(app.panel_plan))
+
+    def test_widgets_tk_usan_los_colores_del_tema(self):
+        app = self.app
+        fondo = app.style.colors.inputbg
+        for widget in (app.panel_archivos.lista, app.panel_archivos.texto_esquema, app.panel_consultas.editor):
+            self.assertEqual(str(widget.cget("bg")), fondo)
+        self.assertEqual(app.style.lookup("Treeview", "fieldbackground"), app.style.colors.bg)
+
+    def test_columnas_del_plan_no_cortan_sus_titulos(self):
+        from tkinter import font as tkfont
+        self.ejecutar("EXPLAIN ANALYZE SELECT * FROM cuentas;")
+        arbol = self.app.panel_plan.arbol
+        fuente = tkfont.nametofont("TkDefaultFont")
+        for clave in arbol["columns"]:
+            self.assertGreater(arbol.column(clave, "width"), fuente.measure(arbol.heading(clave, "text")))
+
+    def test_numeros_a_la_derecha_y_texto_a_la_izquierda(self):
+        tabla = self.ejecutar("CREATE TABLE alineada (id INT PRIMARY KEY, nombre VARCHAR(5)); "
+                              "INSERT INTO alineada VALUES (1, 'a');").tree
+        self.ejecutar("SELECT * FROM alineada;")
+        self.assertEqual(str(tabla.column("id", "anchor")), "e")
+        self.assertEqual(str(tabla.heading("id", "anchor")), "e")
+        self.assertEqual(str(tabla.column("nombre", "anchor")), "w")
+
+    def test_deshacer_recupera_el_texto_reemplazado(self):
+        consultas = self.app.panel_consultas
+        for reemplazar in (lambda: consultas.set_sql("otra"), consultas.limpiar):
+            consultas.editor.delete("1.0", "end")
+            consultas.editor.insert("1.0", "SELECT 1;")
+            reemplazar()
+            consultas.editor.edit_undo()
+            self.assertEqual(consultas.get_sql(), "SELECT 1;")
 
 
 if __name__ == "__main__":

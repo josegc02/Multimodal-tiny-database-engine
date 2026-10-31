@@ -1,51 +1,47 @@
-import errno
-import json
 import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
-from urllib.request import Request, urlopen
 
 import frontend.motor as motor_module
-from frontend.panel_mapa import MapServer
+from frontend.mapa_datos import LADO_MINIMO_ENCUADRE, LIMITE_CONTEXTO, MAX_MARCADORES, encuadre, seleccionar_puntos
 
 
-class TestMapServer(unittest.TestCase):
-    def setUp(self):
-        self.clicked = []
-        try:
-            self.server = MapServer(lambda lat, lon: self.clicked.append((lat, lon)))
-        except PermissionError as error:
-            if error.errno == errno.EPERM:
-                self.skipTest("sandbox sin sockets locales")
-            raise
-        self.addCleanup(self.server.close)
+class TestSeleccionarPuntos(unittest.TestCase):
+    @staticmethod
+    def puntos(n):
+        return [(i, -12.0, -77.0, str(i)) for i in range(n)]
 
-    def get(self, path):
-        return urlopen(self.server.url + path).read().decode()
+    def test_tabla_pequena_conserva_el_contexto(self):
+        puntos = self.puntos(LIMITE_CONTEXTO - 1)
+        self.assertEqual(seleccionar_puntos(puntos, {1}), puntos)
 
-    def test_page_state_version_and_click(self):
-        self.assertIn("leaflet", self.get("").lower())
-        before = json.loads(self.get("api/version"))["version"]
-        points = [(1, -12.0, -77.0, "uno")]
-        self.server.publish(table="t", points=points, highlighted=[1])
-        self.assertEqual(json.loads(self.get("api/version"))["version"], before + 1)
-        state = json.loads(self.get("api/state"))
-        self.assertEqual(state["points"], [{"id": 1, "lat": -12.0, "lon": -77.0, "label": "uno"}])
-        self.assertEqual(state["highlighted"], [1])
+    def test_tabla_grande_dibuja_solo_resultados(self):
+        elegidos = seleccionar_puntos(self.puntos(LIMITE_CONTEXTO), {1, 2})
+        self.assertEqual([p[0] for p in elegidos], [1, 2])
 
-        request = Request(self.server.url + "api/click", data=b'{"lat":-12.1,"lng":-77.1}',
-                          headers={"Content-Type": "application/json"}, method="POST")
-        urlopen(request).read()
-        self.assertEqual(self.clicked, [(-12.1, -77.1)])
+    def test_select_amplio_no_supera_el_tope(self):
+        puntos = self.puntos(10_000)
+        elegidos = seleccionar_puntos(puntos, {p[0] for p in puntos})
+        self.assertEqual(len(elegidos), MAX_MARCADORES)
 
-    def test_points_are_serialized_once_per_list(self):
-        points = [(i, -12.0, -77.0, str(i)) for i in range(3)]
-        self.server.publish(points=points)
-        with patch("frontend.panel_mapa.json.dumps", wraps=json.dumps) as dumps:
-            self.server.publish(points=points, highlighted=[2])  # misma lista: no se vuelve a serializar
-        self.assertEqual(dumps.call_count, 1)
-        self.assertEqual(json.loads(self.get("api/state"))["highlighted"], [2])
+
+class TestEncuadre(unittest.TestCase):
+    def test_sin_coordenadas(self):
+        self.assertIsNone(encuadre([]))
+
+    def test_contiene_las_coordenadas_con_margen(self):
+        (norte, oeste), (sur, este) = encuadre([(-12, -77), (-5, -80)])
+        self.assertGreater(norte, -5)
+        self.assertLess(sur, -12)
+        self.assertLess(oeste, -80)
+        self.assertGreater(este, -77)
+
+    def test_un_punto_da_una_caja_valida(self):
+        (norte, oeste), (sur, este) = encuadre([(-12, -77)])
+        self.assertGreater(norte, sur)  # fit_bounding_box rechaza cajas sin extensión
+        self.assertLess(oeste, este)
+        self.assertGreaterEqual(norte - sur, LADO_MINIMO_ENCUADRE)
 
 
 class TestMapPayload(unittest.TestCase):
