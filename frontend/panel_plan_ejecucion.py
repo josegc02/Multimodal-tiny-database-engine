@@ -21,13 +21,13 @@ AYUDA = (
 )
 
 COLUMNAS = [
-    ("costo", "Costo", 120, "e"),
-    ("estimadas", "Filas est.", 75, "e"),
-    ("reales", "Filas reales", 85, "e"),
-    ("desvio", "Desvío est.", 85, "e"),
-    ("exclusivo", "Excl. (ms)", 80, "e"),
-    ("inclusivo", "Incl. (ms)", 80, "e"),
-    ("loops", "Loops", 55, "e"),
+    ("costo", "Costo", "e"),
+    ("estimadas", "Filas est.", "e"),
+    ("reales", "Filas reales", "e"),
+    ("desvio", "Desvío est.", "e"),
+    ("exclusivo", "Excl. (ms)", "e"),
+    ("inclusivo", "Incl. (ms)", "e"),
+    ("loops", "Loops", "e"),
 ]
 
 # Desvío de la estimación de filas (como el "rows x" de pgAdmin y explain.depesz).
@@ -104,15 +104,17 @@ class PanelPlanEjecucion(ttk.Frame):
         self.arbol = ttk.Treeview(frame, columns=[c[0] for c in COLUMNAS], selectmode="browse")
         self.arbol.heading("#0", text="Nodo", anchor="w")
         self.arbol.column("#0", width=300, minwidth=180, stretch=True)
-        for clave, titulo, ancho, alineacion in COLUMNAS:
+        for clave, titulo, alineacion in COLUMNAS:
             self.arbol.heading(clave, text=titulo, anchor=alineacion)
-            self.arbol.column(clave, width=ancho, minwidth=50, anchor=alineacion, stretch=False)
+            self.arbol.column(clave, minwidth=50, anchor=alineacion, stretch=False)
+        self._ajustar_columnas([])
         scroll_y = ttk.Scrollbar(frame, orient="vertical", command=self.arbol.yview)
         scroll_x = ttk.Scrollbar(self.frame_arbol, orient="horizontal", command=self.arbol.xview)
         self.arbol.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
         self.arbol.pack(side="left", fill="both", expand=True)
         scroll_y.pack(side="right", fill="y")
-        scroll_x.pack(fill="x")
+        # Antes que la tabla: con poca altura se recorta ella, no el pie con los tiempos.
+        scroll_x.pack(side="bottom", fill="x", before=frame)
 
         cursiva = tkfont.nametofont("TkDefaultFont").copy()
         cursiva.configure(slant="italic")
@@ -122,7 +124,15 @@ class PanelPlanEjecucion(ttk.Frame):
         self.arbol.tag_configure("alto", background="#f8d7da", foreground="#212529")
 
         self.pie = ttk.Label(self.frame_arbol, anchor="w", justify="left")
-        self.pie.pack(fill="x", pady=(4, 0))
+        self.pie.pack(side="bottom", fill="x", pady=(4, 0), before=scroll_x)
+
+    def _ajustar_columnas(self, valores):
+        """Ancho según el texto: un ancho fijo corta los títulos si la pantalla escala la letra."""
+        fuente = tkfont.nametofont("TkDefaultFont")
+        margen = fuente.measure("000")
+        for i, (clave, titulo, _) in enumerate(COLUMNAS):
+            textos = [titulo, *(str(fila[i]) for fila in valores)]
+            self.arbol.column(clave, width=max(map(fuente.measure, textos)) + margen)
 
     def limpiar(self):
         """Vuelve al texto de ayuda (las consultas normales no muestran plan)."""
@@ -137,7 +147,9 @@ class PanelPlanEjecucion(ttk.Frame):
         self.arbol.delete(*self.arbol.get_children())
 
         padres = {-1: ""}
-        for profundidad, etiqueta, valores, tag, detalles in filas_analisis(nodos):
+        filas = filas_analisis(nodos)
+        self._ajustar_columnas([fila[2] for fila in filas])
+        for profundidad, etiqueta, valores, tag, detalles in filas:
             item = self.arbol.insert(padres[profundidad - 1], tk.END, text=etiqueta, values=valores,
                                      tags=(tag,) if tag else (), open=True)
             padres[profundidad] = item

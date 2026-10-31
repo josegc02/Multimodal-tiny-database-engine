@@ -21,7 +21,8 @@ class Aplicacion(ttk.Window):
         super().__init__(themename="pydata-light")
 
         self.title("MiniGestor de Base de Datos Multimodal")
-        self.geometry("1200x900")
+        # Relativo a la pantalla: en píxeles fijos queda pequeña si el sistema escala la letra.
+        self.geometry(f"{self.winfo_screenwidth() * 9 // 10}x{self.winfo_screenheight() * 85 // 100}")
         self.minsize(900, 600)
 
         # Crear el motor

@@ -149,19 +149,30 @@ class TestTodosLosModelos(DemoDirMixin, unittest.TestCase):
                     self.verificar(storage, index)
 
 
-class TestVentanaTk(DemoDirMixin, unittest.TestCase):
-    """Maneja la ventana real (se omite si no hay pantalla, p. ej. en CI Linux)."""
+class TestVentanaTk(unittest.TestCase):
+    """Maneja la ventana real (se omite si no hay pantalla, p. ej. en CI Linux).
 
-    def setUp(self):
-        self.use_temp_demo_dir()
+    Una sola ventana para toda la clase: ttkbootstrap admite una raíz por proceso.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        demo = tempfile.mkdtemp()
+        cls.addClassCleanup(shutil.rmtree, demo, True)
+        cls.addClassCleanup(setattr, motor_module, "DEMO_DIR", motor_module.DEMO_DIR)
+        motor_module.DEMO_DIR = demo
         import tkinter
         from frontend.main import Aplicacion
         try:
-            self.app = Aplicacion()
+            cls.app = Aplicacion()
         except tkinter.TclError as error:
-            self.skipTest(f"sin pantalla: {error}")
-        self.app.withdraw()
-        self.addCleanup(self.app._on_cerrar)
+            raise unittest.SkipTest(f"sin pantalla: {error}")
+        cls.app.withdraw()
+        cls.addClassCleanup(cls.app._on_cerrar)
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
 
     def ejecutar(self, sql):
         self.app.panel_consultas.set_sql(sql)
@@ -260,13 +271,21 @@ class TestVentanaTk(DemoDirMixin, unittest.TestCase):
             self.assertEqual(str(widget.cget("bg")), fondo)
         self.assertEqual(app.style.lookup("Treeview", "fieldbackground"), app.style.colors.bg)
 
+    def test_columnas_del_plan_no_cortan_sus_titulos(self):
+        from tkinter import font as tkfont
+        self.ejecutar("EXPLAIN ANALYZE SELECT * FROM cuentas;")
+        arbol = self.app.panel_plan.arbol
+        fuente = tkfont.nametofont("TkDefaultFont")
+        for clave in arbol["columns"]:
+            self.assertGreater(arbol.column(clave, "width"), fuente.measure(arbol.heading(clave, "text")))
+
     def test_numeros_a_la_derecha_y_texto_a_la_izquierda(self):
-        tabla = self.ejecutar("CREATE TABLE t (id INT PRIMARY KEY, nombre VARCHAR(5)); "
-                              "INSERT INTO t VALUES (1, 'a');").tree
-        self.ejecutar("SELECT * FROM t;")
-        self.assertEqual(tabla.column("id", "anchor"), "e")
-        self.assertEqual(tabla.heading("id", "anchor"), "e")
-        self.assertEqual(tabla.column("nombre", "anchor"), "w")
+        tabla = self.ejecutar("CREATE TABLE alineada (id INT PRIMARY KEY, nombre VARCHAR(5)); "
+                              "INSERT INTO alineada VALUES (1, 'a');").tree
+        self.ejecutar("SELECT * FROM alineada;")
+        self.assertEqual(str(tabla.column("id", "anchor")), "e")
+        self.assertEqual(str(tabla.heading("id", "anchor")), "e")
+        self.assertEqual(str(tabla.column("nombre", "anchor")), "w")
 
     def test_deshacer_recupera_el_texto_reemplazado(self):
         consultas = self.app.panel_consultas
