@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import unittest
 
 from engine.text import tokens
@@ -125,6 +126,12 @@ class TestPipeline(unittest.TestCase):
 
     def test_ingles(self):
         self.assertEqual(tokens("The houses are running", "en"), ["hous", "run"])
+
+    def test_varios_hilos_obtienen_el_mismo_resultado(self):
+        textos = [f"corriendo canciones computadoras {i}" for i in range(2000)]
+        esperado = [["corr", "cancion", "comput", str(i)] for i in range(2000)]
+        with ThreadPoolExecutor(8) as hilos:
+            self.assertEqual(list(hilos.map(tokens, textos)), esperado)
 
     def test_sin_terminos(self):
         for texto in ("", "de la", "¡¿...?!"):
