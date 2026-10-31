@@ -1,6 +1,6 @@
 import unittest
 
-from engine.text.preprocessing import tokenizar
+from engine.text.preprocessing import quitar_stopwords, quitar_tildes, stopwords, tokenizar
 
 
 class TestTokenizar(unittest.TestCase):
@@ -39,6 +39,42 @@ class TestTokenizar(unittest.TestCase):
         for texto in ("", "   ", "¡¿...?!", "---"):
             with self.subTest(texto=texto):
                 self.assertEqual(tokenizar(texto), [])
+
+
+class TestStopwords(unittest.TestCase):
+    def filtrar(self, texto, idioma="es"):
+        return quitar_stopwords(tokenizar(texto), idioma)
+
+    def test_quita_palabras_funcionales(self):
+        self.assertEqual(self.filtrar("La casa es grande"), ["casa", "grande"])
+        self.assertEqual(self.filtrar("The house is on the hill", "en"), ["house", "hill"])
+
+    def test_conserva_palabras_con_contenido(self):
+        self.assertEqual(self.filtrar("el valor del trabajo"), ["valor", "trabajo"])
+        for palabra in ("trabajo", "tiempo", "valor", "parte", "estados", "lugar", "nuevo", "mejor", "verdad", "tres"):
+            with self.subTest(palabra=palabra):
+                self.assertNotIn(palabra, stopwords("es"))
+
+    def test_compara_sin_tildes_pero_conserva_el_token(self):
+        self.assertEqual(self.filtrar("MÁS mas está esta"), [])
+        self.assertEqual(self.filtrar("la canción"), ["canción"])
+
+    def test_cada_idioma_usa_su_lista(self):
+        self.assertEqual(self.filtrar("the casa"), ["the", "casa"])
+        self.assertEqual(self.filtrar("the casa", "en"), ["casa"])
+        self.assertEqual(self.filtrar("I don't know", "en"), ["know"])
+
+    def test_consulta_de_solo_stopwords_queda_vacia(self):
+        self.assertEqual(self.filtrar("de la"), [])
+
+    def test_idioma_no_soportado(self):
+        with self.assertRaises(ValueError):
+            quitar_stopwords(["casa"], "fr")
+
+    def test_quitar_tildes_conserva_la_enie(self):
+        self.assertEqual(quitar_tildes("canción"), "cancion")
+        self.assertEqual(quitar_tildes("pingüino"), "pinguino")
+        self.assertEqual(quitar_tildes("año"), "año")
 
 
 if __name__ == "__main__":
