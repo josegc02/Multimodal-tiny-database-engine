@@ -139,7 +139,7 @@ print(executor.explain("SELECT * FROM products ORDER BY price"))
 Se pueden registrar índices con `indexes={"id": index}`. El adaptador
 `sql_optimizer.py` conecta el plan SQL con `QueryPlanner`, incorporado desde la
 rama `6-algoritmos-externos-sort-group-by-join`. Compara costos estimados de
-páginas: igualdad mediante índice o scan; join mediante búsquedas en el índice
+E/S y CPU (modelo de `planner.py`): igualdad mediante índice o scan; join mediante búsquedas en el índice
 derecho o external hash join; orden y agrupación mediante un índice ordenado
 compatible o los algoritmos externos. En empates conserva el scan/algoritmo
 externo. `explain()` incluye `physical` con algoritmo, costo y motivo para cada

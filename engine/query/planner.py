@@ -1,8 +1,22 @@
-"""Selección de operadores físicos mediante costos aproximados de páginas.
+"""Selección de operadores físicos mediante un modelo de costos de E/S y CPU.
 
 Estos métodos reciben operaciones estructuradas desde el adaptador SQL.
 Las estadísticas son estimaciones del catálogo, no se obtiene la
 cardinalidad leyendo/materializando una tabla durante la planificación.
+
+El modelo es el de System R y PostgreSQL. La unidad es una lectura secuencial
+de página:
+
+    Seq Scan:   páginas + filas * (cpu_tuple + cpu_operator si hay filtro)
+    Index Scan: descenso + k * cpu_index_tuple + páginas_heap(k) * random_page_cost
+                + k * cpu_tuple
+
+páginas_heap(k) es la fórmula de Cardenas: k filas repartidas al azar en P
+páginas tocan P * (1 - (1 - 1/P)^k) páginas distintas, nunca más de P.
+
+`estimated_io` de Sort, Aggregate y Join es el trabajo propio del operador, sin
+su entrada: EXPLAIN suma la entrada aparte, como PostgreSQL. Al comparar contra
+un recorrido ordenado o un índice sí se considera el costo total de cada ruta.
 """
 
 from __future__ import annotations
@@ -87,6 +101,7 @@ class Plan:
     field: str | None = None
     value: Any = None
     reverse: bool = False
+    limit: int | None = None   # filas que pide el LIMIT, ya incluidas en estimated_io
 
     def explain(self) -> dict:
         result = {
@@ -111,34 +126,56 @@ class Plan:
 
 
 class QueryPlanner:
-    """Compara I/O secuencial con accesos por índice, penalizando lecturas dispersas.
+    """Compara el costo de recorrer con el de los accesos por índice.
 
     Sin estadísticas de valores distintos se asume baja selectividad (un valor).
     Los costos no garantizan el tiempo real ni predicen skew. Un índice hash no
     satisface ORDER BY; GROUP BY puede consumir un recorrido ordenado de un índice.
     En caso de empate se conserva el operador externo/secuencial.
+
+    Las constantes conservan las proporciones de PostgreSQL. Las de CPU son 10
+    veces las suyas (0,01 / 0,005 / 0,0025) porque procesar una fila en Python
+    cuesta mucho más que en C; docs/informe.md muestra la validación con tiempos.
     """
 
-    def __init__(self, config: BufferConfig | None = None, *, random_page_cost: float = 4.0):
+    def __init__(self, config: BufferConfig | None = None, *, random_page_cost: float = 4.0,
+                 cpu_tuple_cost: float = 0.1, cpu_index_tuple_cost: float = 0.05,
+                 cpu_operator_cost: float = 0.025):
         if not math.isfinite(random_page_cost) or random_page_cost < 1:
             raise ValueError("random_page_cost debe ser finito y al menos 1")
+        if not all(math.isfinite(c) and c >= 0 for c in (cpu_tuple_cost, cpu_index_tuple_cost, cpu_operator_cost)):
+            raise ValueError("Los costos de CPU deben ser finitos y no negativos")
         self.config = config or BufferConfig()
         self.random_page_cost = random_page_cost
+        self.cpu_tuple_cost = cpu_tuple_cost
+        self.cpu_index_tuple_cost = cpu_index_tuple_cost
+        self.cpu_operator_cost = cpu_operator_cost
 
     def _plan(self, operation, algorithm, cost, reason, **kwargs):
         return Plan(operation, algorithm, float(cost), reason, self.config, **kwargs)
 
+    def seq_cost(self, stats: TableStats, filtered: bool = False) -> float:
+        per_row = self.cpu_tuple_cost + (self.cpu_operator_cost if filtered else 0.0)
+        return stats.pages + stats.rows * per_row
+
     def _sort_cost(self, stats: TableStats) -> float:
-        runs = max(1, math.ceil(stats.rows / self.config.capacity))
+        """Comparaciones más, si no cabe en el buffer, E/S de runs y mezclas."""
+        comparisons = 2 * self.cpu_operator_cost * stats.rows * math.log2(max(stats.rows, 2))
+        runs = math.ceil(stats.rows / self.config.capacity)
+        if runs <= 1:
+            return comparisons if stats.rows > 1 else 0.0
         passes = 0
         while runs > 1:
             runs = math.ceil(runs / self.config.fan_in)
             passes += 1
-        # Lectura inicial, escritura de runs, mezclas y lectura del run final.
-        return stats.pages * (3 + 2 * passes)
+        # Escritura de runs, mezclas y lectura del run final.
+        return comparisons + stats.pages * (2 + 2 * passes)
 
     def _hash_cost(self, pages: int, build_records: int) -> float:
-        cost = 3 * pages  # Particionar (leer/escribir) y construir/sondear (leer).
+        """E/S de particionar; 0 si el lado de construcción cabe en memoria."""
+        if build_records <= self.config.hash_capacity:
+            return 0.0
+        cost = 2 * pages  # Escribir las particiones y volver a leerlas.
         per_partition = math.ceil(build_records / self.config.fan_in)
         for _ in range(self.config.max_partition_depth):
             if per_partition <= self.config.hash_capacity:
@@ -147,20 +184,45 @@ class QueryPlanner:
             per_partition = math.ceil(per_partition / self.config.fan_in)
         return cost
 
+    @staticmethod
+    def _heap_pages(pages: int, tuples: float) -> float:
+        """Páginas distintas que tocan `tuples` filas al azar (Cardenas)."""
+        return pages * (1 - (1 - 1 / pages) ** tuples) if pages else 0.0
+
     def _fetch_cost(self, stats: TableStats, index: IndexInfo, matches: float) -> float:
         if index.clustered:
-            return min(stats.pages, math.ceil(matches / self.config.records_per_page))
-        return matches * self.random_page_cost
+            io = min(stats.pages, math.ceil(matches / self.config.records_per_page))
+        else:
+            io = self._heap_pages(stats.pages, matches) * self.random_page_cost
+        return io + matches * self.cpu_tuple_cost
+
+    def _entries_cost(self, index: IndexInfo, entries: float) -> float:
+        # En un índice agrupado la hoja es la fila: no hay entrada aparte que procesar.
+        return 0.0 if index.clustered else entries * self.cpu_index_tuple_cost
+
+    def _index_cost(self, stats: TableStats, index: IndexInfo, matches: float) -> float:
+        return (index.lookup_pages + self._entries_cost(index, matches)
+                + self._fetch_cost(stats, index, matches))
+
+    def _ordered_cost(self, stats: TableStats, index: IndexInfo, needed: float) -> float:
+        """Recorrido ordenado: lee todas las entradas y trae solo `needed` filas."""
+        return (index.lookup_pages + self._entries_cost(index, stats.rows)
+                + self._fetch_cost(stats, index, needed))
 
     @staticmethod
     def _matches(stats: TableStats, field: str) -> float:
         return stats.rows / max(1, stats.distinct_values.get(field, 1))
 
     def plan_order_by(self, stats: TableStats, order_by: str | Sequence[str | OrderKey],
-                      indexes: Sequence[IndexInfo] = ()) -> Plan:
+                      indexes: Sequence[IndexInfo] = (), *, limit: int | None = None,
+                      input_cost: float | None = None, selectivity: float = 1.0) -> Plan:
+        """`limit` son las filas de salida necesarias; `selectivity`, la fracción que
+        pasa el WHERE: el recorrido ordenado se detiene tras limit / selectivity filas."""
         order = _order_keys(order_by)
         plan = self._plan("order_by", "external_sort", self._sort_cost(stats),
                           "Runs y mezcla k-way; no hay un recorrido ordenado de menor costo.", order_by=order)
+        best = plan.estimated_io + (self.seq_cost(stats) if input_cost is None else input_cost)
+        needed = stats.rows if limit is None else min(stats.rows, limit / max(selectivity, 1e-9))
         for index in indexes:
             if not index.supports_order or len(order) != 1 or index.field != order[0].field:
                 continue
@@ -168,28 +230,33 @@ class QueryPlanner:
             nulls_first = index.nulls_first_ascending != rule.descending
             if nulls_first != rule.nulls_first:
                 continue
-            cost = index.lookup_pages + self._fetch_cost(stats, index, stats.rows)
-            if cost < plan.estimated_io:
+            cost = self._ordered_cost(stats, index, needed)
+            if cost < best:
+                best = cost
                 plan = self._plan("order_by", "index_order_scan", cost,
-                                  "El índice ofrece el orden y NULLs requeridos con menor I/O.",
-                                  index=index, order_by=order, reverse=rule.descending)
+                                  "El índice ofrece el orden y NULLs requeridos con menor costo.",
+                                  index=index, order_by=order, reverse=rule.descending, limit=limit)
         return plan
 
     def plan_group_by(self, stats: TableStats, group_by: str | Sequence[str],
                       aggregates: Mapping[str, Aggregate] | None = None,
-                      indexes: Sequence[IndexInfo] = ()) -> Plan:
+                      indexes: Sequence[IndexInfo] = (), *, input_cost: float | None = None) -> Plan:
         fields = _fields(group_by, allow_empty=True)
         specs = _aggregates(fields, aggregates)
         groups = min(stats.rows, math.prod(stats.distinct_values.get(f, stats.rows) for f in fields))
-        cost = self._hash_cost(stats.pages, groups) if fields else stats.pages
+        cost = stats.rows * self.cpu_operator_cost
+        if fields:
+            cost += self._hash_cost(stats.pages, groups)
         plan = self._plan("group_by", "external_hash_group_by", cost,
                           "Particiones en disco y agregación acotada; sin recorrido ordenado más barato.",
                           group_by=fields, aggregates=specs)
+        best = cost + (self.seq_cost(stats) if input_cost is None else input_cost)
         for index in indexes:
             if not index.supports_order or fields != (index.field,):
                 continue
-            cost = index.lookup_pages + self._fetch_cost(stats, index, stats.rows)
-            if cost < plan.estimated_io:
+            cost = self._ordered_cost(stats, index, stats.rows)
+            if cost < best:
+                best = cost
                 plan = self._plan("group_by", "index_group_by", cost,
                                   "Claves contiguas del índice permiten acumular un grupo a la vez.",
                                   index=index, group_by=fields, aggregates=specs)
@@ -198,19 +265,23 @@ class QueryPlanner:
     def plan_join(self, left: TableStats, right: TableStats,
                   left_on: str | Sequence[str], right_on: str | Sequence[str],
                   right_indexes: Sequence[IndexInfo] = ()) -> Plan:
+        """Ambos recorren el lado izquierdo; el hash además recorre el derecho."""
         lfields, rfields = _fields(left_on), _fields(right_on)
         if len(lfields) != len(rfields):
             raise ValueError("JOIN requiere igual cantidad de campos en ambos lados")
-        cost = self._hash_cost(left.pages + right.pages, min(left.rows, right.rows))
+        cost = (self._hash_cost(left.pages + right.pages, min(left.rows, right.rows))
+                + (left.rows + right.rows) * self.cpu_operator_cost)
         plan = self._plan("join", "external_hash_join", cost,
                           "Particionar ambas relaciones evita búsquedas aleatorias por cada fila izquierda.",
                           left_on=lfields, right_on=rfields)
+        best = cost + self.seq_cost(right)
         for index in right_indexes:
             if not index.supports_equality or rfields != (index.field,):
                 continue
             matches = self._matches(right, index.field)
-            cost = left.pages + left.rows * (index.lookup_pages + self._fetch_cost(right, index, matches))
-            if cost < plan.estimated_io:
+            cost = left.rows * self._index_cost(right, index, matches)
+            if cost < best:
+                best = cost
                 plan = self._plan("join", "index_nested_loop_join", cost,
                                   "El lado izquierdo reducido hace más barato sondear el índice derecho.",
                                   index=index, left_on=lfields, right_on=rfields)
@@ -220,16 +291,16 @@ class QueryPlanner:
                       indexes: Sequence[IndexInfo] = ()) -> Plan:
         _fields(field)
         _key({field: value}, (field,))
-        plan = self._plan("equality", "sequential_scan", stats.pages,
+        plan = self._plan("equality", "sequential_scan", self.seq_cost(stats, filtered=True),
                           "El scan secuencial cuesta menos o no hay índice de igualdad vigente.",
                           field=field, value=value)
         for index in indexes:
             if value is None or not index.supports_equality or index.field != field:
                 continue
-            cost = index.lookup_pages + self._fetch_cost(stats, index, self._matches(stats, field))
+            cost = self._index_cost(stats, index, self._matches(stats, field))
             if cost < plan.estimated_io:
                 plan = self._plan("equality", "index_scan", cost,
-                                  "La selectividad estimada reduce las lecturas usando el índice.",
+                                  "La selectividad estimada hace más barato usar el índice.",
                                   index=index, field=field, value=value)
         return plan
 
@@ -262,17 +333,17 @@ class QueryPlanner:
         """Predicado lower (<|<=) field (<|<=) upper; None significa sin límite."""
         _fields(field)
         value = (lower, upper, include_lower, include_upper)
-        plan = self._plan("range", "sequential_scan", stats.pages,
+        plan = self._plan("range", "sequential_scan", self.seq_cost(stats, filtered=True),
                           "El rango es poco selectivo o no hay un índice ordenado vigente.",
                           field=field, value=value)
         matches = max(1.0, stats.rows * self._range_fraction(stats, field, lower, upper)) if stats.rows else 0.0
         for index in indexes:
             if not index.supports_range or index.field != field:
                 continue
-            cost = index.lookup_pages + self._fetch_cost(stats, index, matches)
+            cost = self._index_cost(stats, index, matches)
             if cost < plan.estimated_io:
                 plan = self._plan("range", "index_range_scan", cost,
                                   f"Se estiman ~{matches:.0f} filas en el rango: recorrer las hojas "
-                                  "del índice lee menos páginas que el scan completo.",
+                                  "del índice cuesta menos que el scan completo.",
                                   index=index, field=field, value=value)
         return plan

@@ -4,7 +4,9 @@ from unittest.mock import patch
 
 from engine.indexes import ExtendibleHash
 from engine.query import Catalog, SQLExecutor
+from engine.query.explain import PlanExplainer
 from engine.query.external_algorithms import ExecutionStats
+from engine.query.parser import parse
 from engine.query.planner import IndexInfo, TableStats
 from tests.query.test_sql_execution import SQLTestCase
 
@@ -46,7 +48,8 @@ class TestSQLCostOptimizer(SQLTestCase):
         with patch.object(storage, "scan", side_effect=AssertionError("explain no lee datos")):
             selected = next(physical_nodes(executor.explain(sql)))
             self.assertEqual(selected["algorithm"], "index_scan")
-            self.assertEqual(selected["estimated_io"], 5)
+            # Descenso + entrada + una lectura aleatoria + CPU de la fila.
+            self.assertAlmostEqual(selected["estimated_io"], 1 + 0.05 + 4 + 0.1)
             self.assertEqual(list(executor.execute(sql)), [{"id": 2}])
         binding.invalidate_indexes()
         self.assertEqual(next(physical_nodes(executor.explain(sql)))["algorithm"], "sequential_scan")
@@ -82,6 +85,8 @@ class TestSQLCostOptimizer(SQLTestCase):
             "categoria": IndexInfo("category_order", "categoria", index, ordered=True, clustered=True)
         })
         executor = SQLExecutor(catalog, self.config)
+        # Con pocas filas ordenar en memoria es más barato: se simula una tabla grande.
+        binding.statistics = TableStats(1000, 100)
         queries = [
             ("SELECT categoria FROM productos WHERE precio > 10 ORDER BY categoria DESC",
              [{"categoria": "tech"}, {"categoria": "tech"}, {"categoria": "libros"}], "index_order_scan"),
@@ -101,6 +106,51 @@ class TestSQLCostOptimizer(SQLTestCase):
                 result = list(executor.execute(sql))
             self.assertEqual(sorted(result, key=str), sorted(expected, key=str))
         self.assertEqual(list(self.spill.iterdir()), [])
+
+    def scan_costs(self, executor, sql):
+        return [p["estimated_io"] for p in physical_nodes(executor.explain(sql))]
+
+    def ordered_setup(self):
+        storage, _, _ = self.database()
+        index = OrderedIndex()
+        catalog = Catalog()
+        binding = catalog.register_table("productos", storage, {
+            "precio": IndexInfo("productos_precio", "precio", index, ordered=True)
+        })
+        binding.statistics = TableStats(10000, 121, value_bounds={"precio": (1, 5000)})
+        return SQLExecutor(catalog, self.config), index
+
+    def test_limit_makes_the_ordered_index_cheaper_than_sorting(self):
+        executor, _ = self.ordered_setup()
+        algorithms = lambda sql: [p["algorithm"] for p in physical_nodes(executor.explain(sql))]
+        self.assertIn("index_order_scan", algorithms("SELECT id FROM productos ORDER BY precio DESC NULLS FIRST LIMIT 10"))
+        self.assertIn("index_order_scan", algorithms("SELECT id FROM productos ORDER BY precio DESC NULLS FIRST LIMIT 5 OFFSET 5"))
+        # Sin LIMIT hay que traer las 10.000 filas y el costo depende del índice y del sort.
+        unlimited = self.scan_costs(executor, "SELECT id FROM productos ORDER BY precio DESC NULLS FIRST")
+        limited = self.scan_costs(executor, "SELECT id FROM productos ORDER BY precio DESC NULLS FIRST LIMIT 10")
+        self.assertLess(limited[0], unlimited[0])
+
+    def test_limit_stops_reading_records(self):
+        executor, index = self.ordered_setup()
+        storage = executor.catalog.table("productos").storage
+        with patch.object(storage, "get", wraps=storage.get) as get:
+            rows = list(executor.execute("SELECT id FROM productos ORDER BY precio DESC NULLS FIRST LIMIT 1"))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(get.call_count, 1)
+
+    def test_tiny_table_keeps_the_sequential_scan(self):
+        executor, _ = self.ordered_setup()
+        executor.catalog.table("productos").statistics = TableStats(3, 1, value_bounds={"precio": (1, 5000)})
+        for sql in ("SELECT id FROM productos WHERE precio = 10", "SELECT id FROM productos ORDER BY precio"):
+            algorithms = [p["algorithm"] for p in physical_nodes(executor.explain(sql))]
+            self.assertFalse([a for a in algorithms if a.startswith("index")], sql)
+
+    def test_explain_counts_the_table_read_once(self):
+        _, catalog, executor = self.database()
+        stats = catalog.table("productos").statistics
+        plan = executor.planner.plan(parse("SELECT COUNT(*) FROM productos"))
+        root = PlanExplainer(catalog, executor.optimizer).build(plan)
+        self.assertAlmostEqual(root.cost, executor.optimizer.costs.seq_cost(stats) + stats.rows * 0.025)
 
     def test_expressions_fall_back_and_writes_refresh_statistics(self):
         _, catalog, executor = self.database(indexed=True)

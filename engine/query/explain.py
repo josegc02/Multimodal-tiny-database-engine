@@ -8,8 +8,8 @@ de psql:
       ->  Seq Scan on alumnos  (cost=0.00..25.00 rows=333)
             Filter: (nota >= 14)
 
-Los costos son los del modelo de este motor (páginas leídas estimadas), no los
-de PostgreSQL, pero siguen su forma `cost=arranque..total`: el arranque es lo
+Los costos son los del modelo de este motor (planner.py), en lecturas secuenciales
+de página, y siguen la forma de PostgreSQL `cost=arranque..total`: el arranque es lo
 que cuesta entregar la primera fila. Los operadores bloqueantes (Sort,
 HashAggregate, Hash) deben consumir toda su entrada antes de devolver algo, así
 que su arranque es igual a su costo total. Con ANALYZE se agregan los valores
@@ -45,6 +45,7 @@ class PlanNode:
     consumed: tuple = ()               # condiciones ya resueltas por el índice
     is_sort: bool = False
     startup: float = 0.0               # costo hasta entregar la primera fila
+    limited: bool = False              # el costo ya considera que un LIMIT lo detiene
 
 
 def sql_text(expression, qualified=False, names=None):
@@ -127,7 +128,11 @@ class PlanExplainer:
         rows = max(0.0, child.rows - offset)
         if limit is not None:
             rows = min(rows, limit)
-        return PlanNode("Limit", child.cost, rows, children=[child], keys=[id(node)], names=child.names,
+        cost = child.cost
+        if limit is not None and child.rows > 0 and not child.limited:
+            # Como PostgreSQL: un operador no bloqueante se detiene tras limit + offset filas.
+            cost = child.startup + (child.cost - child.startup) * min(1.0, (limit + offset) / child.rows)
+        return PlanNode("Limit", cost, rows, children=[child], keys=[id(node)], names=child.names,
                         startup=child.startup)
 
     def _build_sort(self, node, ordered):
@@ -136,6 +141,7 @@ class PlanExplainer:
             # El índice ya entrega el orden pedido: no hay nodo Sort (como en PostgreSQL).
             built = self._build(node.children[0], ordered=choice)
             built.keys = built.keys + [id(node)]
+            built.limited = choice.limit is not None
             return built
         child = self._build(node.children[0])
         sort_key = ", ".join(self._text(item.expression, child.names) + (" DESC" if item.direction == "DESC" else "")
@@ -221,12 +227,13 @@ class PlanExplainer:
         binding = self.catalog.table(table.name)
         qualifier = table.alias or table.name
         predicate = node.get("predicate")
-        rows = self._scan_rows(binding.statistics, predicate, qualifier)
-        details, consumed = [], ()
+        rows = self.optimizer.scan_rows(binding.statistics, predicate, qualifier)
+        details, consumed, startup = [], (), 0.0
         if ordered is not None:
             label = (f"Index Scan{' Backward' if ordered.reverse else ''} using {ordered.index.name} "
                      f"on {self._table_label(table)}")
             cost = ordered.estimated_io
+            startup = ordered.index.lookup_pages
             rows = binding.statistics.rows if predicate is None else rows
         else:
             choice = self.optimizer.choice(node)
@@ -266,7 +273,7 @@ class PlanExplainer:
                                  if self._is_range_on(term, choice.field, qualifier))
             else:
                 label = f"Seq Scan on {self._table_label(table)}"
-        return PlanNode(label, cost, rows, details, [], [id(node)], consumed=consumed)
+        return PlanNode(label, cost, rows, details, [], [id(node)], consumed=consumed, startup=startup)
 
     def _is_equality(self, term, column, qualifier, value):
         return term in tuple(self._equality_terms(term, column, qualifier, value))
@@ -290,16 +297,6 @@ class PlanExplainer:
                         and self.optimizer._constant(other)[0]:
                     return True
         return False
-
-    def _scan_rows(self, stats, predicate, qualifier):
-        rows = stats.rows
-        if predicate is None or not rows:
-            return float(rows)
-        estimates = [rows / max(1, stats.distinct_values.get(f, 1))
-                     for f, _ in self.optimizer._equalities(predicate, qualifier)]
-        estimates += [rows * self.costs._range_fraction(stats, f, low, high)
-                      for f, (low, high, _, _) in self.optimizer._ranges(predicate, qualifier).items()]
-        return max(1.0, min(estimates) if estimates else rows / 3)
 
     def _build_join(self, node, ordered):
         choice = self.optimizer.choice(node)

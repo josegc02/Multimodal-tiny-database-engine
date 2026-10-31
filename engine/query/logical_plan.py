@@ -255,7 +255,9 @@ class LogicalPlanner:
                 raise SQLSemanticError("ORDER BY con DISTINCT debe referirse a expresiones seleccionadas")
             plan = node("Distinct", plan, expressions=selected)
         if order_by:
-            plan = node("Sort", plan, order_by=tuple(order_by))
+            # El LIMIT va justo encima: un recorrido ordenado puede detenerse antes.
+            needed = None if statement.limit is None else statement.limit + (statement.offset or 0)
+            plan = node("Sort", plan, order_by=tuple(order_by), limit=needed)
         # Top-k espacial solo para una tabla, sin agregación ni DISTINCT y una
         # única clave de orden ASC. Otros casos conservan el sort SQL completo.
         if (statement.limit is not None and len(order_by) == 1 and order_by[0].direction == "ASC"
