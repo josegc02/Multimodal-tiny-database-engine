@@ -5,6 +5,10 @@ forman tres zonas contiguas: diccionario, postings y tabla de documentos. La cab
 guarda dónde empieza y cuántas páginas ocupa cada zona.
 
 Una posting es (doc_id, tf). Las listas se leen de corrido porque ocupan páginas seguidas.
+
+La construcción sigue SPIMI: cada bloque es un hash término -> postings que se ordena y
+se escribe a un archivo temporal al llenarse. Los doc_id crecen, así que las listas
+quedan ordenadas por doc_id dentro de cada bloque y entre bloques.
 """
 
 from __future__ import annotations
@@ -12,9 +16,10 @@ from __future__ import annotations
 import math
 import os
 import struct
-from typing import Iterable, List, Optional, Tuple
+from collections import Counter
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
-from engine.text.preprocessing import IDIOMAS
+from engine.text.preprocessing import IDIOMAS, tokens
 
 PAGE_SIZE = 4096
 MAGIC = b"SPI1"
@@ -23,6 +28,10 @@ MAGIC = b"SPI1"
 # inicio y páginas de: diccionario, postings y documentos
 HEADER = struct.Struct(">4s2sIIIQIIIIIII")
 POSTING = struct.Struct(">II")  # doc_id, tf
+BLOCK_ENTRY = struct.Struct(">BI")  # bytes del término, postings
+
+DEFAULT_BLOCK_SIZE = 8 * 1024 * 1024  # tamaño del bloque en disco; en memoria ocupa más
+MAX_TERM_BYTES = 255  # un token más largo no es una palabra (hashes, base64)
 
 Posting = Tuple[int, int]
 
@@ -42,13 +51,25 @@ def pages_for(size: int) -> int:
     return math.ceil(size / PAGE_SIZE)
 
 
+# Recorre un bloque temporal en orden de término, sin cargarlo completo en memoria.
+def read_block(path: str) -> Iterator[Tuple[str, List[Posting]]]:
+    with open(path, "rb") as f:
+        while header := f.read(BLOCK_ENTRY.size):
+            term_size, count = BLOCK_ENTRY.unpack(header)
+            term = f.read(term_size).decode("utf-8")
+            yield term, decode_postings(f.read(count * POSTING.size))
+
+
 class SpimiIndex:
     """Índice invertido persistente. El idioma se fija al crearlo y queda en la cabecera."""
 
     # Abre el archivo si existe o crea uno vacío. Sin `language` usa el del archivo.
-    def __init__(self, filepath: str, language: Optional[str] = None):
+    def __init__(self, filepath: str, language: Optional[str] = None, *, block_size: int = DEFAULT_BLOCK_SIZE):
         if language is not None and language not in IDIOMAS:
             raise ValueError(f"Idioma no soportado: {language}")
+        if block_size <= 0:
+            raise ValueError("block_size debe ser positivo")
+        self.block_size = block_size
         self.filepath = os.fspath(filepath)
         exists = os.path.exists(self.filepath) and os.path.getsize(self.filepath) > 0
         self._fh = open(self.filepath, "r+b" if exists else "w+b")
@@ -108,6 +129,56 @@ class SpimiIndex:
         self._fh.write(data.ljust(count * PAGE_SIZE, b"\0"))
         self.page_count = max(self.page_count, start + count)
         return count
+
+    # --- Construcción -------------------------------------------------------------
+
+    # SPIMI-INVERT: reparte los documentos en bloques ordenados y devuelve sus rutas.
+    def _build_blocks(self, documents: Iterable[str]) -> List[str]:
+        paths: List[str] = []
+        block: Dict[str, List[Posting]] = {}
+        size = 0
+        doc_id = self.next_doc_id
+        try:
+            for text in documents:
+                for term, tf in Counter(tokens(text, self.language)).items():
+                    encoded = len(term.encode("utf-8"))
+                    if encoded > MAX_TERM_BYTES:
+                        continue
+                    if term not in block:
+                        block[term] = []
+                        size += BLOCK_ENTRY.size + encoded
+                    block[term].append((doc_id, tf))
+                    size += POSTING.size
+                doc_id += 1
+                # Se revisa aquí para que un documento nunca quede partido entre bloques.
+                if size >= self.block_size:
+                    self._write_block(block, paths)
+                    block, size = {}, 0
+            if block:
+                self._write_block(block, paths)
+        except Exception:
+            self._remove_blocks(paths)
+            raise
+        self.next_doc_id = doc_id
+        return paths
+
+    # Ordena el bloque por término y lo escribe en un archivo temporal.
+    def _write_block(self, block: Dict[str, List[Posting]], paths: List[str]) -> None:
+        path = f"{self.filepath}.block{len(paths)}.tmp"
+        paths.append(path)
+        with open(path, "wb") as f:
+            for term in sorted(block):
+                encoded = term.encode("utf-8")
+                f.write(BLOCK_ENTRY.pack(len(encoded), len(block[term])))
+                f.write(encoded)
+                f.write(encode_postings(block[term]))
+
+    # Borra los archivos temporales de los bloques.
+    @staticmethod
+    def _remove_blocks(paths: Iterable[str]) -> None:
+        for path in paths:
+            if os.path.exists(path):
+                os.remove(path)
 
     # --- Ciclo de vida -----------------------------------------------------------
 
