@@ -1,4 +1,5 @@
 from collections import Counter
+import math
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -84,6 +85,44 @@ class TestQueryPlanner(unittest.TestCase):
         self.assertEqual(self.planner.plan_join(TableStats(1, 1), stats, "id", "id", [invalid]).algorithm,
                          "external_hash_join")
 
+    def test_cardenas_never_reads_more_pages_than_the_table_has(self):
+        self.assertEqual(self.planner._heap_pages(0, 10), 0)
+        self.assertAlmostEqual(self.planner._heap_pages(121, 1), 1)
+        self.assertAlmostEqual(self.planner._heap_pages(1, 500), 1)
+        self.assertLess(self.planner._heap_pages(121, 50), 50)
+        self.assertLessEqual(self.planner._heap_pages(121, 1_000_000), 121)
+
+    def test_range_switches_to_sequential_only_when_it_is_not_selective(self):
+        stats = TableStats(10000, 121, value_bounds={"monto": (1, 5000)})
+        index = IndexInfo("pedidos_monto", "monto", SimpleNamespace(range_search=lambda *a, **k: ()), ordered=True)
+        for lower, expected in ((4990, "index_range_scan"), (4950, "index_range_scan"), (4000, "index_range_scan"),
+                                (2500, "index_range_scan"), (1000, "sequential_scan"), (100, "sequential_scan")):
+            with self.subTest(lower=lower):
+                plan = self.planner.plan_range(stats, "monto", lower, None, False, True, [index])
+                self.assertEqual(plan.algorithm, expected)
+
+    def test_a_table_in_one_page_never_prefers_a_secondary_index(self):
+        stats = TableStats(3, 1, {"precio": 3}, {"precio": (50, 2500)})
+        ordered = IndexInfo("productos_precio", "precio", SimpleNamespace(range_search=lambda *a, **k: (),
+                                                                         search=lambda key: ()), ordered=True)
+        self.assertEqual(self.planner.plan_equality(stats, "precio", 150, [ordered]).algorithm, "sequential_scan")
+        self.assertEqual(self.planner.plan_range(stats, "precio", 1000, None, False, True, [ordered]).algorithm,
+                         "sequential_scan")
+
+    def test_limit_and_selectivity_set_how_much_the_ordered_scan_reads(self):
+        stats = TableStats(10000, 121)
+        ordered = IndexInfo("pedidos_monto", "id", OrderedIndexDouble(), ordered=True)
+        keys = [OrderKey("id", descending=True, nulls_first=True)]
+        self.assertEqual(self.planner.plan_order_by(stats, keys, [ordered], limit=10).algorithm, "index_order_scan")
+        few = self.planner.plan_order_by(stats, keys, [ordered], limit=10).estimated_io
+        filtered = self.planner.plan_order_by(stats, keys, [ordered], limit=10, selectivity=0.01).estimated_io
+        self.assertLess(few, filtered)
+
+    def test_sort_in_memory_has_no_disk_cost(self):
+        planner = QueryPlanner(BufferConfig(32, 128))
+        memory = planner.plan_order_by(TableStats(100, 10), "id").estimated_io
+        self.assertAlmostEqual(memory, 2 * 0.025 * 100 * math.log2(100))
+
     def test_explain_cost_changes_with_buffer(self):
         stats = TableStats(5000, 500)
         tiny = self.planner.plan_order_by(stats, "id")
@@ -102,6 +141,8 @@ class TestQueryPlanner(unittest.TestCase):
             TableStats(10, 1, {"id": 20})
         with self.assertRaises(ValueError):
             QueryPlanner(random_page_cost=0)
+        with self.assertRaises(ValueError):
+            QueryPlanner(cpu_tuple_cost=-1)
 
 
 SCHEMA = [("id", "int"), ("k", "int"), ("value", "float")]

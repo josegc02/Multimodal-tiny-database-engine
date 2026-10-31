@@ -1,4 +1,4 @@
-"""Adapta el árbol SQL al planificador físico por costos de páginas."""
+"""Adapta el árbol SQL al planificador físico por costos."""
 
 import math
 
@@ -28,6 +28,17 @@ class SQLOptimizer:
             rows = left.rows * right.rows  # Cota conservadora para joins encadenados.
             return TableStats(rows, math.ceil(rows / self.costs.config.records_per_page))
         return left
+
+    def scan_rows(self, stats, predicate, qualifier):
+        """Filas estimadas tras el WHERE de un Scan."""
+        rows = stats.rows
+        if predicate is None or not rows:
+            return float(rows)
+        estimates = [rows / max(1, stats.distinct_values.get(f, 1))
+                     for f, _ in self._equalities(predicate, qualifier)]
+        estimates += [rows * self.costs._range_fraction(stats, f, low, high)
+                      for f, (low, high, _, _) in self._ranges(predicate, qualifier).items()]
+        return max(1.0, min(estimates) if estimates else rows / 3)
 
     @staticmethod
     def _constant(expression):
@@ -178,7 +189,7 @@ class SQLOptimizer:
                     candidates.append(self.costs.plan_range(binding.statistics, field, lower, upper,
                                                             include_lower, include_upper, indexes))
             return min(candidates, key=lambda p: p.estimated_io) if candidates else self.costs._plan(
-                "scan", "sequential_scan", binding.statistics.pages,
+                "scan", "sequential_scan", self.costs.seq_cost(binding.statistics, predicate is not None),
                 "No hay un predicado de igualdad o rango utilizable por un índice.")
         if plan.operation == "Join":
             right = plan.children[1]
@@ -199,13 +210,21 @@ class SQLOptimizer:
             keys = tuple(OrderKey(i.expression.name if simple else f"$sort{n}", i.direction == "DESC",
                                   i.nulls_first if i.nulls_first is not None else i.direction == "DESC")
                          for n, i in enumerate(items))
-            return self.costs.plan_order_by(self.estimates(source), keys,
-                                            binding.index_info() if simple else ())
+            stats = self.estimates(source)
+            options = {}
+            if scan is not None:
+                table = scan.get("table")
+                estimated = self.scan_rows(stats, scan.get("predicate"), table.alias or table.name)
+                options = dict(input_cost=self.choice(scan).estimated_io,
+                               selectivity=estimated / stats.rows if stats.rows else 1.0)
+            return self.costs.plan_order_by(stats, keys, binding.index_info() if simple else (),
+                                            limit=plan.get("limit"), **options)
         groups = plan.get("group_by")
         simple = scan is not None and not spatial_source and all(isinstance(g, ast.ColumnRef) for g in groups)
         fields = tuple(g.name if simple else f"$group{n}" for n, g in enumerate(groups))
         return self.costs.plan_group_by(self.estimates(source), fields,
-                                        indexes=binding.index_info() if simple else ())
+                                        indexes=binding.index_info() if simple else (),
+                                        input_cost=self.choice(scan).estimated_io if scan else None)
 
     def explain(self, plan):
         result = plan.to_dict()
