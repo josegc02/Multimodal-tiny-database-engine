@@ -85,3 +85,8 @@ def _stem(token: str, idioma: str) -> str:
 def stemizar(tokens: list[str], idioma: str = "es") -> list[str]:
     _validar_idioma(idioma)
     return [_stem(token, idioma) for token in tokens]
+
+
+# Pipeline completo. Documentos y consultas deben pasar por aquí para generar los mismos términos.
+def tokens(texto: str, idioma: str = "es") -> list[str]:
+    return stemizar(quitar_stopwords(tokenizar(texto), idioma), idioma)

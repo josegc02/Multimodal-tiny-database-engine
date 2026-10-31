@@ -1,5 +1,6 @@
 import unittest
 
+from engine.text import tokens
 from engine.text.preprocessing import quitar_stopwords, quitar_tildes, stemizar, stopwords, tokenizar
 
 
@@ -101,6 +102,38 @@ class TestStemizar(unittest.TestCase):
     def test_idioma_no_soportado(self):
         with self.assertRaises(ValueError):
             stemizar(["casa"], "fr")
+
+
+class TestPipeline(unittest.TestCase):
+    def test_frases(self):
+        casos = {
+            "La casa es grande": ["cas", "grand"],
+            "La O.N.U. aprobó 3,14 millones en 2024": ["onu", "aprob", "3.14", "millon", "2024"],
+            "Las canciones del niño": ["cancion", "niñ"],
+        }
+        for texto, esperado in casos.items():
+            with self.subTest(texto=texto):
+                self.assertEqual(tokens(texto), esperado)
+
+    def test_documento_y_consulta_generan_los_mismos_terminos(self):
+        self.assertEqual(tokens("Las CASAS grandes."), tokens("casa grande"))
+        self.assertEqual(tokens("O.N.U."), tokens("ONU"))
+        self.assertEqual(tokens("canción"), tokens("cancion"))
+
+    def test_conserva_palabras_que_no_son_stopwords(self):
+        self.assertEqual(tokens("Estados Unidos"), ["estad", "unid"])
+
+    def test_ingles(self):
+        self.assertEqual(tokens("The houses are running", "en"), ["hous", "run"])
+
+    def test_sin_terminos(self):
+        for texto in ("", "de la", "¡¿...?!"):
+            with self.subTest(texto=texto):
+                self.assertEqual(tokens(texto), [])
+
+    def test_idioma_no_soportado(self):
+        with self.assertRaises(ValueError):
+            tokens("", "fr")
 
 
 if __name__ == "__main__":
