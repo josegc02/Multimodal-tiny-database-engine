@@ -676,3 +676,25 @@ Promedio por consulta con 100.000 puntos; entre paréntesis, la cantidad media d
   * En construcción, la diferencia va de 17 a 42 veces y también crece con N, por Python frente a C y la construcción masiva de GiST.
   * En espacio, el R-Tree es más compacto.
 * **La métrica debe ser la misma en todas las técnicas:** PostGIS usa el elipsoide por defecto, y comparar contra una distancia esférica sin ajustarlo produce resultados distintos cerca del borde del radio.
+
+---
+
+## Búsqueda de texto (Parte 3)
+
+### 6. Preprocesamiento de texto
+
+Documentos y consultas pasan por la misma función, `tokens(texto, idioma)` en `engine/text/preprocessing.py`, para generar los mismos términos. El idioma se elige entre español e inglés. Las etapas, en orden, son:
+
+1. **Tokenización y normalización**: pasa a minúsculas y descarta la puntuación. Las siglas se unen (`O.N.U.` → `onu`), los decimales forman un solo token (`3,14` → `3.14`) y los números se conservan.
+2. **Stopwords**: se eliminan comparando sin tildes.
+3. **Stemming**: usa Snowball, con una caché de raíces porque el vocabulario se repite mucho.
+4. **Tildes**: se quitan al final y se conserva la `ñ`. Deben quitarse después del stemming, porque Snowball usa la tilde para reconocer terminaciones: `corrió` da `corr`, pero `corrio` da `corri`.
+
+**Stopwords.** La lista en español parte de la del laboratorio (608 términos) y conserva 476. Se quitaron 132 con contenido propio o que no aportan a una colección general: sustantivos (`trabajo`, `tiempo`, `valor`), adjetivos (`nuevo`, `mejor`), verbos con significado (`trabajar`, `usar`), verbos típicos de noticias (`afirmó`, `señaló`), números y erratas. Sigue el criterio de Manning, Raghavan y Schütze: partir de los términos frecuentes y filtrarlos a mano según su significado. La lista resultante contiene toda la de Snowball, salvo `estado` y `estados`, que se conservan como términos para no perder búsquedas como "Estados Unidos". La lista en inglés contiene la de Snowball, más `can` y `will`.
+
+**Limitaciones conocidas.**
+
+* Algunas stopwords tienen otro significado: `era` también es sustantivo, por lo que "era digital" solo busca `digital`.
+* Sin tildes, `sería` y `seria` son la misma palabra, así que `seria` también se elimina.
+* Una consulta sin tilde no siempre coincide con el documento en verbos agudos (`corrio` y `corrió`).
+* Snowball no une todas las variantes: `año` y `años` tienen raíces distintas, y el inglés `ran` no se reduce a `run`.
