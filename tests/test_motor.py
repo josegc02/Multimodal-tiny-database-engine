@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -31,6 +32,42 @@ class TestMotorDDL(unittest.TestCase):
 
         result = self.execute("SELECT id, nombre, salario FROM empleados")
         self.assertEqual(result.filas, [(1, "Ana", 100.0)])
+
+    def test_text_column_keeps_documents_larger_than_a_page(self):
+        documento = "base de datos " * 1000
+        for metodo in ("HEAP", "SEQUENTIAL", "BTREE"):
+            with self.subTest(metodo=metodo):
+                tabla = f"docs_{metodo.lower()}"
+                self.execute(f"CREATE TABLE {tabla} (id INT PRIMARY KEY, contenido TEXT) USING {metodo}")
+                self.execute(f"INSERT INTO {tabla} VALUES (1, '{documento}'), (2, 'corto')")
+                result = self.execute(f"SELECT id, contenido FROM {tabla} ORDER BY id")
+                self.assertEqual(result.filas, [(1, documento), (2, "corto")])
+
+    def test_text_is_not_a_reserved_word(self):
+        self.execute("CREATE TABLE notas (text TEXT, id INT)")
+        self.execute("INSERT INTO notas VALUES ('hola', 1)")
+        self.assertEqual(self.execute("SELECT text FROM notas").filas, [("hola",)])
+
+    def test_text_cannot_be_a_key(self):
+        for sql in ("CREATE TABLE a (contenido TEXT PRIMARY KEY)",
+                    "CREATE TABLE b (contenido TEXT, id INT) USING SEQUENTIAL",
+                    "CREATE TABLE padre (id INT PRIMARY KEY); "
+                    "CREATE TABLE c (id INT, contenido TEXT REFERENCES padre)"):
+            with self.subTest(sql=sql):
+                self.assertTrue(self.motor.ejecutar(sql).tiene_error)
+
+    def test_text_column_rejects_other_types(self):
+        self.execute("CREATE TABLE docs (id INT, contenido TEXT)")
+        self.assertTrue(self.motor.ejecutar("INSERT INTO docs VALUES (1, 2)").tiene_error)
+
+    def test_copy_loads_text_columns(self):
+        ruta = os.path.join(self.temp_dir.name, "docs.csv")
+        documento = "texto largo " * 1000
+        with open(ruta, "w", encoding="utf-8") as archivo:
+            archivo.write(f"1,{documento}\n")
+        self.execute("CREATE TABLE docs (id INT, contenido TEXT)")
+        self.execute(f"COPY docs FROM '{ruta}'")
+        self.assertEqual(self.execute("SELECT contenido FROM docs").filas, [(documento,)])
 
     def test_create_table_using_sequential_file(self):
         self.execute("CREATE TABLE empleados_seq (id INT, nombre VARCHAR(20)) USING SEQUENTIAL")

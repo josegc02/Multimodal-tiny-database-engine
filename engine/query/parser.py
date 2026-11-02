@@ -254,10 +254,15 @@ class Parser:
 
     def _column_definition(self):
         name = self._identifier()
-        type_token = self._match("INT", "FLOAT", "STR", "VARCHAR", "POINT")
-        if type_token is None:
-            self._error("Se esperaba INT, FLOAT, STR, VARCHAR o POINT")
-        type_name = "str" if type_token.kind == "VARCHAR" else type_token.kind.lower()
+        # TEXT no es palabra reservada: `text` sigue siendo un nombre de columna válido.
+        if self._peek().kind == "IDENTIFIER" and self._peek().value == "text":
+            self._advance()
+            type_name = "text"
+        else:
+            type_token = self._match("INT", "FLOAT", "STR", "VARCHAR", "POINT")
+            if type_token is None:
+                self._error("Se esperaba INT, FLOAT, STR, VARCHAR, TEXT o POINT")
+            type_name = "str" if type_token.kind == "VARCHAR" else type_token.kind.lower()
         size = None
         if self._match("("):
             size = self._expect("INTEGER").value

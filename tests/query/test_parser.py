@@ -145,7 +145,8 @@ class TestMutationAndScriptParser(unittest.TestCase):
     def test_create_ddl_rejects_invalid_definitions(self):
         invalid = [
             "CREATE TABLE t ()",
-            "CREATE TABLE t (id TEXT)",
+            "CREATE TABLE t (id BLOB)",
+            "CREATE TABLE t (id TEXT(10))",
             "CREATE TABLE t (id INT(8))",
             "CREATE TABLE t (name STR)",
             "CREATE TABLE t (name STR(0))",
