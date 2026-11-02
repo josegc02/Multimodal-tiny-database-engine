@@ -15,16 +15,21 @@ k-way con cola de prioridad une los bloques y basta concatenar las listas de un 
 La tabla de documentos guarda por doc_id su RID, longitud y norma, en registros de tamaño
 fijo. La norma sigue el esquema lnc.ltc: el documento usa 1 + log10(tf), sin idf (clase 07,
 diapositiva 68), así que solo depende del documento y no cambia al modificar la colección.
+
+Para leer, el índice guarda en memoria el primer término de cada página del diccionario:
+ubica la página con búsqueda binaria y solo lee esa página y la lista del término.
 """
 
 from __future__ import annotations
 
+import bisect
 import heapq
 import math
 import os
 import shutil
 import struct
 from collections import Counter
+from dataclasses import dataclass
 from itertools import groupby
 from operator import itemgetter
 from typing import Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple
@@ -58,6 +63,13 @@ class DocumentInfo(NamedTuple):
     rid: RID
     length: int
     norm: float
+
+
+@dataclass
+class SpimiStats:
+    """Lecturas acumuladas, para EXPLAIN y los benchmarks. Se reinician con reset_stats()."""
+    pages_read: int = 0
+    postings_read: int = 0
 
 
 # Convierte una lista de postings en bytes para escribirla en disco.
@@ -116,6 +128,8 @@ class SpimiIndex:
         if block_size <= 0:
             raise ValueError("block_size debe ser positivo")
         self.block_size = block_size
+        self.stats = SpimiStats()
+        self._dictionary_index: Optional[List[str]] = None
         self.filepath = os.fspath(filepath)
         exists = os.path.exists(self.filepath) and os.path.getsize(self.filepath) > 0
         self._fh = open(self.filepath, "r+b" if exists else "w+b")
@@ -161,10 +175,12 @@ class SpimiIndex:
         self.dictionary_start = self.dictionary_pages = 0
         self.postings_start = self.postings_pages = 0
         self.documents_start = self.documents_pages = 0
+        self._dictionary_index = None
         self._write_header()
 
     # Lee `count` páginas seguidas con una sola operación de disco.
     def _read_pages(self, start: int, count: int = 1) -> bytes:
+        self.stats.pages_read += count
         self._fh.seek(start * PAGE_SIZE)
         return self._fh.read(count * PAGE_SIZE)
 
@@ -205,13 +221,10 @@ class SpimiIndex:
                 for text, rid in documents:
                     length = 0
                     squares = 0.0
-                    for term, tf in Counter(tokens(text, self.language)).items():
-                        encoded = len(term.encode("utf-8"))
-                        if encoded > MAX_TERM_BYTES:
-                            continue
+                    for term, tf in self.analyze(text).items():
                         if term not in block:
                             block[term] = []
-                            size += BLOCK_ENTRY.size + encoded
+                            size += BLOCK_ENTRY.size + len(term.encode("utf-8"))
                         block[term].append((doc_id, tf))
                         size += POSTING.size
                         length += tf
@@ -283,6 +296,7 @@ class SpimiIndex:
                 dictionary.seek(0)
                 shutil.copyfileobj(dictionary, self._fh)
                 self.page_count = self.dictionary_start + self.dictionary_pages
+                self._dictionary_index = None
         finally:
             for reader in readers:
                 reader.close()
@@ -305,6 +319,57 @@ class SpimiIndex:
         for path in paths:
             if os.path.exists(path):
                 os.remove(path)
+
+    # --- Lectura ------------------------------------------------------------------
+
+    # Pasa un texto por el mismo pipeline de los documentos y devuelve término -> tf.
+    def analyze(self, text: Optional[str]) -> Dict[str, int]:
+        return {term: tf for term, tf in Counter(tokens(text or "", self.language)).items()
+                if len(term.encode("utf-8")) <= MAX_TERM_BYTES}
+
+    # Primer término de cada página del diccionario; se carga en la primera búsqueda.
+    def _first_terms(self) -> List[str]:
+        if self._dictionary_index is None:
+            self._dictionary_index = [decode_dictionary_page(self._read_pages(self.dictionary_start + page))[0][0]
+                                      for page in range(self.dictionary_pages)]
+        return self._dictionary_index
+
+    # Busca un término ya preprocesado y devuelve su df y su inicio, o None si no existe.
+    def _lookup(self, term: str) -> Optional[Tuple[int, int]]:
+        page = bisect.bisect_right(self._first_terms(), term) - 1
+        if page < 0:
+            return None
+        for candidate, df, start in decode_dictionary_page(self._read_pages(self.dictionary_start + page)):
+            if candidate == term:
+                return df, start
+        return None
+
+    # Lee una lista de corrido, aunque cruce varias páginas.
+    def _read_postings(self, df: int, start: int) -> List[Posting]:
+        size = df * POSTING.size
+        first, offset = divmod(start, PAGE_SIZE)
+        data = self._read_pages(self.postings_start + first, pages_for(offset + size))
+        self.stats.postings_read += df
+        return decode_postings(data[offset:offset + size])
+
+    # Número de documentos que contienen un término ya preprocesado.
+    def df(self, term: str) -> int:
+        entry = self._lookup(term)
+        return entry[0] if entry else 0
+
+    # Lista de (doc_id, tf) de un término ya preprocesado, ordenada por doc_id.
+    def postings(self, term: str) -> List[Posting]:
+        entry = self._lookup(term)
+        return self._read_postings(*entry) if entry else []
+
+    # Recorre el diccionario en orden: (término, df, inicio).
+    def terms(self) -> Iterator[Tuple[str, int, int]]:
+        for page in range(self.dictionary_pages):
+            yield from decode_dictionary_page(self._read_pages(self.dictionary_start + page))
+
+    # Pone en cero los contadores de lecturas.
+    def reset_stats(self) -> None:
+        self.stats = SpimiStats()
 
     # --- Documentos ---------------------------------------------------------------
 

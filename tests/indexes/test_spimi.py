@@ -380,5 +380,96 @@ class TestDocumentos(SpimiTestCase):
         self.assertEqual(os.listdir(self.dir), [os.path.basename(self.path)])
 
 
+class TestLectura(SpimiTestCase):
+    def open(self, documentos):
+        with SpimiIndex(self.path) as index:
+            index.build(con_rid(documentos))
+        index = SpimiIndex(self.path)
+        self.addCleanup(index.close)
+        return index
+
+    def test_postings_y_df(self):
+        index = self.open(["casa grande", "casa casa bonita", "gato"])
+        self.assertEqual(index.postings("cas"), [(0, 1), (1, 2)])
+        self.assertEqual(index.df("cas"), 2)
+        self.assertEqual(index.df("gat"), 1)
+
+    def test_termino_inexistente(self):
+        index = self.open(["casa grande"])
+        for termino in ("aaa", "cat", "zzz"):  # antes, entre y después de los términos
+            with self.subTest(termino=termino):
+                self.assertEqual(index.postings(termino), [])
+                self.assertEqual(index.df(termino), 0)
+
+    def test_indice_vacio(self):
+        index = self.open([])
+        self.assertEqual(index.postings("cas"), [])
+        self.assertEqual(list(index.terms()), [])
+
+    def test_analyze_usa_el_pipeline_de_los_documentos(self):
+        index = self.open(["las casas grandes"])
+        self.assertEqual(index.analyze("La CASA y las casas"), {"cas": 2})
+        self.assertEqual(index.analyze(None), {})
+        self.assertEqual(index.postings("cas"), [(0, 1)])
+
+    def test_listas_que_cruzan_paginas(self):
+        # Antes de "zorro" hay muchas listas, así que empieza a mitad de página.
+        documentos = [f"palabra{i} zorro" for i in range(600)]
+        index = self.open(documentos)
+        self.assertEqual(index.postings("zorr"), [(i, 1) for i in range(600)])
+
+    def test_diccionario_de_varias_paginas(self):
+        terminos = {f"{i:04d}{'x' * 200}": [(i, 1)] for i in range(300)}
+        with SpimiIndex(self.path) as index:
+            paths = []
+            index._write_block(terminos, paths)
+            index._merge_blocks(paths)
+            index._remove_blocks(paths)
+            self.assertGreater(index.dictionary_pages, 1)
+            for term, postings in terminos.items():
+                self.assertEqual(index.postings(term), postings)
+
+    def test_interseccion_de_la_clase(self):
+        # Clase 07, diapositiva 78: Bruto AND Cesar = 2, 8.
+        with SpimiIndex(self.path) as index:
+            paths = []
+            index._write_block({"bruto": [(d, 1) for d in (2, 4, 8, 16, 32, 64, 128)],
+                                "cesar": [(d, 1) for d in (1, 2, 3, 5, 8, 13, 21, 34)]}, paths)
+            index._merge_blocks(paths)
+            index._remove_blocks(paths)
+            bruto, cesar = ({d for d, _ in index.postings(t)} for t in ("bruto", "cesar"))
+            self.assertEqual(sorted(bruto & cesar), [2, 8])
+
+    def test_terms_recorre_en_orden(self):
+        index = self.open(["casa grande", "gato"])
+        self.assertEqual([(t, df) for t, df, _ in index.terms()], [("cas", 1), ("gat", 1), ("grand", 1)])
+
+    def test_cuenta_lecturas(self):
+        index = self.open([f"palabra{i}" for i in range(100)] + ["casa"] * 50)
+        index.postings("cas")  # carga el índice del diccionario
+        index.reset_stats()
+        index.postings("cas")
+        self.assertEqual(index.stats.postings_read, 50)
+        self.assertEqual(index.stats.pages_read, 2)  # diccionario + lista
+
+    def test_abrir_no_reconstruye(self):
+        self.open(["casa"])
+        with patch.object(SpimiIndex, "_build_blocks", side_effect=AssertionError("no debe reconstruir")):
+            with SpimiIndex(self.path) as index:
+                self.assertEqual(index.postings("cas"), [(0, 1)])
+
+    def test_abrir_no_lee_el_diccionario(self):
+        self.open(["casa"])
+        with SpimiIndex(self.path) as index:
+            self.assertEqual(index.stats.pages_read, 0)
+
+    def test_reconstruir_actualiza_el_indice_del_diccionario(self):
+        with SpimiIndex(self.path) as index:
+            index.build(con_rid(["casa"]))
+            self.assertEqual(index.df("cas"), 1)
+            index.build(con_rid(["gato"]))
+            self.assertEqual((index.df("cas"), index.df("gat")), (0, 1))
+
+
 if __name__ == "__main__":
     unittest.main()
