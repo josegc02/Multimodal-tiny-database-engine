@@ -3,6 +3,7 @@ import shutil
 import tempfile
 import unittest
 
+import frontend.csv_sql as csv_sql
 import frontend.motor as motor_module
 from frontend.csv_sql import sql_para_csv
 
@@ -51,6 +52,12 @@ class TestSqlParaCsv(unittest.TestCase):
         resultado = motor.ejecutar(sql_para_csv(path, set(motor.catalog.tables)))
         self.assertFalse(resultado.tiene_error, resultado.error)
         self.assertEqual(sorted(resultado.filas), [(1, "Silla", 45.5), (2, "Mesa", 120.0), (3, "Lámpara", 30.0)])
+
+
+class TestLongTextColumns(unittest.TestCase):
+    def test_long_values_become_text(self):
+        self.assertEqual(csv_sql._tipo(["x" * 255]), "VARCHAR(260)")
+        self.assertEqual(csv_sql._tipo(["corto", "x" * 256]), "TEXT")
 
 
 if __name__ == "__main__":

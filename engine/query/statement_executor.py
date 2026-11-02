@@ -319,7 +319,7 @@ class StatementExecutor:
 
     @staticmethod
     def _csv_value(text, kind, column, table, line):
-        if kind == "str":
+        if kind in ("str", "text"):
             return text
         value = text.strip()
         if not value:

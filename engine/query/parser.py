@@ -10,12 +10,13 @@ from dataclasses import fields, replace
 from engine.query.ast import (
     AggregateCall, Between, BinaryOp, ColumnDefinition, ColumnRef, CopyStatement,
     CreateIndexStatement, CreateTableStatement, DeleteStatement, ExplainStatement, ForeignKeyDefinition, InList,
-    InsertStatement, IsNull, Join, Literal, OrderByItem, SelectItem,
+    InsertStatement, IsNull, Join, Literal, MatchCall, OrderByItem, ScoreCall, SelectItem,
     SelectStatement, SpatialCall, Star, Statement, TableRef, TransactionStatement, UnaryOp, Node,
 )
 from engine.query.errors import SQLParseError
 from engine.query.lexer import tokenize
 from engine.spatial.geometry import Point, Polygon
+from engine.text.preprocessing import IDIOMAS
 
 AGGREGATES = {"COUNT", "SUM", "AVG", "MIN", "MAX"}
 COMPARISONS = {"=", "!=", "<>", "<", "<=", ">", ">="}
@@ -254,10 +255,15 @@ class Parser:
 
     def _column_definition(self):
         name = self._identifier()
-        type_token = self._match("INT", "FLOAT", "STR", "VARCHAR", "POINT")
-        if type_token is None:
-            self._error("Se esperaba INT, FLOAT, STR, VARCHAR o POINT")
-        type_name = "str" if type_token.kind == "VARCHAR" else type_token.kind.lower()
+        # TEXT no es palabra reservada: `text` sigue siendo un nombre de columna válido.
+        if self._peek().kind == "IDENTIFIER" and self._peek().value == "text":
+            self._advance()
+            type_name = "text"
+        else:
+            type_token = self._match("INT", "FLOAT", "STR", "VARCHAR", "POINT")
+            if type_token is None:
+                self._error("Se esperaba INT, FLOAT, STR, VARCHAR, TEXT o POINT")
+            type_name = "str" if type_token.kind == "VARCHAR" else type_token.kind.lower()
         size = None
         if self._match("("):
             size = self._expect("INTEGER").value
@@ -287,13 +293,34 @@ class Parser:
         if method is None:
             self._expect("USING")
             method = self._index_method()
-        return CreateIndexStatement(name, table, column, method)
+        language = self._index_language() if self._peek().kind == "WITH" else None
+        if language is not None and method != "spimi":
+            self._error("LANGUAGE solo aplica a índices SPIMI")
+        return CreateIndexStatement(name, table, column, method, language)
 
     def _index_method(self):
+        # SPIMI no es palabra reservada, igual que TEXT.
+        if self._peek().kind == "IDENTIFIER" and self._peek().value == "spimi":
+            self._advance()
+            return "spimi"
         token = self._match("HASH", "BTREE", "RTREE")
         if token is None:
-            self._error("USING requiere HASH, BTREE o RTREE")
+            self._error("USING requiere HASH, BTREE, RTREE o SPIMI")
         return token.kind.lower()
+
+    # Lee WITH (LANGUAGE = 'es') y devuelve el idioma.
+    def _index_language(self):
+        self._expect("WITH")
+        self._expect("(")
+        if self._peek().kind != "IDENTIFIER" or self._peek().value != "language":
+            self._error("Se esperaba LANGUAGE")
+        self._advance()
+        self._expect("=")
+        language = self._expect("STRING").value.lower()
+        if language not in IDIOMAS:
+            self._error("LANGUAGE debe ser 'es' o 'en'")
+        self._expect(")")
+        return language
 
     def _comma_list(self, parse_item):
         result = [parse_item()]
@@ -461,6 +488,29 @@ class Parser:
             self._expect(")")
         return SpatialCall(function, (left, right), metric)
 
+    # Lee MATCH(columna, 'consulta') USING TF_IDF | BM25.
+    def _match_call(self):
+        self._advance()
+        self._expect("(")
+        with self._nested():
+            name = self._identifier()
+            column = ColumnRef(self._identifier(), name) if self._match(".") else ColumnRef(name)
+            self._expect(",")
+            query = self._expect("STRING").value
+            self._expect(")")
+        token = self._peek(1)
+        if not self._match("USING") or token.kind != "IDENTIFIER" or token.value not in ("tf_idf", "bm25"):
+            self._error("MATCH requiere USING TF_IDF o USING BM25")
+        self._advance()
+        return MatchCall(column, query, token.value)
+
+    # Lee SCORE().
+    def _score_call(self):
+        self._advance()
+        self._expect("(")
+        self._expect(")")
+        return ScoreCall()
+
     def _delete(self):
         self._expect("FROM")
         table = self._table()
@@ -549,6 +599,12 @@ class Parser:
             return self._literal()
         if self._peek().kind in AGGREGATES:
             return self._aggregate()
+        # MATCH y SCORE solo son funciones antes de "(": siguen siendo nombres de columna válidos.
+        if self._peek().kind == "IDENTIFIER" and self._peek(1).kind == "(":
+            if self._peek().value == "match":
+                return self._match_call()
+            if self._peek().value == "score":
+                return self._score_call()
         if self._peek().kind == "IDENTIFIER":
             first = self._identifier()
             if self._match("."):

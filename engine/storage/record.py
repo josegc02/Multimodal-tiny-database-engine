@@ -10,6 +10,7 @@ _TYPE_FORMATS = {
     "int": "q",     # 8 bytes, entero con signo
     "float": "d",   # 8 bytes, double
 }
+TEXT_REFERENCE = struct.Struct(">qi")  # posición y largo del texto en su TextStore
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,7 @@ class Schema:
         self.fields: List[str] = []
         self.types: List[str] = []
         self.sizes: List[int] = []
+        self.text_stores: Dict[str, Any] = {}
         fmt_parts = [">"]
 
         for entry in schema_def:
@@ -44,6 +46,10 @@ class Schema:
             elif ftype == "point":
                 fmt_parts.append("16s")
                 self.sizes.append(16)
+            elif ftype == "text":
+                self.text_stores[name] = entry[2]
+                fmt_parts.append(f"{TEXT_REFERENCE.size}s")
+                self.sizes.append(TEXT_REFERENCE.size)
             else:
                 raise ValueError(f"Tipo no soportado: {ftype}")
 
@@ -72,6 +78,8 @@ class Schema:
                 if not isinstance(value, Point):
                     raise ValueError(f"El campo {name!r} requiere POINT")
                 values.append(struct.pack(">dd", value.lat, value.lon))
+            elif ftype == "text":
+                values.append(TEXT_REFERENCE.pack(*self.text_stores[name].put(str(value))))
         return struct.pack(self.struct_format, *values)
 
     def deserialize(self, data: bytes) -> Dict[str, Any]:
@@ -82,6 +90,8 @@ class Schema:
                 record[name] = raw.rstrip(b"\x00").decode("utf-8")
             elif ftype == "point":
                 record[name] = Point(*struct.unpack(">dd", raw))
+            elif ftype == "text":
+                record[name] = self.text_stores[name].get(*TEXT_REFERENCE.unpack(raw))
             else:
                 record[name] = raw
         return record

@@ -6,7 +6,7 @@ from engine.query import Parser, SQLLexError, SQLParseError, parse, parse_script
 from engine.query.ast import (
     AggregateCall, Between, BinaryOp, ColumnDefinition, ColumnRef,
     CreateIndexStatement, CreateTableStatement, DeleteStatement, InList,
-    InsertStatement, IsNull, Literal, SelectItem, SelectStatement, Star,
+    InsertStatement, IsNull, Literal, MatchCall, ScoreCall, SelectItem, SelectStatement, Star,
     TableRef, TransactionStatement, UnaryOp,
 )
 
@@ -142,10 +142,50 @@ class TestMutationAndScriptParser(unittest.TestCase):
         self.assertEqual(parse("CREATE INDEX idx_id ON accounts USING HASH (id)"), expected)
         self.assertEqual(parse("CREATE INDEX idx_id ON accounts (id) USING BTREE").method, "btree")
 
+    def test_match_with_ranking(self):
+        where = parse("SELECT * FROM docs WHERE MATCH(contenido, 'base de datos') USING TF_IDF LIMIT 10")
+        self.assertEqual(where.where, MatchCall(ColumnRef("contenido"), "base de datos", "tf_idf"))
+        self.assertEqual(where.limit, 10)
+        qualified = parse("SELECT * FROM docs d WHERE match(d.contenido, 'x') using bm25 AND d.id > 1")
+        self.assertEqual(qualified.where.left, MatchCall(ColumnRef("contenido", "d"), "x", "bm25"))
+
+    def test_score_with_alias_and_order(self):
+        statement = parse("SELECT *, SCORE() as relevancia FROM articulos "
+                          "WHERE MATCH(texto, 'machine learning') USING BM25 ORDER BY relevancia DESC")
+        self.assertEqual(statement.columns[1], SelectItem(ScoreCall(), "relevancia"))
+        self.assertEqual(statement.order_by[0].direction, "DESC")
+
+    def test_match_and_score_are_not_reserved_words(self):
+        statement = parse("SELECT match, score, tf_idf FROM t WHERE score > 1")
+        self.assertEqual([item.expression for item in statement.columns],
+                         [ColumnRef("match"), ColumnRef("score"), ColumnRef("tf_idf")])
+
+    def test_match_rejects_invalid_calls(self):
+        for sql in ("SELECT * FROM t WHERE MATCH(a, 'x')",
+                    "SELECT * FROM t WHERE MATCH(a, 'x') USING COSENO",
+                    "SELECT * FROM t WHERE MATCH(a, 'x') USING HAVERSINE",
+                    "SELECT * FROM t WHERE MATCH(a) USING BM25",
+                    "SELECT * FROM t WHERE MATCH(a, 1) USING BM25",
+                    "SELECT * FROM t WHERE MATCH('x', a) USING BM25",
+                    "SELECT SCORE(1) FROM t"):
+            with self.subTest(sql=sql), self.assertRaises(SQLParseError):
+                parse(sql)
+
+    def test_create_index_using_spimi(self):
+        for sql in ("CREATE INDEX i ON t USING SPIMI (a)", "CREATE INDEX i ON t (a) USING spimi"):
+            with self.subTest(sql=sql):
+                statement = parse(sql)
+                self.assertEqual((statement.method, statement.language), ("spimi", None))
+        for sql in ("CREATE INDEX i ON t USING SPIMI (a) WITH (LANGUAGE = 'en')",
+                    "CREATE INDEX i ON t (a) USING SPIMI WITH (language = 'EN')"):
+            with self.subTest(sql=sql):
+                self.assertEqual(parse(sql).language, "en")
+
     def test_create_ddl_rejects_invalid_definitions(self):
         invalid = [
             "CREATE TABLE t ()",
-            "CREATE TABLE t (id TEXT)",
+            "CREATE TABLE t (id BLOB)",
+            "CREATE TABLE t (id TEXT(10))",
             "CREATE TABLE t (id INT(8))",
             "CREATE TABLE t (name STR)",
             "CREATE TABLE t (name STR(0))",
@@ -153,6 +193,10 @@ class TestMutationAndScriptParser(unittest.TestCase):
             "CREATE INDEX i ON t (a) USING HASH,",
             "CREATE INDEX i ON t USING BTREE (a,b)",
             "CREATE INDEX i ON t (a) USING TREE",
+            "CREATE INDEX i ON t (a) USING HASH WITH (LANGUAGE = 'es')",
+            "CREATE INDEX i ON t (a) USING SPIMI WITH (LANGUAGE = 'fr')",
+            "CREATE INDEX i ON t (a) USING SPIMI WITH (IDIOMA = 'es')",
+            "CREATE INDEX i ON t (a) USING SPIMI WITH (LANGUAGE = 1)",
         ]
         for sql in invalid:
             with self.subTest(sql=sql), self.assertRaises(SQLParseError):

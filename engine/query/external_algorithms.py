@@ -74,6 +74,7 @@ class ExecutionStats:
     # EXPLAIN ANALYZE: {id(nodo del plan): {"rows", "first", "total"}}; None = sin medir.
     profile: dict | None = None
     spatial: dict = field(default_factory=dict)  # id(Scan) -> contadores de consultas espaciales
+    text: dict = field(default_factory=dict)  # id(Scan) -> contadores de búsquedas de texto
 
 
 @dataclass(frozen=True)

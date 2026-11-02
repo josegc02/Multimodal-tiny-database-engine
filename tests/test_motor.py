@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -31,6 +32,93 @@ class TestMotorDDL(unittest.TestCase):
 
         result = self.execute("SELECT id, nombre, salario FROM empleados")
         self.assertEqual(result.filas, [(1, "Ana", 100.0)])
+
+    def test_text_column_keeps_documents_larger_than_a_page(self):
+        documento = "base de datos " * 1000
+        for metodo in ("HEAP", "SEQUENTIAL", "BTREE"):
+            with self.subTest(metodo=metodo):
+                tabla = f"docs_{metodo.lower()}"
+                self.execute(f"CREATE TABLE {tabla} (id INT PRIMARY KEY, contenido TEXT) USING {metodo}")
+                self.execute(f"INSERT INTO {tabla} VALUES (1, '{documento}'), (2, 'corto')")
+                result = self.execute(f"SELECT id, contenido FROM {tabla} ORDER BY id")
+                self.assertEqual(result.filas, [(1, documento), (2, "corto")])
+
+    def test_text_is_not_a_reserved_word(self):
+        self.execute("CREATE TABLE notas (text TEXT, id INT)")
+        self.execute("INSERT INTO notas VALUES ('hola', 1)")
+        self.assertEqual(self.execute("SELECT text FROM notas").filas, [("hola",)])
+
+    def test_text_cannot_be_a_key(self):
+        for sql in ("CREATE TABLE a (contenido TEXT PRIMARY KEY)",
+                    "CREATE TABLE b (contenido TEXT, id INT) USING SEQUENTIAL",
+                    "CREATE TABLE padre (id INT PRIMARY KEY); "
+                    "CREATE TABLE c (id INT, contenido TEXT REFERENCES padre)"):
+            with self.subTest(sql=sql):
+                self.assertTrue(self.motor.ejecutar(sql).tiene_error)
+
+    def test_text_column_rejects_other_types(self):
+        self.execute("CREATE TABLE docs (id INT, contenido TEXT)")
+        self.assertTrue(self.motor.ejecutar("INSERT INTO docs VALUES (1, 2)").tiene_error)
+
+    def test_copy_loads_text_columns(self):
+        ruta = os.path.join(self.temp_dir.name, "docs.csv")
+        documento = "texto largo " * 1000
+        with open(ruta, "w", encoding="utf-8") as archivo:
+            archivo.write(f"1,{documento}\n")
+        self.execute("CREATE TABLE docs (id INT, contenido TEXT)")
+        self.execute(f"COPY docs FROM '{ruta}'")
+        self.assertEqual(self.execute("SELECT contenido FROM docs").filas, [(documento,)])
+
+    def text_index(self, method="HEAP", options=""):
+        self.execute(f"CREATE TABLE docs (id INT PRIMARY KEY, contenido TEXT) USING {method}")
+        self.execute("INSERT INTO docs VALUES (1, 'gatos negros'), (2, 'perros blancos')")
+        self.execute(f"CREATE INDEX docs_contenido ON docs (contenido) USING SPIMI {options}")
+        return self.motor.catalog.table("docs").indexes["contenido"]
+
+    def test_spimi_index_loads_the_rows_of_the_table(self):
+        registered = self.text_index()
+        self.assertTrue(registered.metadata.text)
+        self.assertEqual(registered.index.doc_count, 2)
+        self.assertEqual(registered.index.language, "es")
+        self.assertEqual(len(registered.index.search("gato")), 1)
+
+    def test_spimi_index_follows_inserts_and_deletes(self):
+        for method in ("HEAP", "SEQUENTIAL", "BTREE"):
+            with self.subTest(method=method):
+                index = self.text_index(method).index
+                self.execute("INSERT INTO docs VALUES (3, 'gato pardo')")
+                self.assertEqual(len(index.search("gato")), 2)
+                self.execute("DELETE FROM docs WHERE id = 1")
+                self.assertEqual(len(index.search("gato")), 1)
+                self.assertEqual(index.doc_count, 2)
+                self.motor.cerrar()
+                self.motor = Motor()
+
+    def test_spimi_index_accepts_a_language(self):
+        self.assertEqual(self.text_index(options="WITH (LANGUAGE = 'en')").index.language, "en")
+
+    def test_spimi_index_on_varchar(self):
+        self.execute("CREATE TABLE notas (id INT, titulo VARCHAR(50))")
+        self.execute("INSERT INTO notas VALUES (1, 'gatos negros')")
+        self.execute("CREATE INDEX i ON notas (titulo) USING SPIMI")
+        self.assertEqual(len(self.motor.catalog.table("notas").indexes["titulo"].index.search("gato")), 1)
+
+    def test_spimi_index_and_text_only_go_together(self):
+        self.execute("CREATE TABLE docs (id INT, contenido TEXT)")
+        for sql in ("CREATE INDEX i ON docs (id) USING SPIMI", "CREATE INDEX i ON docs (contenido) USING HASH",
+                    "CREATE INDEX i ON docs (contenido) USING BTREE", "CREATE INDEX i ON docs (contenido) USING RTREE"):
+            with self.subTest(sql=sql):
+                self.assertTrue(self.motor.ejecutar(sql).tiene_error)
+
+    def test_a_new_session_removes_text_and_spimi_files(self):
+        self.text_index()
+        self.execute("INSERT INTO docs VALUES (3, 'gato pardo')")
+        self.assertTrue({"docs.text", "docs_docs_contenido.spimi", "docs_docs_contenido.spimi.delta"}
+                        <= set(os.listdir(self.temp_dir.name)))
+        self.motor.cerrar()
+        self.motor = Motor()
+        self.assertFalse({"docs.text", "docs_docs_contenido.spimi", "docs_docs_contenido.spimi.delta"}
+                         & set(os.listdir(self.temp_dir.name)))
 
     def test_create_table_using_sequential_file(self):
         self.execute("CREATE TABLE empleados_seq (id INT, nombre VARCHAR(20)) USING SEQUENTIAL")

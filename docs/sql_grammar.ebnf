@@ -13,7 +13,7 @@ create_table = "CREATE", "TABLE", identifier, "(", table_element,
                {",", table_element}, ")", ["USING", ("HEAP" | "SEQUENTIAL" | "BTREE")] ;
 table_element = column_definition | "PRIMARY", "KEY", "(", identifier, ")"
               | "FOREIGN", "KEY", "(", identifier, ")", references ;
-column_definition = (identifier, ("INT" | "FLOAT" | "POINT")
+column_definition = (identifier, ("INT" | "FLOAT" | "POINT" | "TEXT")
                   | identifier, ("STR" | "VARCHAR"), "(", integer, ")"), ["PRIMARY", "KEY"], [references] ;
 references = "REFERENCES", identifier, ["(", identifier, ")"],
              ["ON", "DELETE", ("RESTRICT" | "CASCADE" | "NO", "ACTION")] ;
@@ -26,8 +26,9 @@ copy_option = "FORMAT", "csv" | "CSV" | "HEADER", ["TRUE" | "FALSE"]
 
 explain = "EXPLAIN", ["ANALYZE"], (select | insert | delete) ;
 create_index = "CREATE", "INDEX", identifier, "ON", identifier,
-               (["USING", index_method], "(", identifier, ")", ["USING", index_method]) ;
-index_method = "HASH" | "BTREE" | "RTREE" ;
+               (["USING", index_method], "(", identifier, ")", ["USING", index_method]),
+               ["WITH", "(", "LANGUAGE", "=", string, ")"] ;
+index_method = "HASH" | "BTREE" | "RTREE" | "SPIMI" ;
 
 select = "SELECT", ["DISTINCT"], select_item, {",", select_item},
          "FROM", table_ref, {join},
@@ -66,13 +67,15 @@ comparison = "=" | "!=" | "<>" | "<" | "<=" | ">" | ">=" ;
 additive = multiplicative, {("+" | "-"), multiplicative} ;
 multiplicative = unary, {("*" | "/" | "%"), unary} ;
 unary = {"+" | "-"}, primary ;
-primary = literal | column_ref | aggregate | spatial_call | "(", expression, ")" ;
+primary = literal | column_ref | aggregate | spatial_call | text_call | "(", expression, ")" ;
 literal = number | string | "NULL" | "TRUE" | "FALSE" | point | polygon ;
 point = "POINT", coordinate_pair ;
 coordinate_pair = "(", ["+" | "-"], number, ",", ["+" | "-"], number, ")" ;
 polygon = "POLYGON", "(", vertex, ",", vertex, ",", vertex, {",", vertex}, ")" ;
 vertex = ["POINT"], coordinate_pair ;
 metric = "HAVERSINE" | "EUCLIDEAN" ;
+text_call = "MATCH", "(", column_ref, ",", string, ")", "USING", ("TF_IDF" | "BM25")
+          | "SCORE", "(", ")" ;
 spatial_call = "DISTANCIA", "(", expression, ",", expression, [",", (metric | string)], ")"
              | "WITHIN", "(", expression, ",", expression, ")" ;
 column_ref = identifier, [".", identifier] ;
@@ -101,6 +104,7 @@ aggregate_name = "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" ;
    - DISTANCIA admite HAVERSINE (defecto) o EUCLIDEAN; el tercer argumento
      explícito prevalece sobre USING. Ambas métricas devuelven metros.
    - POLYGON es un literal de anillo simple; WITHIN incluye el borde.
+   - TEXT, SPIMI, LANGUAGE, MATCH, SCORE, TF_IDF y BM25 no son palabras reservadas.
    - El anidamiento de paréntesis/llamadas se limita a 64 niveles por defecto.
    - single_statement no acepta SQL sobrante y script no acepta sentencias vacías.
 *)

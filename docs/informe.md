@@ -752,3 +752,29 @@ La memoria adicional de construir 20.000 documentos fue de 4,0 MB con bloques de
 * No se guardan posiciones, por lo que no se pueden buscar frases exactas.
 * El diccionario usa un solo nivel en memoria en vez de un B+ completo. Ocupa memoria proporcional a sus páginas, algo mínimo con 100.000 documentos.
 * La mezcla abre todos los bloques a la vez, así que el número de bloques está limitado por los archivos abiertos que admite el sistema.
+
+### 8. Extensión SQL de texto
+
+**Tipo `TEXT`.** Un registro tiene tamaño fijo y debe caber en una página de 4 KB, así que un documento largo no cabe en un `VARCHAR`, que además ocupa su tamaño completo aunque el texto sea corto. Por eso el valor de una columna `TEXT` se guarda en un archivo aparte, `<tabla>.text`, y el registro solo conserva su posición y largo en 12 bytes. Los tres tipos de tabla lo usan sin cambios, porque esa conversión ocurre en el `Schema`. Como el B+ agrupado vuelve a serializar sus registros al reescribir un nodo, cada contenido se identifica por su hash y se guarda una sola vez. `TEXT` no puede ser clave primaria, clave de orden físico ni llave foránea, y solo admite índices SPIMI.
+
+**Índice.** `CREATE INDEX i ON t (col) USING SPIMI [WITH (LANGUAGE = 'es' | 'en')]` indexa una columna `TEXT` o `VARCHAR`. El idioma por defecto es español. Las inserciones y eliminaciones mantienen el índice como en la sección anterior, también al hacer `ROLLBACK`.
+
+**Consultas.** Los ejemplos del enunciado se ejecutan tal cual:
+
+```sql
+SELECT * FROM documentos WHERE MATCH(contenido, 'base de datos vectorial') USING TF_IDF LIMIT 10;
+
+SELECT *, SCORE() AS relevancia FROM articulos
+WHERE MATCH(texto, 'machine learning') USING BM25
+ORDER BY relevancia DESC;
+```
+
+`MATCH` devuelve los documentos con algún término de la consulta, y `USING` es obligatorio. El planificador lo separa del `WHERE` y lo pasa al recorrido de la tabla, que llama al ranking y entrega las filas de mayor a menor puntaje. Por eso `ORDER BY relevancia DESC` no agrega un `Sort`, y un `LIMIT` sin `ORDER BY` devuelve el top-k.
+
+Al índice solo se le piden `limit + offset` documentos si recortar no puede perder resultados. Con otro filtro, otro `ORDER BY`, `DISTINCT` o agregación se pide todo y las demás condiciones se aplican después, igual que en el k-NN espacial.
+
+**Restricciones.** `MATCH` requiere un índice SPIMI sobre la columna y solo se admite una vez, en el `WHERE` de un `SELECT` sobre una tabla y unido con `AND`, porque en otro lugar no equivale a filtrar por el índice. `SCORE()` requiere ese `MATCH` y no se admite con agregación. `TEXT`, `SPIMI`, `MATCH`, `SCORE`, `TF_IDF` y `BM25` no son palabras reservadas, de modo que siguen siendo nombres de columna válidos.
+
+**Plan de ejecución.** `EXPLAIN` muestra un nodo `Text Search` con el índice, la consulta, la técnica y el top-k. La estimación de filas y costo usa el `df` de cada término, sin leer las postings. `EXPLAIN ANALYZE` agrega las postings y páginas del índice leídas.
+
+**Simplificaciones.** Eliminar una fila no libera el espacio de su texto en `<tabla>.text`, y tras reabrir la tabla un mismo texto puede guardarse de nuevo. Ninguno de los dos casos afecta los datos.

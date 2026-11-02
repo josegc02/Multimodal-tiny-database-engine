@@ -36,6 +36,8 @@ class BPlusTreeClustered(BPlusTree):
                 raise ValueError(f"Float inválido: {name}")
             if kind == "str" and (not isinstance(value, str) or "\x00" in value or len(value.encode("utf-8")) > size):
                 raise ValueError(f"String inválido o demasiado largo: {name}")
+            if kind == "text" and not isinstance(value, str):
+                raise ValueError(f"Texto inválido: {name}")
         return self.schema.deserialize(self.schema.serialize(payload))
 
     def _unpack_leaf_payload(self, payload):

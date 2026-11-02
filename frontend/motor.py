@@ -37,9 +37,11 @@ from engine.query.parser import parse_script
 from frontend import mapa_datos
 from engine.indexes import ExtendibleHash
 from engine.indexes.rtree import RTree
+from engine.indexes.spimi import SpimiIndex
 from engine.indexes.bplus_tree import CHILD_SIZE, NODE_HEADER_SIZE
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
 from engine.storage.clustered_file import ClusteredBPlusFile
+from engine.storage.text_store import TextStore
 from engine.storage.heap_file import HeapFile
 from engine.storage.sequential_file import SequentialFile
 
@@ -50,7 +52,7 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEMO_DIR = os.path.join(PROJECT_DIR, "demo_data")
 
 # Archivos que genera el motor y que el modo demo elimina al iniciar.
-_EXTENSIONES_MOTOR = (".db", ".main", ".aux", ".bpt", ".hash", ".idx", ".rtree", ".reorg", ".tmp")
+_EXTENSIONES_MOTOR = (".db", ".main", ".aux", ".bpt", ".hash", ".idx", ".rtree", ".reorg", ".tmp", ".text", ".spimi", ".delta")
 _DIRECTORIOS_TEMPORALES = (".bplus-build-",)
 
 
@@ -158,7 +160,7 @@ class Motor:
     def _archivos_tabla(nombre):
         """Archivos que usaría una tabla según su método de almacenamiento."""
         base = os.path.join(DEMO_DIR, nombre)
-        return (f"{base}.db", f"{base}.db.main", f"{base}.db.aux", f"{base}.bpt")
+        return (f"{base}.db", f"{base}.db.main", f"{base}.db.aux", f"{base}.bpt", f"{base}.text")
 
     def ejecutar(self, sql: str) -> Resultado:
         """Ejecuta SQL y devuelve un Resultado.
@@ -271,10 +273,13 @@ class Motor:
         if len(fields) != len(set(fields)):
             raise ValueError("La tabla contiene columnas repetidas")
         schema = []
+        textos = TextStore(os.path.join(DEMO_DIR, f"{statement.name}.text"))
         for column in statement.columns:
             definition = (column.name, column.type)
             if column.type == "str":
                 definition += (column.size,)
+            elif column.type == "text":
+                definition += (textos,)
             schema.append(definition)
 
         path = os.path.join(DEMO_DIR, f"{statement.name}.db")
@@ -288,6 +293,8 @@ class Motor:
         kinds = {column.name: column.type for column in statement.columns}
         if kinds[key_field] == "point" and (primary_key or statement.storage_method != "heap"):
             raise ValueError("POINT no puede ser clave primaria ni clave de orden físico; usa una columna INT")
+        if kinds[key_field] == "text" and (primary_key or statement.storage_method != "heap"):
+            raise ValueError("TEXT no puede ser clave primaria ni clave de orden físico; usa una columna INT")
         constraint = f"{statement.name}_pkey"
         if statement.storage_method == "sequential":
             storage = SequentialFile(
@@ -336,6 +343,8 @@ class Motor:
             column = next(c for c in statement.columns if c.name == definition.column)
             if column.type == "point":
                 raise ValueError("POINT no admite llaves foráneas")
+            if column.type == "text":
+                raise ValueError("TEXT no admite llaves foráneas")
             padre = self.catalog.table(definition.ref_table)
             columna_padre = definition.ref_column or padre.primary_key
             if columna_padre is None:
@@ -365,14 +374,21 @@ class Motor:
         key_type = binding.storage.schema.types[position]
         if (statement.method == "rtree") != (key_type == "point"):
             raise ValueError("RTREE requiere una columna POINT; POINT solo admite índices RTREE")
+        if statement.method == "spimi" and key_type not in ("str", "text"):
+            raise ValueError("SPIMI requiere una columna TEXT o VARCHAR")
+        if key_type == "text" and statement.method != "spimi":
+            raise ValueError("TEXT solo admite índices SPIMI")
         index_path = os.path.join(DEMO_DIR, f"{statement.table}_{statement.name}")
-        extension = {"hash": "hash", "btree": "bpt", "rtree": "rtree"}[statement.method]
+        extension = {"hash": "hash", "btree": "bpt", "rtree": "rtree", "spimi": "spimi"}[statement.method]
         index_file = f"{index_path}.{extension}"
         if os.path.exists(index_file):
             raise ValueError(f"Ya existe el archivo {index_file!r}; usa otro nombre de índice")
         if statement.method == "rtree":
             index = RTree(index_file)
             metadata = IndexInfo(statement.name, statement.column, index, spatial=True)
+        elif statement.method == "spimi":
+            index = SpimiIndex(index_file, statement.language)
+            metadata = IndexInfo(statement.name, statement.column, index, text=True)
         elif statement.method == "hash":
             index = ExtendibleHash(filepath=index_file)
             metadata = IndexInfo(statement.name, statement.column, index)
@@ -428,6 +444,8 @@ class Motor:
             try:
                 if hasattr(binding.storage, "close"):
                     binding.storage.close()
+                for textos in binding.storage.schema.text_stores.values():
+                    textos.close()
             except Exception as exc:
                 errores.append(exc)
         if errores:
