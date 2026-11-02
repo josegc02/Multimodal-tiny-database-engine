@@ -2,9 +2,11 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from engine.indexes.spimi import (BLOCK_ENTRY, HEADER, MAX_TERM_BYTES, PAGE_SIZE, POSTING, SpimiIndex, decode_postings,
-                                  encode_postings, pages_for, read_block)
+from engine.indexes import spimi
+from engine.indexes.spimi import (BLOCK_ENTRY, HEADER, MAX_TERM_BYTES, PAGE_SIZE, POSTING, SpimiIndex,
+                                  decode_dictionary_page, decode_postings, encode_postings, pages_for, read_block)
 
 
 class SpimiTestCase(unittest.TestCase):
@@ -178,6 +180,120 @@ class TestBloques(SpimiTestCase):
     def test_tamano_de_bloque_invalido(self):
         with self.assertRaises(ValueError):
             SpimiIndex(self.path, block_size=0)
+
+
+def contenido(index):
+    """Lee el índice completo desde sus páginas: término -> (df, postings)."""
+    zona = index._read_pages(index.postings_start, index.postings_pages)
+    resultado = {}
+    for page in range(index.dictionary_pages):
+        for term, df, inicio in decode_dictionary_page(index._read_pages(index.dictionary_start + page)):
+            resultado[term] = df, decode_postings(zona[inicio:inicio + df * POSTING.size])
+    return resultado
+
+
+class TestMezcla(SpimiTestCase):
+    def merge(self, *bloques):
+        with SpimiIndex(self.path) as index:
+            paths = []
+            for bloque in bloques:
+                index._write_block(bloque, paths)
+            index._merge_blocks(paths)
+            index._remove_blocks(paths)
+            return contenido(index)
+
+    def test_ejemplo_de_la_clase(self):
+        # Clase 09, diapositiva 9: los términos repetidos concatenan sus listas.
+        lista = lambda *docs: [(doc, 1) for doc in docs]
+        indice = self.merge(
+            {"brutus": lista(1, 3), "caesar": lista(1, 2, 4), "noble": lista(5), "with": lista(1, 2, 3, 5)},
+            {"brutus": lista(6, 7), "caesar": lista(8, 9), "julius": lista(10), "killed": lista(8)},
+        )
+        self.assertEqual(indice, {
+            "brutus": (4, lista(1, 3, 6, 7)),
+            "caesar": (5, lista(1, 2, 4, 8, 9)),
+            "julius": (1, lista(10)),
+            "killed": (1, lista(8)),
+            "noble": (1, lista(5)),
+            "with": (4, lista(1, 2, 3, 5)),
+        })
+
+    def test_termino_en_todos_los_bloques(self):
+        bloques = [{"casa": [(i, i + 1)]} for i in range(20)]
+        self.assertEqual(self.merge(*bloques), {"casa": (20, [(i, i + 1) for i in range(20)])})
+
+    def test_listas_ocupan_paginas_seguidas(self):
+        larga = [(i, 1) for i in range(1500)]
+        indice = self.merge({"casa": larga[:800], "gato": [(0, 2)]}, {"casa": larga[800:]})
+        self.assertEqual(indice, {"casa": (1500, larga), "gato": (1, [(0, 2)])})
+        self.assertEqual(os.path.getsize(self.path), 5 * PAGE_SIZE)  # cabecera, 3 de postings, diccionario
+
+    def test_listas_comparten_pagina(self):
+        with SpimiIndex(self.path) as index:
+            index.build([f"palabra{i}" for i in range(50)])
+            self.assertEqual(index.term_count, 50)
+            self.assertEqual(index.postings_pages, 1)
+
+    def test_diccionario_de_varias_paginas(self):
+        terminos = {f"{i:04d}{'x' * 200}": [(i, 1)] for i in range(300)}
+        indice = self.merge(terminos)
+        self.assertEqual(list(indice), sorted(terminos))
+        self.assertEqual(len(indice), 300)
+
+
+class TestBuild(SpimiTestCase):
+    DOCUMENTOS = ["casa grande", "casa bonita", "gato grande", "perro y gato"]
+
+    def test_construye_y_persiste(self):
+        with SpimiIndex(self.path) as index:
+            index.build(self.DOCUMENTOS)
+        with SpimiIndex(self.path) as index:
+            self.assertEqual(index.term_count, 5)
+            self.assertEqual(contenido(index), {
+                "bonit": (1, [(1, 1)]),
+                "cas": (2, [(0, 1), (1, 1)]),
+                "gat": (2, [(2, 1), (3, 1)]),
+                "grand": (2, [(0, 1), (2, 1)]),
+                "perr": (1, [(3, 1)]),
+            })
+
+    def test_no_deja_temporales(self):
+        with SpimiIndex(self.path, block_size=1) as index:
+            index.build(self.DOCUMENTOS)
+        self.assertEqual(os.listdir(self.dir), [os.path.basename(self.path)])
+
+    def test_mismo_archivo_con_cualquier_tamano_de_bloque(self):
+        archivos = set()
+        for block_size in (1, 40, 10_000):
+            with SpimiIndex(self.path, block_size=block_size) as index:
+                index.build(self.DOCUMENTOS * 50)
+            with open(self.path, "rb") as f:
+                archivos.add(f.read())
+            os.remove(self.path)
+        self.assertEqual(len(archivos), 1)
+
+    def test_coleccion_vacia(self):
+        with SpimiIndex(self.path) as index:
+            index.build([])
+            self.assertEqual(contenido(index), {})
+            self.assertEqual((index.term_count, index.page_count), (0, 1))
+        self.assertEqual(os.path.getsize(self.path), PAGE_SIZE)
+
+    def test_reconstruir_reemplaza_el_contenido(self):
+        with SpimiIndex(self.path) as index:
+            index.build(self.DOCUMENTOS)
+            index.build(["ratón"])
+            self.assertEqual(contenido(index), {"raton": (1, [(0, 1)])})
+            self.assertEqual(index.next_doc_id, 1)
+
+    def test_error_en_la_mezcla_deja_el_indice_vacio(self):
+        with SpimiIndex(self.path, block_size=1) as index:
+            with patch.object(spimi.shutil, "copyfileobj", side_effect=OSError("disco lleno")):
+                with self.assertRaises(OSError):
+                    index.build(self.DOCUMENTOS)
+            self.assertEqual(contenido(index), {})
+            self.assertEqual(index.page_count, 1)
+        self.assertEqual(os.listdir(self.dir), [os.path.basename(self.path)])
 
 
 if __name__ == "__main__":

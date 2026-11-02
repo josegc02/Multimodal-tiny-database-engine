@@ -1,22 +1,28 @@
 """Índice invertido en disco construido con SPIMI (issue #45).
 
 El archivo se divide en páginas de 4096 B. La página 0 es la cabecera y las demás
-forman tres zonas contiguas: diccionario, postings y tabla de documentos. La cabecera
+forman tres zonas contiguas: postings, diccionario y tabla de documentos. La cabecera
 guarda dónde empieza y cuántas páginas ocupa cada zona.
 
-Una posting es (doc_id, tf). Las listas se leen de corrido porque ocupan páginas seguidas.
+Una posting es (doc_id, tf). Las listas van una tras otra en la zona de postings y se
+leen de corrido; el diccionario guarda, por término, su df y el byte donde empieza su lista.
 
 La construcción sigue SPIMI: cada bloque es un hash término -> postings que se ordena y
 se escribe a un archivo temporal al llenarse. Los doc_id crecen, así que las listas
-quedan ordenadas por doc_id dentro de cada bloque y entre bloques.
+quedan ordenadas por doc_id dentro de cada bloque y entre bloques. Al final, una mezcla
+k-way con cola de prioridad une los bloques y basta concatenar las listas de un término.
 """
 
 from __future__ import annotations
 
+import heapq
 import math
 import os
+import shutil
 import struct
 from collections import Counter
+from itertools import groupby
+from operator import itemgetter
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 from engine.text.preprocessing import IDIOMAS, tokens
@@ -29,8 +35,11 @@ MAGIC = b"SPI1"
 HEADER = struct.Struct(">4s2sIIIQIIIIIII")
 POSTING = struct.Struct(">II")  # doc_id, tf
 BLOCK_ENTRY = struct.Struct(">BI")  # bytes del término, postings
+DICTIONARY_PAGE = struct.Struct(">H")  # entradas de la página
+DICTIONARY_ENTRY = struct.Struct(">BIQ")  # bytes del término, df, byte donde empieza su lista
 
 DEFAULT_BLOCK_SIZE = 8 * 1024 * 1024  # tamaño del bloque en disco; en memoria ocupa más
+READ_BUFFER = 16 * PAGE_SIZE  # buffer de lectura de cada bloque durante la mezcla
 MAX_TERM_BYTES = 255  # un token más largo no es una palabra (hashes, base64)
 
 Posting = Tuple[int, int]
@@ -51,9 +60,26 @@ def pages_for(size: int) -> int:
     return math.ceil(size / PAGE_SIZE)
 
 
+# Junta las entradas de una página del diccionario y la rellena hasta 4 KB.
+def encode_dictionary_page(entries: List[bytes]) -> bytes:
+    return (DICTIONARY_PAGE.pack(len(entries)) + b"".join(entries)).ljust(PAGE_SIZE, b"\0")
+
+
+# Lee una página del diccionario y devuelve sus entradas (término, df, inicio).
+def decode_dictionary_page(data: bytes) -> List[Tuple[str, int, int]]:
+    entries = []
+    position = DICTIONARY_PAGE.size
+    for _ in range(DICTIONARY_PAGE.unpack_from(data)[0]):
+        term_size, df, start = DICTIONARY_ENTRY.unpack_from(data, position)
+        position += DICTIONARY_ENTRY.size
+        entries.append((data[position:position + term_size].decode("utf-8"), df, start))
+        position += term_size
+    return entries
+
+
 # Recorre un bloque temporal en orden de término, sin cargarlo completo en memoria.
 def read_block(path: str) -> Iterator[Tuple[str, List[Posting]]]:
-    with open(path, "rb") as f:
+    with open(path, "rb", buffering=READ_BUFFER) as f:
         while header := f.read(BLOCK_ENTRY.size):
             term_size, count = BLOCK_ENTRY.unpack(header)
             term = f.read(term_size).decode("utf-8")
@@ -132,6 +158,20 @@ class SpimiIndex:
 
     # --- Construcción -------------------------------------------------------------
 
+    # Construye el índice desde cero: bloques, mezcla y limpieza de los temporales.
+    def build(self, documents: Iterable[str]) -> None:
+        self._reset()
+        paths: List[str] = []
+        try:
+            paths = self._build_blocks(documents)
+            self._merge_blocks(paths)
+        except Exception:
+            self._reset()
+            raise
+        finally:
+            self._remove_blocks(paths)
+        self.flush()
+
     # SPIMI-INVERT: reparte los documentos en bloques ordenados y devuelve sus rutas.
     def _build_blocks(self, documents: Iterable[str]) -> List[str]:
         paths: List[str] = []
@@ -172,6 +212,47 @@ class SpimiIndex:
                 f.write(BLOCK_ENTRY.pack(len(encoded), len(block[term])))
                 f.write(encoded)
                 f.write(encode_postings(block[term]))
+
+    # Mezcla k-way: escribe las postings de corrido y al final agrega el diccionario.
+    def _merge_blocks(self, paths: List[str]) -> None:
+        readers = [read_block(path) for path in paths]
+        dictionary_path = f"{self.filepath}.dictionary.tmp"
+        try:
+            with open(dictionary_path, "w+b") as dictionary:
+                self._fh.seek(self.page_count * PAGE_SIZE)
+                self.postings_start = self.page_count
+                size = 0
+                page: List[bytes] = []
+                free = PAGE_SIZE - DICTIONARY_PAGE.size
+                # heapq.merge es la cola de prioridad; es estable: empata en orden de bloque.
+                for term, entries in groupby(heapq.merge(*readers, key=itemgetter(0)), key=itemgetter(0)):
+                    df = 0
+                    for _, postings in entries:
+                        self._fh.write(encode_postings(postings))
+                        df += len(postings)
+                    encoded = term.encode("utf-8")
+                    entry = DICTIONARY_ENTRY.pack(len(encoded), df, size) + encoded
+                    if len(entry) > free:
+                        dictionary.write(encode_dictionary_page(page))
+                        page, free = [], PAGE_SIZE - DICTIONARY_PAGE.size
+                    page.append(entry)
+                    free -= len(entry)
+                    size += df * POSTING.size
+                    self.term_count += 1
+                if page:
+                    dictionary.write(encode_dictionary_page(page))
+
+                self.postings_pages = pages_for(size)
+                self._fh.write(b"\0" * (self.postings_pages * PAGE_SIZE - size))
+                self.dictionary_start = self.postings_start + self.postings_pages
+                self.dictionary_pages = pages_for(dictionary.tell())
+                dictionary.seek(0)
+                shutil.copyfileobj(dictionary, self._fh)
+                self.page_count = self.dictionary_start + self.dictionary_pages
+        finally:
+            for reader in readers:
+                reader.close()
+            self._remove_blocks([dictionary_path])
 
     # Borra los archivos temporales de los bloques.
     @staticmethod
