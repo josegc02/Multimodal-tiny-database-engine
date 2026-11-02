@@ -412,6 +412,14 @@ class SpimiIndex:
         for page in range(self.dictionary_pages):
             yield from decode_dictionary_page(self._read_pages(self.dictionary_start + page))
 
+    # Devuelve los RID de los documentos que contienen todos los términos del texto.
+    def search(self, text: Optional[str]) -> List[RID]:
+        terms = self.analyze(text)
+        if not terms:
+            return []
+        common = set.intersection(*({doc_id for doc_id, _ in self.postings(term)} for term in terms))
+        return [self.document(doc_id).rid for doc_id in sorted(common)]
+
     # Pone en cero los contadores de lecturas.
     def reset_stats(self) -> None:
         self.stats = SpimiStats()
@@ -576,6 +584,20 @@ class SpimiIndex:
             postings = [(new_ids[doc_id], tf) for doc_id, tf in postings if doc_id in new_ids]
             if postings:
                 yield term, postings
+
+    # Indexa una columna de texto de una tabla y devuelve cuántos documentos agregó.
+    def bulk_load_from_storage(self, storage, key_field: str, *, replace: bool = True) -> int:
+        if key_field not in storage.schema.fields:
+            raise ValueError(f"El campo '{key_field}' no existe en el schema")
+        documents = ((record[key_field], rid) for rid, record in storage.scan())
+        if replace:
+            self.build(documents)
+            return self.doc_count
+        count = 0
+        for text, rid in documents:
+            self.insert(text, rid)
+            count += 1
+        return count
 
     # Une el índice principal y el delta en un archivo nuevo y reemplaza al anterior.
     # Los doc_id se renumeran en orden, así que el resultado equivale a construir desde cero.

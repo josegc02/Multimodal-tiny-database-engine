@@ -5,10 +5,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import frontend.motor as motor_module
 from engine.indexes import spimi
 from engine.indexes.spimi import (BLOCK_ENTRY, DOCUMENTS_PER_PAGE, HEADER, MAX_TERM_BYTES, PAGE_SIZE, POSTING,
                                   SpimiIndex, decode_dictionary_page, decode_postings, encode_postings, pages_for,
                                   read_block, tf_weight)
+from engine.query.planner import IndexInfo
 from engine.storage.record import RID
 
 
@@ -641,6 +643,122 @@ class TestMantenimiento(SpimiTestCase):
         index.build(con_rid(["perro"]))
         self.assertEqual((index.postings("gat"), index.doc_count), ([], 1))
         self.assertFalse(os.path.exists(index._log_path))
+
+
+class TestCatalogo(SpimiTestCase):
+    def setUp(self):
+        super().setUp()
+        patcher = patch.object(motor_module, "DEMO_DIR", self.dir)
+        patcher.start()
+        # Las limpiezas corren en orden inverso: el motor se cierra antes de borrar el directorio.
+        self.addCleanup(patcher.stop)
+        self.motor = motor_module.Motor()
+        self.addCleanup(self.motor.cerrar)
+
+    def sql(self, consulta):
+        resultado = self.motor.ejecutar(consulta)
+        self.assertFalse(resultado.tiene_error, resultado.error)
+        return resultado
+
+    def tabla(self, using=""):
+        self.sql(f"CREATE TABLE docs (id INT PRIMARY KEY, texto VARCHAR(60)) {using}")
+        self.sql("INSERT INTO docs VALUES (1, 'casa grande'), (2, 'casa grande roja'), (3, 'gato negro')")
+        index = SpimiIndex(self.path)
+        self.addCleanup(index.close)
+        info = IndexInfo("docs_texto", "texto", index, text=True)
+        self.motor.catalog.register_index("docs", "texto", index, info)
+        self.storage = self.motor.catalog.table("docs").storage
+        return index
+
+    def textos(self, index, consulta):
+        return sorted(self.storage.get(rid)["texto"] for rid in index.search(consulta))
+
+    def test_registrar_construye_desde_la_tabla(self):
+        index = self.tabla()
+        self.assertEqual(index.doc_count, 3)
+        self.assertEqual(self.textos(index, "casas"), ["casa grande", "casa grande roja"])
+
+    def test_search_exige_todos_los_terminos(self):
+        index = self.tabla()
+        self.assertEqual(self.textos(index, "roja casa"), ["casa grande roja"])
+        self.assertEqual(self.textos(index, "casa gato"), [])
+        self.assertEqual(self.textos(index, "de la"), [])
+
+    def test_insert_y_delete_no_reconstruyen(self):
+        index = self.tabla()
+        with patch.object(index, "build", side_effect=AssertionError("no debe reconstruir")):
+            self.sql("INSERT INTO docs VALUES (4, 'gato gris')")
+            self.assertEqual(self.textos(index, "gato"), ["gato gris", "gato negro"])
+            self.sql("DELETE FROM docs WHERE id = 3")
+            self.assertEqual(self.textos(index, "gato"), ["gato gris"])
+        self.assertEqual(index.doc_count, 3)
+
+    def test_rollback_deshace_los_cambios(self):
+        index = self.tabla()
+        self.sql("BEGIN")
+        self.sql("INSERT INTO docs VALUES (4, 'perro')")
+        self.sql("DELETE FROM docs WHERE id = 3")
+        self.sql("ROLLBACK")
+        self.assertEqual(self.textos(index, "perro"), [])
+        self.assertEqual(self.textos(index, "gato"), ["gato negro"])
+
+    def test_igualdad_no_usa_el_indice_de_texto(self):
+        self.tabla()
+        filas = self.sql("SELECT id FROM docs WHERE texto = 'casa grande'").filas
+        self.assertEqual([fila[0] for fila in filas], [1])
+        plan = "\n".join(str(fila[0]) for fila in self.sql(
+            "EXPLAIN SELECT id FROM docs WHERE texto = 'casa grande'").filas)
+        self.assertNotIn("docs_texto", plan)
+
+    def test_rows_with_compara_el_valor_exacto(self):
+        self.tabla()
+        filas = self.motor.catalog.table("docs").rows_with("texto", "casa grande")
+        self.assertEqual([registro["id"] for _, registro in filas], [1])
+
+    def test_tabla_sequential_reconstruye_porque_sus_rids_se_mueven(self):
+        index = self.tabla("USING SEQUENTIAL")
+        self.sql("INSERT INTO docs VALUES (0, 'perro')")
+        self.assertEqual(self.textos(index, "perro"), ["perro"])
+        self.assertEqual(self.textos(index, "gato"), ["gato negro"])
+        self.assertEqual(index.doc_count, 4)
+
+    def test_tabla_btree_reconstruye_porque_sus_rids_se_mueven(self):
+        index = self.tabla("USING BTREE")
+        self.sql("INSERT INTO docs VALUES (0, 'perro')")
+        self.assertEqual(self.textos(index, "perro"), ["perro"])
+        self.assertEqual(self.textos(index, "gato"), ["gato negro"])
+        self.assertEqual(index.doc_count, 4)
+
+    def test_el_planificador_no_lo_trata_como_indice_de_igualdad(self):
+        index = self.tabla()
+        self.assertFalse(IndexInfo("docs_texto", "texto", index, text=True).supports_equality)
+        self.assertTrue(IndexInfo("docs_texto", "texto", index).supports_equality)
+
+
+class TestBulkLoad(SpimiTestCase):
+    class Tabla:
+        class schema:
+            fields = ["id", "texto"]
+
+        def scan(self):
+            yield RID(0, 0), {"id": 1, "texto": "casa"}
+            yield RID(0, 1), {"id": 2, "texto": None}
+
+    def test_reemplaza_el_contenido(self):
+        with SpimiIndex(self.path) as index:
+            index.build(con_rid(["gato"]))
+            self.assertEqual(index.bulk_load_from_storage(self.Tabla(), "texto"), 2)
+            self.assertEqual((index.df("gat"), index.df("cas")), (0, 1))
+
+    def test_sin_reemplazar_agrega(self):
+        with SpimiIndex(self.path) as index:
+            index.build(con_rid(["gato"]))
+            self.assertEqual(index.bulk_load_from_storage(self.Tabla(), "texto", replace=False), 2)
+            self.assertEqual((index.df("gat"), index.df("cas"), index.doc_count), (1, 1, 3))
+
+    def test_campo_inexistente(self):
+        with SpimiIndex(self.path) as index, self.assertRaises(ValueError):
+            index.bulk_load_from_storage(self.Tabla(), "titulo")
 
 
 if __name__ == "__main__":

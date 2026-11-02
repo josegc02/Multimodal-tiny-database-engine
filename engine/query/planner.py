@@ -67,6 +67,7 @@ class IndexInfo:
     lookup_pages: float = 1.0
     nulls_first_ascending: bool = False
     spatial: bool = False
+    text: bool = False
 
     def __post_init__(self):
         if not self.name or not self.field or not math.isfinite(self.lookup_pages) or self.lookup_pages < 0:
@@ -74,7 +75,8 @@ class IndexInfo:
 
     @property
     def supports_equality(self) -> bool:
-        return self.valid and callable(getattr(self.index, "search", None))
+        # search() de un índice de texto busca términos, no el valor exacto de la columna.
+        return self.valid and not self.text and callable(getattr(self.index, "search", None))
 
     @property
     def supports_order(self) -> bool:
