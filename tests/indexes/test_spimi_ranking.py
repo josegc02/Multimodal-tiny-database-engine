@@ -1,5 +1,6 @@
 import math
 import os
+import random
 import shutil
 import tempfile
 import unittest
@@ -176,3 +177,86 @@ class TestBm25Ranking(TestTfIdfRanking):
         ):
             with self.subTest(parameters=parameters), self.assertRaises(ValueError):
                 self.index.rank_bm25("gato", **parameters)
+
+
+class TestRankingAgainstBruteForce(unittest.TestCase):
+    VOCABULARY = [f"termino{number}x" for number in range(60)]
+
+    def setUp(self):
+        self.directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.directory, True)
+        self.random = random.Random(46)
+        self.index = SpimiIndex(os.path.join(self.directory, "docs.spimi"), block_size=4096,
+                                min_changes=10 ** 9)
+        self.addCleanup(self.index.close)
+        self.texts = {RID(number, 0): self.text(1, 30) for number in range(300)}
+        self.index.build((text, rid) for rid, text in self.texts.items())
+
+    def text(self, minimum, maximum):
+        return " ".join(self.random.choices(self.VOCABULARY, k=self.random.randint(minimum, maximum)))
+
+    def expected(self, query):
+        documents = {rid: self.index.analyze(text) for rid, text in self.texts.items()}
+        terms = self.index.analyze(query)
+        count = len(documents)
+        average_length = sum(sum(document.values()) for document in documents.values()) / count
+        df = {term: sum(term in document for document in documents.values()) for term in terms}
+        weights = {term: tf_weight(tf) * math.log10(count / df[term]) for term, tf in terms.items() if df[term]}
+        query_norm = math.sqrt(sum(weight * weight for weight in weights.values()))
+        tfidf, bm25 = {}, {}
+        for rid, document in documents.items():
+            common = [term for term in terms if term in document]
+            if not common:
+                continue
+            length = sum(document.values())
+            norm = math.sqrt(sum(tf_weight(tf) ** 2 for tf in document.values()))
+            bm25[rid] = sum(math.log1p((count - df[term] + 0.5) / (df[term] + 0.5)) * document[term] * 2.2
+                            / (document[term] + 1.2 * (0.25 + 0.75 * length / average_length)) for term in common)
+            dot = sum(weights[term] * tf_weight(document[term]) for term in common)
+            if query_norm and dot:
+                tfidf[rid] = dot / (query_norm * norm)
+        return tfidf, bm25
+
+    def assert_ranking(self, actual, expected, top_k):
+        self.assertEqual(len(actual), min(top_k, len(expected)))
+        best = sorted(expected.values(), reverse=True)[:top_k]
+        for (rid, score), best_score in zip(actual, best):
+            self.assertAlmostEqual(score, expected[rid])
+            self.assertAlmostEqual(score, best_score)
+
+    def assert_matches(self, queries=30):
+        for _ in range(queries):
+            query = self.text(1, 5)
+            tfidf, bm25 = self.expected(query)
+            for top_k in (1, 5, 1000):
+                with self.subTest(query=query, top_k=top_k):
+                    self.assert_ranking(self.index.rank_tfidf(query, top_k), tfidf, top_k)
+                    self.assert_ranking(self.index.rank_bm25(query, top_k), bm25, top_k)
+
+    def apply_changes(self):
+        next_number = len(self.texts)
+        for _ in range(150):
+            if self.random.random() < 0.4:
+                rid = self.random.choice(list(self.texts))
+                self.index.delete(self.texts.pop(rid), rid)
+            else:
+                rid, next_number = RID(next_number, 0), next_number + 1
+                self.texts[rid] = self.text(1, 30)
+                self.index.insert(self.texts[rid], rid)
+
+    def test_matches_after_build(self):
+        self.assert_matches()
+
+    def test_matches_with_pending_changes_and_after_consolidating(self):
+        self.apply_changes()
+        self.assert_matches()
+        self.index.consolidate()
+        self.assert_matches()
+
+    def test_ties_keep_the_smallest_doc_id(self):
+        rows = [("gato", RID(number, 0)) for number in range(6)] + [("perro", RID(6, 0))]
+        with SpimiIndex(os.path.join(self.directory, "ties.spimi")) as index:
+            index.build(rows)
+            for rank in (index.rank_tfidf, index.rank_bm25):
+                with self.subTest(rank=rank.__name__):
+                    self.assertEqual([rid for rid, _ in rank("gato", 3)], [RID(number, 0) for number in range(3)])
