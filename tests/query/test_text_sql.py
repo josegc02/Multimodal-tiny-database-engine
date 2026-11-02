@@ -1,3 +1,5 @@
+import csv
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -5,6 +7,7 @@ from unittest.mock import patch
 from engine.query.errors import SQLSemanticError
 from engine.query.logical_plan import LogicalPlanner
 from engine.query.parser import parse
+from frontend.csv_sql import sql_para_csv
 from frontend.motor import Motor
 
 
@@ -235,6 +238,41 @@ class TestExplain(TextRowsTestCase):
                                       "AND SCORE() > 0.1 ORDER BY SCORE()").plan)
         self.assertIn("Sort Key: score()", plan)
         self.assertIn("Filter: (score() > 0.1)", plan)
+
+
+class TestIntegration(TextSQLTestCase):
+    def test_rollback_removes_the_document_from_the_results(self):
+        self.execute("INSERT INTO docs VALUES (1, 2001, 'gato negro', 'a', 'uno')")
+        self.motor.ejecutar("BEGIN TRANSACTION")
+        self.execute("INSERT INTO docs VALUES (2, 2002, 'gato pardo', 'b', 'dos')")
+        self.execute("DELETE FROM docs WHERE id = 1")
+        self.motor.ejecutar("ROLLBACK")
+        found = self.execute("SELECT id FROM docs WHERE MATCH(contenido, 'gato') USING BM25").filas
+        self.assertEqual(found, [(1,)])
+
+    def test_table_with_a_point_column(self):
+        self.execute("CREATE TABLE lugares (id INT, ubicacion POINT, resena TEXT)")
+        self.execute("CREATE INDEX lugares_resena ON lugares (resena) USING SPIMI")
+        self.execute("INSERT INTO lugares VALUES (1, POINT(-12.1, -77.0), 'buen cafe'), "
+                     "(2, POINT(-12.2, -77.1), 'mal servicio')")
+        result = self.execute("SELECT id FROM lugares WHERE MATCH(resena, 'cafe') USING TF_IDF")
+        self.assertEqual(result.filas, [(1,)])
+
+    def test_copy_then_index_then_search_in_english(self):
+        path = os.path.join(self.temp_dir.name, "articulos.csv")
+        documents = [f"machine learning model number {number} " + "with many words " * 300 for number in range(20)]
+        documents += ["databases and running queries " * 300]
+        with open(path, "w", encoding="utf-8", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(["id", "texto"])
+            writer.writerows(enumerate(documents))
+        script = sql_para_csv(path, self.motor.catalog.tables)
+        self.assertIn("texto TEXT", script)
+        self.execute(script)
+        self.execute("CREATE INDEX articulos_texto ON articulos (texto) USING SPIMI WITH (LANGUAGE = 'en')")
+        found = self.execute("SELECT id, texto, SCORE() AS relevancia FROM articulos "
+                             "WHERE MATCH(texto, 'database query') USING BM25 ORDER BY relevancia DESC LIMIT 5").filas
+        self.assertEqual([(row[0], row[1]) for row in found], [(20, documents[20])])
 
 
 class TestExecutionInEveryStorage(TextSQLTestCase):

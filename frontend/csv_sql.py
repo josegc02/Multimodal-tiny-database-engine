@@ -25,6 +25,9 @@ def _leer_texto(path):
     raise ValueError("No se pudo leer el archivo como UTF-8 ni Latin-1")
 
 
+LARGO_MAXIMO_VARCHAR = 255
+
+
 def _identificador(texto, respaldo):
     nombre = re.sub(r"[^0-9a-zA-Z_]+", "_", texto.strip()).strip("_").lower() or respaldo
     if nombre[0].isdigit():
@@ -53,6 +56,9 @@ def _tipo(valores):
     if valores and all(_es_flotante(v) for v in valores):
         return "FLOAT"
     largo = max((len(v) for v in valores), default=1)
+    # Un VARCHAR ocupa siempre su tamaño completo en la página; un documento va mejor en TEXT.
+    if largo > LARGO_MAXIMO_VARCHAR:
+        return "TEXT"
     return f"VARCHAR({max(10, -(-largo // 10) * 10)})"
 
 

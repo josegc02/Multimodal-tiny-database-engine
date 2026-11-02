@@ -6,7 +6,8 @@ Proyecto de Base de Datos II (UTEC, 2026-2): un gestor de bases de datos constru
 | :--- | :--- | :--- |
 | **1. Relacional** | Completa | Heap File, Archivo Secuencial y tabla B+ agrupada; índices B+ y Hash extensible; SQL con optimizador por costos; transacciones con control de concurrencia; interfaz gráfica; comparación experimental. |
 | **2. Espacial** | Completa | R-Tree en disco con consultas por radio, k-NN y polígonos; métricas Euclidiana y Haversine; SQL espacial; mapa interactivo (tkintermapview); comparación contra GiST de PostGIS. |
-| 3–5 | Pendientes | Texto, multimedia y aplicación. |
+| **3. Texto** | En curso | Preprocesamiento, índice invertido SPIMI, rankings TF-IDF y BM25 y SQL de texto. Falta la comparación experimental. |
+| 4–5 | Pendientes | Multimedia y aplicación. |
 
 El diseño, los algoritmos y los resultados experimentales están en el [informe](docs/informe.md).
 
@@ -82,6 +83,17 @@ CREATE INDEX emp_sal ON emp (salario) USING BTREE;                      -- B+ no
 BEGIN TRANSACTION;
 DELETE FROM emp WHERE id = 2;
 ROLLBACK;
+```
+
+### Ejemplo de texto
+
+```sql
+CREATE TABLE articulos (id INT PRIMARY KEY, titulo VARCHAR(100), texto TEXT);
+CREATE INDEX articulos_texto ON articulos (texto) USING SPIMI;           -- WITH (LANGUAGE = 'en') para inglés
+INSERT INTO articulos VALUES (1, 'Índices', 'Un índice invertido acelera la búsqueda de texto');
+SELECT id, titulo, SCORE() AS relevancia FROM articulos
+WHERE MATCH(texto, 'índice de búsqueda') USING BM25
+ORDER BY relevancia DESC LIMIT 10;
 ```
 
 ### Ejemplo espacial
