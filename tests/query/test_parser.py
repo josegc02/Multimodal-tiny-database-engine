@@ -142,6 +142,16 @@ class TestMutationAndScriptParser(unittest.TestCase):
         self.assertEqual(parse("CREATE INDEX idx_id ON accounts USING HASH (id)"), expected)
         self.assertEqual(parse("CREATE INDEX idx_id ON accounts (id) USING BTREE").method, "btree")
 
+    def test_create_index_using_spimi(self):
+        for sql in ("CREATE INDEX i ON t USING SPIMI (a)", "CREATE INDEX i ON t (a) USING spimi"):
+            with self.subTest(sql=sql):
+                statement = parse(sql)
+                self.assertEqual((statement.method, statement.language), ("spimi", None))
+        for sql in ("CREATE INDEX i ON t USING SPIMI (a) WITH (LANGUAGE = 'en')",
+                    "CREATE INDEX i ON t (a) USING SPIMI WITH (language = 'EN')"):
+            with self.subTest(sql=sql):
+                self.assertEqual(parse(sql).language, "en")
+
     def test_create_ddl_rejects_invalid_definitions(self):
         invalid = [
             "CREATE TABLE t ()",
@@ -154,6 +164,10 @@ class TestMutationAndScriptParser(unittest.TestCase):
             "CREATE INDEX i ON t (a) USING HASH,",
             "CREATE INDEX i ON t USING BTREE (a,b)",
             "CREATE INDEX i ON t (a) USING TREE",
+            "CREATE INDEX i ON t (a) USING HASH WITH (LANGUAGE = 'es')",
+            "CREATE INDEX i ON t (a) USING SPIMI WITH (LANGUAGE = 'fr')",
+            "CREATE INDEX i ON t (a) USING SPIMI WITH (IDIOMA = 'es')",
+            "CREATE INDEX i ON t (a) USING SPIMI WITH (LANGUAGE = 1)",
         ]
         for sql in invalid:
             with self.subTest(sql=sql), self.assertRaises(SQLParseError):

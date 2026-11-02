@@ -16,6 +16,7 @@ from engine.query.ast import (
 from engine.query.errors import SQLParseError
 from engine.query.lexer import tokenize
 from engine.spatial.geometry import Point, Polygon
+from engine.text.preprocessing import IDIOMAS
 
 AGGREGATES = {"COUNT", "SUM", "AVG", "MIN", "MAX"}
 COMPARISONS = {"=", "!=", "<>", "<", "<=", ">", ">="}
@@ -292,13 +293,34 @@ class Parser:
         if method is None:
             self._expect("USING")
             method = self._index_method()
-        return CreateIndexStatement(name, table, column, method)
+        language = self._index_language() if self._peek().kind == "WITH" else None
+        if language is not None and method != "spimi":
+            self._error("LANGUAGE solo aplica a índices SPIMI")
+        return CreateIndexStatement(name, table, column, method, language)
 
     def _index_method(self):
+        # SPIMI no es palabra reservada, igual que TEXT.
+        if self._peek().kind == "IDENTIFIER" and self._peek().value == "spimi":
+            self._advance()
+            return "spimi"
         token = self._match("HASH", "BTREE", "RTREE")
         if token is None:
-            self._error("USING requiere HASH, BTREE o RTREE")
+            self._error("USING requiere HASH, BTREE, RTREE o SPIMI")
         return token.kind.lower()
+
+    # Lee WITH (LANGUAGE = 'es') y devuelve el idioma.
+    def _index_language(self):
+        self._expect("WITH")
+        self._expect("(")
+        if self._peek().kind != "IDENTIFIER" or self._peek().value != "language":
+            self._error("Se esperaba LANGUAGE")
+        self._advance()
+        self._expect("=")
+        language = self._expect("STRING").value.lower()
+        if language not in IDIOMAS:
+            self._error("LANGUAGE debe ser 'es' o 'en'")
+        self._expect(")")
+        return language
 
     def _comma_list(self, parse_item):
         result = [parse_item()]

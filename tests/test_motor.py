@@ -69,6 +69,57 @@ class TestMotorDDL(unittest.TestCase):
         self.execute(f"COPY docs FROM '{ruta}'")
         self.assertEqual(self.execute("SELECT contenido FROM docs").filas, [(documento,)])
 
+    def text_index(self, method="HEAP", options=""):
+        self.execute(f"CREATE TABLE docs (id INT PRIMARY KEY, contenido TEXT) USING {method}")
+        self.execute("INSERT INTO docs VALUES (1, 'gatos negros'), (2, 'perros blancos')")
+        self.execute(f"CREATE INDEX docs_contenido ON docs (contenido) USING SPIMI {options}")
+        return self.motor.catalog.table("docs").indexes["contenido"]
+
+    def test_spimi_index_loads_the_rows_of_the_table(self):
+        registered = self.text_index()
+        self.assertTrue(registered.metadata.text)
+        self.assertEqual(registered.index.doc_count, 2)
+        self.assertEqual(registered.index.language, "es")
+        self.assertEqual(len(registered.index.search("gato")), 1)
+
+    def test_spimi_index_follows_inserts_and_deletes(self):
+        for method in ("HEAP", "SEQUENTIAL", "BTREE"):
+            with self.subTest(method=method):
+                index = self.text_index(method).index
+                self.execute("INSERT INTO docs VALUES (3, 'gato pardo')")
+                self.assertEqual(len(index.search("gato")), 2)
+                self.execute("DELETE FROM docs WHERE id = 1")
+                self.assertEqual(len(index.search("gato")), 1)
+                self.assertEqual(index.doc_count, 2)
+                self.motor.cerrar()
+                self.motor = Motor()
+
+    def test_spimi_index_accepts_a_language(self):
+        self.assertEqual(self.text_index(options="WITH (LANGUAGE = 'en')").index.language, "en")
+
+    def test_spimi_index_on_varchar(self):
+        self.execute("CREATE TABLE notas (id INT, titulo VARCHAR(50))")
+        self.execute("INSERT INTO notas VALUES (1, 'gatos negros')")
+        self.execute("CREATE INDEX i ON notas (titulo) USING SPIMI")
+        self.assertEqual(len(self.motor.catalog.table("notas").indexes["titulo"].index.search("gato")), 1)
+
+    def test_spimi_index_and_text_only_go_together(self):
+        self.execute("CREATE TABLE docs (id INT, contenido TEXT)")
+        for sql in ("CREATE INDEX i ON docs (id) USING SPIMI", "CREATE INDEX i ON docs (contenido) USING HASH",
+                    "CREATE INDEX i ON docs (contenido) USING BTREE", "CREATE INDEX i ON docs (contenido) USING RTREE"):
+            with self.subTest(sql=sql):
+                self.assertTrue(self.motor.ejecutar(sql).tiene_error)
+
+    def test_a_new_session_removes_text_and_spimi_files(self):
+        self.text_index()
+        self.execute("INSERT INTO docs VALUES (3, 'gato pardo')")
+        self.assertTrue({"docs.text", "docs_docs_contenido.spimi", "docs_docs_contenido.spimi.delta"}
+                        <= set(os.listdir(self.temp_dir.name)))
+        self.motor.cerrar()
+        self.motor = Motor()
+        self.assertFalse({"docs.text", "docs_docs_contenido.spimi", "docs_docs_contenido.spimi.delta"}
+                         & set(os.listdir(self.temp_dir.name)))
+
     def test_create_table_using_sequential_file(self):
         self.execute("CREATE TABLE empleados_seq (id INT, nombre VARCHAR(20)) USING SEQUENTIAL")
         self.assertIsInstance(self.motor.catalog.table("empleados_seq").storage, SequentialFile)

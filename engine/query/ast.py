@@ -153,6 +153,7 @@ class CreateIndexStatement(Statement):
     table: str
     column: str
     method: str
+    language: str | None = None
 
 
 @dataclass(frozen=True)

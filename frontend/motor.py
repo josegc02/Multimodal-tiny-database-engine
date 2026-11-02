@@ -37,6 +37,7 @@ from engine.query.parser import parse_script
 from frontend import mapa_datos
 from engine.indexes import ExtendibleHash
 from engine.indexes.rtree import RTree
+from engine.indexes.spimi import SpimiIndex
 from engine.indexes.bplus_tree import CHILD_SIZE, NODE_HEADER_SIZE
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
 from engine.storage.clustered_file import ClusteredBPlusFile
@@ -51,7 +52,7 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEMO_DIR = os.path.join(PROJECT_DIR, "demo_data")
 
 # Archivos que genera el motor y que el modo demo elimina al iniciar.
-_EXTENSIONES_MOTOR = (".db", ".main", ".aux", ".bpt", ".hash", ".idx", ".rtree", ".reorg", ".tmp", ".text")
+_EXTENSIONES_MOTOR = (".db", ".main", ".aux", ".bpt", ".hash", ".idx", ".rtree", ".reorg", ".tmp", ".text", ".spimi", ".delta")
 _DIRECTORIOS_TEMPORALES = (".bplus-build-",)
 
 
@@ -373,14 +374,21 @@ class Motor:
         key_type = binding.storage.schema.types[position]
         if (statement.method == "rtree") != (key_type == "point"):
             raise ValueError("RTREE requiere una columna POINT; POINT solo admite índices RTREE")
+        if statement.method == "spimi" and key_type not in ("str", "text"):
+            raise ValueError("SPIMI requiere una columna TEXT o VARCHAR")
+        if key_type == "text" and statement.method != "spimi":
+            raise ValueError("TEXT solo admite índices SPIMI")
         index_path = os.path.join(DEMO_DIR, f"{statement.table}_{statement.name}")
-        extension = {"hash": "hash", "btree": "bpt", "rtree": "rtree"}[statement.method]
+        extension = {"hash": "hash", "btree": "bpt", "rtree": "rtree", "spimi": "spimi"}[statement.method]
         index_file = f"{index_path}.{extension}"
         if os.path.exists(index_file):
             raise ValueError(f"Ya existe el archivo {index_file!r}; usa otro nombre de índice")
         if statement.method == "rtree":
             index = RTree(index_file)
             metadata = IndexInfo(statement.name, statement.column, index, spatial=True)
+        elif statement.method == "spimi":
+            index = SpimiIndex(index_file, statement.language)
+            metadata = IndexInfo(statement.name, statement.column, index, text=True)
         elif statement.method == "hash":
             index = ExtendibleHash(filepath=index_file)
             metadata = IndexInfo(statement.name, statement.column, index)
