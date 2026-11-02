@@ -1,6 +1,7 @@
 """Construcción y validación de un árbol lógico desde el AST del parser."""
 
 from dataclasses import dataclass, fields, replace
+from functools import reduce
 import math
 import struct
 
@@ -55,6 +56,24 @@ def map_children(expression, function):
     return replace(expression, **changes)
 
 
+def uses(expression, kind):
+    """Indica si la expresión contiene un nodo de ese tipo."""
+    pending = [expression]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, kind):
+            return True
+        pending.extend(expression_children(current))
+    return False
+
+
+def annotate_scan(plan, **options):
+    """Agrega opciones a los Scan del plan."""
+    if plan.operation == "Scan":
+        return replace(plan, options=plan.options + tuple(options.items()))
+    return replace(plan, children=tuple(annotate_scan(child, **options) for child in plan.children))
+
+
 def column_key(column: ast.ColumnRef) -> str:
     # Codificación sin colisiones incluso para identificadores citados con '.'.
     return column.name if column.table is None else f"c:{len(column.table)}:{column.table}{column.name}"
@@ -72,6 +91,8 @@ def output_name(expression):
         return str(expression.value)
     if isinstance(expression, ast.SpatialCall):
         return f"{expression.function.lower()}({', '.join(output_name(a) for a in expression.arguments)})"
+    if isinstance(expression, ast.ScoreCall):
+        return "score()"
     return repr(expression)
 
 
@@ -135,6 +156,8 @@ class LogicalPlanner:
             return replace(expression, argument=self._bind(expression.argument, scope))
         if isinstance(expression, ast.Star):
             raise SQLSemanticError("Comodín fuera de la proyección")
+        if isinstance(expression, ast.MatchCall):
+            raise SQLSemanticError("MATCH solo se admite una vez en el WHERE de un SELECT sobre una tabla, unido con AND")
         if isinstance(expression, ast.SpatialCall):
             if expression.function not in ("DISTANCIA", "WITHIN") or len(expression.arguments) != 2:
                 raise SQLSemanticError("Función espacial inválida")
@@ -164,6 +187,8 @@ class LogicalPlanner:
         if isinstance(statement, ast.DeleteStatement):
             scope = self._scope((statement.table,))
             predicate = self._bind(statement.where, scope) if statement.where is not None else None
+            if predicate is not None and uses(predicate, ast.ScoreCall):
+                raise SQLSemanticError("SCORE() requiere un MATCH en un SELECT")
             source = node("Scan", table=statement.table, predicate=predicate)
             if predicate is not None:
                 source = node("Filter", source, predicate=predicate)
@@ -175,7 +200,8 @@ class LogicalPlanner:
     def _select(self, statement):
         tables = (statement.from_table,) + tuple(join.table for join in statement.joins)
         scope = self._scope(tables)
-        where = self._bind(statement.where, scope) if statement.where is not None else None
+        match, where = self._split_match(statement, scope)
+        where = self._bind(where, scope) if where is not None else None
         plan = node("Scan", table=statement.from_table, predicate=where if not statement.joins else None)
         joined_scope = self._scope((statement.from_table,))
         for join in statement.joins:
@@ -235,6 +261,24 @@ class LogicalPlanner:
                 collect(child)
         for expression in [expr for _, expr in projections] + [item.expression for item in order_by] + ([having] if having else []):
             collect(expression)
+        grouping = bool(group_by or aggregates) or having is not None
+        scored = [expr for _, expr in projections] + [item.expression for item in order_by]
+        scored += [expr for expr in (where, having) if expr is not None]
+        if any(uses(expr, ast.ScoreCall) for expr in scored):
+            if match is None:
+                raise SQLSemanticError("SCORE() requiere un MATCH en el WHERE")
+            if grouping:
+                raise SQLSemanticError("SCORE() no se admite con agregación")
+        # El recorrido de texto ya entrega las filas de mayor a menor puntaje.
+        ranked = (match is not None and not statement.distinct and len(order_by) == 1
+                  and isinstance(order_by[0].expression, ast.ScoreCall) and order_by[0].direction == "DESC")
+        if match is not None:
+            # Con otro filtro, otro orden o agregación, recortar antes perdería filas válidas.
+            top_k = None
+            if (statement.limit is not None and where is None and not statement.distinct and not grouping
+                    and (ranked or not order_by)):
+                top_k = statement.limit + (statement.offset or 0)
+            plan = annotate_scan(plan, text_match=match, text_k=top_k)
         if group_by or aggregates or having is not None:
             def grouped(expr):
                 if expr in group_by:
@@ -254,7 +298,7 @@ class LogicalPlanner:
             if any(item.expression not in selected for item in order_by):
                 raise SQLSemanticError("ORDER BY con DISTINCT debe referirse a expresiones seleccionadas")
             plan = node("Distinct", plan, expressions=selected)
-        if order_by:
+        if order_by and not ranked:
             # El LIMIT va justo encima: un recorrido ordenado puede detenerse antes.
             needed = None if statement.limit is None else statement.limit + (statement.offset or 0)
             plan = node("Sort", plan, order_by=tuple(order_by), limit=needed)
@@ -275,6 +319,35 @@ class LogicalPlanner:
         if statement.limit is not None or statement.offset is not None:
             plan = node("Limit", plan, limit=statement.limit, offset=statement.offset or 0)
         return plan
+
+    def _split_match(self, statement, scope):
+        """Separa el MATCH del WHERE: (MATCH enlazado o None, WHERE sin él).
+
+        Solo un término unido con AND equivale a filtrar por el índice. Dentro de
+        OR o NOT queda en el WHERE y _bind lo rechaza.
+        """
+        terms = []
+        pending = [statement.where] if statement.where is not None else []
+        while pending:
+            term = pending.pop()
+            if isinstance(term, ast.BinaryOp) and term.operator == "AND":
+                pending += [term.right, term.left]
+            else:
+                terms.append(term)
+        matches = [term for term in terms if isinstance(term, ast.MatchCall)]
+        if not matches:
+            return None, statement.where
+        if len(matches) > 1 or statement.joins:
+            raise SQLSemanticError("MATCH solo se admite una vez en el WHERE de un SELECT sobre una tabla, unido con AND")
+        column = self._bind(matches[0].column, scope)
+        if scope[column.table][column.name] not in ("str", "text"):
+            raise SQLSemanticError(f"MATCH requiere una columna TEXT o VARCHAR: {column.name}")
+        registered = self.catalog.table(statement.from_table.name).indexes.get(column.name)
+        if registered is None or not registered.metadata.text:
+            raise SQLSemanticError(f"MATCH requiere un índice SPIMI sobre {column.name}")
+        rest = [term for term in terms if term is not matches[0]]
+        where = reduce(lambda left, right: ast.BinaryOp("AND", left, right), rest) if rest else None
+        return replace(matches[0], column=column), where
 
     def _join_pairs(self, expression, right):
         if isinstance(expression, ast.BinaryOp) and expression.operator == "AND":
