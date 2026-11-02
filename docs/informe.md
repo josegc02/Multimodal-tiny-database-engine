@@ -703,19 +703,6 @@ Documentos y consultas pasan por la misma función, `tokens(texto, idioma)` en `
 
 El índice está en `engine/indexes/spimi.py` y usa SPIMI (*Single-Pass In-Memory Indexing*), que no necesita cargar la colección completa en memoria.
 
-El ranking TF-IDF usa el esquema **lnc.ltc** de la clase: el documento conserva
-`1 + log10(tf)` y su norma precomputada, mientras que la consulta usa
-`(1 + log10(tf)) · log10(N / df)`. `SpimiIndex.rank_tfidf(texto, top_k)` acumula
-solo las posting lists de términos de la consulta, normaliza por coseno y mantiene
-el top-k con un heap; `cosine_search` es su alias usado por el laboratorio.
-
-El ranking **Okapi BM25** se expone como `SpimiIndex.rank_bm25(texto, top_k,
-k1=1.2, b=0.75)`. Usa las posting lists, el `df`, la longitud por documento y
-`average_length` ya disponibles en el índice. Su idf suavizado es
-`ln(1 + (N - df + 0.5) / (df + 0.5))`; `k1` controla la saturación de tf y `b`
-la normalización por longitud. Al igual que TF-IDF, solo evalúa documentos de
-postings de términos presentes en la consulta y mantiene un heap de tamaño k.
-
 **Formato en disco.** El archivo se divide en páginas de 4 KB. La página 0 es la cabecera, con el idioma, los totales y la ubicación de tres zonas contiguas:
 
 | Zona | Contenido |
@@ -738,13 +725,15 @@ Norma:     norma(d) = √Σ w(t,d)²
 
 El peso del documento no usa `idf`, así que su norma solo depende de él y sigue siendo exacta cuando la colección cambia. La fórmula `1 + log10(tf)` es la que usan los ejemplos resueltos de clase, y se suma 1 para que un término presente no pese 0. Para el documento `"seguro de carro, seguro de auto"`, la norma calculada es 1.92, igual que en la diapositiva.
 
+**Ranking.** `SpimiIndex.rank_tfidf(texto, top_k)` calcula la similitud del coseno con esos pesos; `cosine_search` es su alias. `SpimiIndex.rank_bm25(texto, top_k, k1=1.2, b=0.75)` calcula Okapi BM25, con `idf = ln(1 + (N - df + 0.5) / (df + 0.5))`; `k1` controla la saturación de `tf` y `b` la normalización por longitud, y `bm25_search` es su alias. Ambos leen solo las postings de los términos de la consulta, consultan cada página de la tabla de documentos una sola vez y mantienen el top-k con un heap de tamaño `k`. En `lnc.ltc`, un término presente en todos los documentos tiene `idf` 0 y no aporta al puntaje, por lo que una consulta formada solo por él no devuelve resultados.
+
 **Mantenimiento.** Reescribir el índice en cada cambio sería muy costoso, así que se usa un índice auxiliar. Las inserciones van a un delta en memoria y las eliminaciones a un conjunto de borrados, y ambos se registran en un log. Cada lectura combina el índice principal y el delta, y descarta lo borrado. Al abrir, el log vuelve a aplicarse; si la última escritura quedó cortada, se descarta. Cuando los cambios superan el 10 % de los documentos, con un mínimo de 1.000, se consolida en un archivo nuevo que reemplaza al anterior de forma atómica. Los `doc_id` se renumeran, por lo que el resultado equivale a construir desde cero. El log lleva la generación del índice, para ignorarlo si el proceso cae entre reemplazar el archivo y borrarlo. Un límite proporcional mantiene constante el costo amortizado por posting; con un límite fijo, el costo total sería cuadrático.
 
 En tablas cuyos RID se mueven (secuencial y B+ agrupado), el catálogo reconstruye el índice al final de la sentencia, como con los demás índices. El índice se registra como índice de texto, para que el planificador no lo use en `WHERE columna = valor`: busca términos, no el valor exacto.
 
-**Costos.** La mezcla cuesta `O(P log k)`, con `P` postings y `k` bloques. Buscar un término cuesta una búsqueda binaria en memoria, una página del diccionario y la lectura contigua de su lista.
+**Costos.** La mezcla cuesta `O(P log k)`, con `P` postings y `k` bloques. Buscar un término cuesta una búsqueda binaria en memoria, una página del diccionario y la lectura contigua de su lista. Rankear suma, como máximo, una lectura por página de la tabla de documentos y `O(C log k)` para el top-k, con `C` documentos candidatos.
 
-**Validación.** Las pruebas comparan el índice con un cálculo por fuerza bruta, con bloques de distintos tamaños y tras series de inserciones y eliminaciones aleatorias, antes y después de consolidar. El archivo sale idéntico byte por byte con cualquier tamaño de bloque, y un índice consolidado coincide con uno construido desde cero, salvo la generación de la cabecera. También se comprueban los ejemplos de clase: la mezcla de `brutus` (clase 09, diapositiva 9), la intersección `Bruto AND Cesar` (clase 07, diapositiva 78) y la norma de la diapositiva 68.
+**Validación.** Las pruebas comparan el índice con un cálculo por fuerza bruta, con bloques de distintos tamaños y tras series de inserciones y eliminaciones aleatorias, antes y después de consolidar. El archivo sale idéntico byte por byte con cualquier tamaño de bloque, y un índice consolidado coincide con uno construido desde cero, salvo la generación de la cabecera. También se comprueban los ejemplos de clase: la mezcla de `brutus` (clase 09, diapositiva 9), la intersección `Bruto AND Cesar` (clase 07, diapositiva 78) y la norma de la diapositiva 68. Los dos rankings se comparan con un cálculo por fuerza bruta con varios valores de `k`, y con un índice construido solo con los documentos vivos.
 
 **Medición preliminar.** Con texto sintético de 40 palabras por documento y un vocabulario de 20.000 términos con frecuencias tipo Zipf:
 
@@ -758,7 +747,7 @@ La memoria adicional de construir 20.000 documentos fue de 4,0 MB con bloques de
 
 **Simplificaciones.**
 
-* Un documento borrado sigue contando en `df` hasta consolidar, lo que altera un poco el `idf`. Las postings devueltas sí son exactas, y `N` y la longitud promedio se ajustan de inmediato.
+* `index.df()` sigue contando los documentos borrados hasta consolidar, porque responde sin leer la lista. El ranking no usa ese valor: toma como `df` el largo de la lista sin borrados, y `N` y la longitud promedio se ajustan de inmediato, así que los puntajes son exactos antes de consolidar.
 * Las postings no se comprimen, así que el índice ocupa más disco.
 * No se guardan posiciones, por lo que no se pueden buscar frases exactas.
 * El diccionario usa un solo nivel en memoria en vez de un B+ completo. Ocupa memoria proporcional a sus páginas, algo mínimo con 100.000 documentos.
