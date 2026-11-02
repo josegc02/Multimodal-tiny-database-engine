@@ -1,8 +1,10 @@
 import math
 import os
+import random
 import shutil
 import tempfile
 import unittest
+from collections import defaultdict
 from unittest.mock import patch
 
 import frontend.motor as motor_module
@@ -759,6 +761,97 @@ class TestBulkLoad(SpimiTestCase):
     def test_campo_inexistente(self):
         with SpimiIndex(self.path) as index, self.assertRaises(ValueError):
             index.bulk_load_from_storage(self.Tabla(), "titulo")
+
+
+class TestFuerzaBruta(SpimiTestCase):
+    VOCABULARIO = [f"termino{i}x" for i in range(300)] + ["canción", "niño", "casa", "gato", "de", "la"]
+
+    def texto(self, rng):
+        return " ".join(rng.choices(self.VOCABULARIO, k=rng.randint(0, 40)))
+
+    def comprobar(self, index, documentos):
+        """Compara el índice con un cálculo directo; documentos es rid -> texto."""
+        esperado = defaultdict(dict)
+        for rid, texto in documentos.items():
+            for termino, tf in index.analyze(texto).items():
+                esperado[termino][rid] = tf
+        for termino, listas in esperado.items():
+            obtenido = {index.document(doc_id).rid: tf for doc_id, tf in index.postings(termino)}
+            self.assertEqual(obtenido, listas, termino)
+        vivos = [(doc_id, index.document(doc_id)) for doc_id in range(index.next_doc_id)
+                 if doc_id not in index._deleted]
+        self.assertEqual({doc.rid for _, doc in vivos}, set(documentos))
+        for _, documento in vivos:
+            terminos = index.analyze(documentos[documento.rid])
+            self.assertEqual(documento.length, sum(terminos.values()))
+            self.assertAlmostEqual(documento.norm, math.sqrt(sum((1 + math.log10(tf)) ** 2
+                                                                 for tf in terminos.values())))
+        self.assertEqual(index.doc_count, len(documentos))
+        self.assertEqual(index.total_length, sum(doc.length for _, doc in vivos))
+
+    def test_construccion_con_varios_tamanos_de_bloque(self):
+        rng = random.Random(45)
+        documentos = {RID(i, 0): self.texto(rng) for i in range(500)}
+        for block_size in (100, 1000, 10_000, 10_000_000):
+            with self.subTest(block_size=block_size):
+                with SpimiIndex(self.path, block_size=block_size) as index:
+                    index.build((texto, rid) for rid, texto in documentos.items())
+                    self.comprobar(index, documentos)
+                os.remove(self.path)
+
+    def test_cambios_aleatorios_antes_y_despues_de_consolidar(self):
+        rng = random.Random(46)
+        documentos = {RID(i, 0): self.texto(rng) for i in range(200)}
+        siguiente = 200
+        with SpimiIndex(self.path, min_changes=10 ** 9) as index:
+            index.build((texto, rid) for rid, texto in documentos.items())
+            for _ in range(300):
+                if documentos and rng.random() < 0.4:
+                    rid = rng.choice(list(documentos))
+                    self.assertTrue(index.delete(documentos.pop(rid), rid))
+                else:
+                    rid, siguiente = RID(siguiente, 0), siguiente + 1
+                    documentos[rid] = self.texto(rng)
+                    index.insert(documentos[rid], rid)
+            self.comprobar(index, documentos)
+            index.consolidate()
+            self.comprobar(index, documentos)
+        with SpimiIndex(self.path) as index:
+            self.comprobar(index, documentos)
+
+    def test_consolidaciones_automaticas_no_pierden_datos(self):
+        rng = random.Random(47)
+        documentos = {RID(i, 0): self.texto(rng) for i in range(100)}
+        with SpimiIndex(self.path, min_changes=20, merge_ratio=0.1) as index:
+            index.build((texto, rid) for rid, texto in documentos.items())
+            for i in range(100, 400):
+                rid = RID(i, 0)
+                documentos[rid] = self.texto(rng)
+                index.insert(documentos[rid], rid)
+            self.assertGreater(index.generation, 1)
+            self.comprobar(index, documentos)
+
+
+class TestMemoria(SpimiTestCase):
+    def test_la_mezcla_solo_retiene_una_entrada_por_bloque(self):
+        leidas = [0, 0, 0]
+        escritas = []
+
+        def bloque(numero):
+            for i in range(500):
+                leidas[numero] += 1
+                yield f"{i:04d}-{numero}", [(i, 1)]
+
+        real = spimi.encode_postings
+
+        def escribir(postings):
+            escritas.append(sum(leidas) - len(escritas))
+            return real(postings)
+
+        with SpimiIndex(self.path) as index, patch.object(spimi, "encode_postings", side_effect=escribir):
+            index._merge([bloque(i) for i in range(3)])
+        self.assertEqual(len(escritas), 1500)
+        self.assertLessEqual(max(escritas), 3)  # leídas y aún sin escribir, una por bloque
 
 
 if __name__ == "__main__":
