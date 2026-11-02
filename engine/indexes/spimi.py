@@ -11,6 +11,10 @@ La construcción sigue SPIMI: cada bloque es un hash término -> postings que se
 se escribe a un archivo temporal al llenarse. Los doc_id crecen, así que las listas
 quedan ordenadas por doc_id dentro de cada bloque y entre bloques. Al final, una mezcla
 k-way con cola de prioridad une los bloques y basta concatenar las listas de un término.
+
+La tabla de documentos guarda por doc_id su RID, longitud y norma, en registros de tamaño
+fijo. La norma sigue el esquema lnc.ltc: el documento usa 1 + log10(tf), sin idf (clase 07,
+diapositiva 68), así que solo depende del documento y no cambia al modificar la colección.
 """
 
 from __future__ import annotations
@@ -23,8 +27,10 @@ import struct
 from collections import Counter
 from itertools import groupby
 from operator import itemgetter
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple
 
+from engine.indexes.rtree import RID_FILES
+from engine.storage.record import RID
 from engine.text.preprocessing import IDIOMAS, tokens
 
 PAGE_SIZE = 4096
@@ -37,12 +43,21 @@ POSTING = struct.Struct(">II")  # doc_id, tf
 BLOCK_ENTRY = struct.Struct(">BI")  # bytes del término, postings
 DICTIONARY_PAGE = struct.Struct(">H")  # entradas de la página
 DICTIONARY_ENTRY = struct.Struct(">BIQ")  # bytes del término, df, byte donde empieza su lista
+DOCUMENT = struct.Struct(">IHBBId")  # RID (página, slot, archivo), borrado, longitud, norma
+
+DOCUMENTS_PER_PAGE = PAGE_SIZE // DOCUMENT.size  # 204
 
 DEFAULT_BLOCK_SIZE = 8 * 1024 * 1024  # tamaño del bloque en disco; en memoria ocupa más
 READ_BUFFER = 16 * PAGE_SIZE  # buffer de lectura de cada bloque durante la mezcla
 MAX_TERM_BYTES = 255  # un token más largo no es una palabra (hashes, base64)
 
 Posting = Tuple[int, int]
+
+
+class DocumentInfo(NamedTuple):
+    rid: RID
+    length: int
+    norm: float
 
 
 # Convierte una lista de postings en bytes para escribirla en disco.
@@ -58,6 +73,11 @@ def decode_postings(data: bytes) -> List[Posting]:
 # Calcula cuántas páginas hacen falta para guardar `size` bytes.
 def pages_for(size: int) -> int:
     return math.ceil(size / PAGE_SIZE)
+
+
+# Peso logarítmico de un término en un documento (tf > 0).
+def tf_weight(tf: int) -> float:
+    return 1 + math.log10(tf)
 
 
 # Junta las entradas de una página del diccionario y la rellena hasta 4 KB.
@@ -159,46 +179,60 @@ class SpimiIndex:
     # --- Construcción -------------------------------------------------------------
 
     # Construye el índice desde cero: bloques, mezcla y limpieza de los temporales.
-    def build(self, documents: Iterable[str]) -> None:
+    def build(self, documents: Iterable[Tuple[str, RID]]) -> None:
         self._reset()
         paths: List[str] = []
         try:
             paths = self._build_blocks(documents)
             self._merge_blocks(paths)
+            self._copy_documents()
         except Exception:
             self._reset()
             raise
         finally:
-            self._remove_blocks(paths)
+            self._remove_blocks(paths + [self._documents_path])
         self.flush()
 
     # SPIMI-INVERT: reparte los documentos en bloques ordenados y devuelve sus rutas.
-    def _build_blocks(self, documents: Iterable[str]) -> List[str]:
+    # De paso escribe cada registro de la tabla de documentos en un archivo temporal.
+    def _build_blocks(self, documents: Iterable[Tuple[str, RID]]) -> List[str]:
         paths: List[str] = []
         block: Dict[str, List[Posting]] = {}
-        size = 0
+        size = total_length = 0
         doc_id = self.next_doc_id
         try:
-            for text in documents:
-                for term, tf in Counter(tokens(text, self.language)).items():
-                    encoded = len(term.encode("utf-8"))
-                    if encoded > MAX_TERM_BYTES:
-                        continue
-                    if term not in block:
-                        block[term] = []
-                        size += BLOCK_ENTRY.size + encoded
-                    block[term].append((doc_id, tf))
-                    size += POSTING.size
-                doc_id += 1
-                # Se revisa aquí para que un documento nunca quede partido entre bloques.
-                if size >= self.block_size:
+            with open(self._documents_path, "wb") as table:
+                for text, rid in documents:
+                    length = 0
+                    squares = 0.0
+                    for term, tf in Counter(tokens(text, self.language)).items():
+                        encoded = len(term.encode("utf-8"))
+                        if encoded > MAX_TERM_BYTES:
+                            continue
+                        if term not in block:
+                            block[term] = []
+                            size += BLOCK_ENTRY.size + encoded
+                        block[term].append((doc_id, tf))
+                        size += POSTING.size
+                        length += tf
+                        squares += tf_weight(tf) ** 2
+                    table.write(DOCUMENT.pack(rid.page_id, rid.slot_id, RID_FILES.index(rid.file), 0,
+                                              length, math.sqrt(squares)))
+                    doc_id += 1
+                    if doc_id % DOCUMENTS_PER_PAGE == 0:
+                        table.write(b"\0" * (PAGE_SIZE - DOCUMENTS_PER_PAGE * DOCUMENT.size))
+                    total_length += length
+                    # Se revisa aquí para que un documento nunca quede partido entre bloques.
+                    if size >= self.block_size:
+                        self._write_block(block, paths)
+                        block, size = {}, 0
+                if block:
                     self._write_block(block, paths)
-                    block, size = {}, 0
-            if block:
-                self._write_block(block, paths)
         except Exception:
-            self._remove_blocks(paths)
+            self._remove_blocks(paths + [self._documents_path])
             raise
+        self.doc_count += doc_id - self.next_doc_id
+        self.total_length += total_length
         self.next_doc_id = doc_id
         return paths
 
@@ -254,12 +288,44 @@ class SpimiIndex:
                 reader.close()
             self._remove_blocks([dictionary_path])
 
+    # Copia la tabla de documentos al final del índice y completa su última página.
+    def _copy_documents(self) -> None:
+        self.documents_start = self.page_count
+        self._fh.seek(self.documents_start * PAGE_SIZE)
+        with open(self._documents_path, "rb") as table:
+            shutil.copyfileobj(table, self._fh)
+            size = table.tell()
+        self.documents_pages = pages_for(size)
+        self._fh.write(b"\0" * (self.documents_pages * PAGE_SIZE - size))
+        self.page_count += self.documents_pages
+
     # Borra los archivos temporales de los bloques.
     @staticmethod
     def _remove_blocks(paths: Iterable[str]) -> None:
         for path in paths:
             if os.path.exists(path):
                 os.remove(path)
+
+    # --- Documentos ---------------------------------------------------------------
+
+    # Ruta del archivo temporal donde se acumula la tabla de documentos.
+    @property
+    def _documents_path(self) -> str:
+        return f"{self.filepath}.documents.tmp"
+
+    # Longitud promedio de los documentos, para BM25.
+    @property
+    def average_length(self) -> float:
+        return self.total_length / self.doc_count if self.doc_count else 0.0
+
+    # Devuelve el RID, la longitud y la norma de un documento leyendo una sola página.
+    def document(self, doc_id: int) -> DocumentInfo:
+        if not 0 <= doc_id < self.next_doc_id:
+            raise IndexError(f"doc_id fuera de rango: {doc_id}")
+        page, slot = divmod(doc_id, DOCUMENTS_PER_PAGE)
+        data = self._read_pages(self.documents_start + page)
+        page_id, slot_id, file, _, length, norm = DOCUMENT.unpack_from(data, slot * DOCUMENT.size)
+        return DocumentInfo(RID(page_id, slot_id, RID_FILES[file]), length, norm)
 
     # --- Ciclo de vida -----------------------------------------------------------
 

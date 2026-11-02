@@ -1,3 +1,4 @@
+import math
 import os
 import shutil
 import tempfile
@@ -5,8 +6,14 @@ import unittest
 from unittest.mock import patch
 
 from engine.indexes import spimi
-from engine.indexes.spimi import (BLOCK_ENTRY, HEADER, MAX_TERM_BYTES, PAGE_SIZE, POSTING, SpimiIndex,
-                                  decode_dictionary_page, decode_postings, encode_postings, pages_for, read_block)
+from engine.indexes.spimi import (BLOCK_ENTRY, DOCUMENTS_PER_PAGE, HEADER, MAX_TERM_BYTES, PAGE_SIZE, POSTING,
+                                  SpimiIndex, decode_dictionary_page, decode_postings, encode_postings, pages_for,
+                                  read_block, tf_weight)
+from engine.storage.record import RID
+
+
+def con_rid(textos):
+    return [(texto, RID(i, 0)) for i, texto in enumerate(textos)]
 
 
 class SpimiTestCase(unittest.TestCase):
@@ -93,7 +100,7 @@ class TestArchivo(SpimiTestCase):
 class TestBloques(SpimiTestCase):
     def build(self, documents, block_size=10_000):
         with SpimiIndex(self.path, block_size=block_size) as index:
-            paths = index._build_blocks(documents)
+            paths = index._build_blocks(con_rid(documents))
             self.addCleanup(index._remove_blocks, paths)
             return [dict(read_block(path)) for path in paths], paths, index.next_doc_id
 
@@ -159,22 +166,22 @@ class TestBloques(SpimiTestCase):
 
     def test_doc_id_continua_en_la_siguiente_construccion(self):
         with SpimiIndex(self.path) as index:
-            primeros = index._build_blocks(["casa"])
+            primeros = index._build_blocks(con_rid(["casa"]))
             index._remove_blocks(primeros)
-            segundos = index._build_blocks(["gato"])
+            segundos = index._build_blocks(con_rid(["gato"]))
             self.addCleanup(index._remove_blocks, segundos)
             self.assertEqual(dict(read_block(segundos[0])), {"gat": [(1, 1)]})
 
     def test_error_al_leer_limpia_los_temporales(self):
         def documentos():
-            yield "casa"
-            yield "gato"
+            yield "casa", RID(0, 0)
+            yield "gato", RID(0, 1)
             raise OSError("fallo de lectura")
 
         with SpimiIndex(self.path, block_size=1) as index:
             with self.assertRaises(OSError):
                 index._build_blocks(documentos())
-            self.assertEqual(index.next_doc_id, 0)
+            self.assertEqual((index.next_doc_id, index.doc_count, index.total_length), (0, 0, 0))
         self.assertEqual(os.listdir(self.dir), [os.path.basename(self.path)])
 
     def test_tamano_de_bloque_invalido(self):
@@ -230,7 +237,7 @@ class TestMezcla(SpimiTestCase):
 
     def test_listas_comparten_pagina(self):
         with SpimiIndex(self.path) as index:
-            index.build([f"palabra{i}" for i in range(50)])
+            index.build(con_rid([f"palabra{i}" for i in range(50)]))
             self.assertEqual(index.term_count, 50)
             self.assertEqual(index.postings_pages, 1)
 
@@ -246,7 +253,7 @@ class TestBuild(SpimiTestCase):
 
     def test_construye_y_persiste(self):
         with SpimiIndex(self.path) as index:
-            index.build(self.DOCUMENTOS)
+            index.build(con_rid(self.DOCUMENTOS))
         with SpimiIndex(self.path) as index:
             self.assertEqual(index.term_count, 5)
             self.assertEqual(contenido(index), {
@@ -259,14 +266,14 @@ class TestBuild(SpimiTestCase):
 
     def test_no_deja_temporales(self):
         with SpimiIndex(self.path, block_size=1) as index:
-            index.build(self.DOCUMENTOS)
+            index.build(con_rid(self.DOCUMENTOS))
         self.assertEqual(os.listdir(self.dir), [os.path.basename(self.path)])
 
     def test_mismo_archivo_con_cualquier_tamano_de_bloque(self):
         archivos = set()
         for block_size in (1, 40, 10_000):
             with SpimiIndex(self.path, block_size=block_size) as index:
-                index.build(self.DOCUMENTOS * 50)
+                index.build(con_rid(self.DOCUMENTOS * 50))
             with open(self.path, "rb") as f:
                 archivos.add(f.read())
             os.remove(self.path)
@@ -274,15 +281,15 @@ class TestBuild(SpimiTestCase):
 
     def test_coleccion_vacia(self):
         with SpimiIndex(self.path) as index:
-            index.build([])
+            index.build(con_rid([]))
             self.assertEqual(contenido(index), {})
             self.assertEqual((index.term_count, index.page_count), (0, 1))
         self.assertEqual(os.path.getsize(self.path), PAGE_SIZE)
 
     def test_reconstruir_reemplaza_el_contenido(self):
         with SpimiIndex(self.path) as index:
-            index.build(self.DOCUMENTOS)
-            index.build(["ratón"])
+            index.build(con_rid(self.DOCUMENTOS))
+            index.build(con_rid(["ratón"]))
             self.assertEqual(contenido(index), {"raton": (1, [(0, 1)])})
             self.assertEqual(index.next_doc_id, 1)
 
@@ -290,9 +297,86 @@ class TestBuild(SpimiTestCase):
         with SpimiIndex(self.path, block_size=1) as index:
             with patch.object(spimi.shutil, "copyfileobj", side_effect=OSError("disco lleno")):
                 with self.assertRaises(OSError):
-                    index.build(self.DOCUMENTOS)
+                    index.build(con_rid(self.DOCUMENTOS))
             self.assertEqual(contenido(index), {})
             self.assertEqual(index.page_count, 1)
+        self.assertEqual(os.listdir(self.dir), [os.path.basename(self.path)])
+
+
+class TestDocumentos(SpimiTestCase):
+    def build(self, documentos):
+        index = SpimiIndex(self.path)
+        self.addCleanup(index.close)
+        index.build(documentos)
+        return index
+
+    def test_norma_de_la_diapositiva_68(self):
+        index = self.build(con_rid(["seguro de carro, seguro de auto"]))
+        documento = index.document(0)
+        self.assertEqual(documento.length, 4)  # "de" es stopword
+        self.assertAlmostEqual(documento.norm, 1.92, places=2)
+        self.assertAlmostEqual(documento.norm, math.sqrt(1 + 1 + tf_weight(2) ** 2))
+
+    def test_peso_del_tf(self):
+        self.assertEqual([round(tf_weight(tf), 1) for tf in (1, 2, 10, 1000)], [1, 1.3, 2, 4])
+
+    def test_devuelve_el_rid_de_cada_archivo(self):
+        documentos = [("casa", RID(7, 3)), ("gato", RID(70_000, 65_000, "aux"))]
+        index = self.build(documentos)
+        self.assertEqual(index.document(0).rid, RID(7, 3))
+        self.assertEqual(index.document(1).rid, RID(70_000, 65_000, "aux"))
+
+    def test_totales_y_longitud_promedio(self):
+        index = self.build(con_rid(["casa casa gato", "perro", "de la"]))
+        self.assertEqual([index.document(i).length for i in range(3)], [3, 1, 0])
+        self.assertEqual((index.doc_count, index.total_length), (3, 4))
+        self.assertAlmostEqual(index.average_length, 4 / 3)
+
+    def test_documento_sin_terminos_tiene_norma_cero(self):
+        index = self.build(con_rid(["casa", "", "gato"]))
+        self.assertEqual(index.document(1).norm, 0)
+        self.assertEqual(index.document(2).rid, RID(2, 0))
+
+    def test_tabla_de_varias_paginas(self):
+        cantidad = 2 * DOCUMENTS_PER_PAGE + 5
+        index = self.build(con_rid(["casa"] * cantidad))
+        self.assertEqual(index.documents_pages, 3)
+        for doc_id in (0, DOCUMENTS_PER_PAGE - 1, DOCUMENTS_PER_PAGE, cantidad - 1):
+            with self.subTest(doc_id=doc_id):
+                self.assertEqual(index.document(doc_id).rid, RID(doc_id, 0))
+
+    def test_consultar_un_documento_lee_una_pagina(self):
+        index = self.build(con_rid(["casa"] * 500))
+        with patch.object(index, "_read_pages", wraps=index._read_pages) as lectura:
+            index.document(450)
+        lectura.assert_called_once_with(index.documents_start + 2)
+
+    def test_persiste_al_reabrir(self):
+        with SpimiIndex(self.path) as index:
+            index.build(con_rid(["seguro seguro auto"]))
+            norma = index.document(0).norm
+        with SpimiIndex(self.path) as index:
+            self.assertEqual(index.document(0).norm, norma)
+            self.assertEqual((index.doc_count, index.total_length), (1, 3))
+
+    def test_el_archivo_ocupa_lo_que_dice_la_cabecera(self):
+        with SpimiIndex(self.path) as index:
+            index.build(con_rid(["casa grande"] * 300))
+            paginas = index.page_count
+        self.assertEqual(os.path.getsize(self.path), paginas * PAGE_SIZE)
+
+    def test_coleccion_vacia(self):
+        index = self.build([])
+        self.assertEqual((index.documents_pages, index.average_length), (0, 0.0))
+
+    def test_doc_id_fuera_de_rango(self):
+        index = self.build(con_rid(["casa"]))
+        for doc_id in (-1, 1):
+            with self.subTest(doc_id=doc_id), self.assertRaises(IndexError):
+                index.document(doc_id)
+
+    def test_no_deja_temporales(self):
+        self.build(con_rid(["casa"]))
         self.assertEqual(os.listdir(self.dir), [os.path.basename(self.path)])
 
 
