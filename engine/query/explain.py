@@ -48,6 +48,9 @@ class PlanNode:
     limited: bool = False              # el costo ya considera que un LIMIT lo detiene
 
 
+RANKINGS = {"tf_idf": "TF-IDF (cosine)", "bm25": "BM25"}
+
+
 def sql_text(expression, qualified=False, names=None):
     """Expresión SQL legible, con paréntesis como PostgreSQL."""
     names = names or {}
@@ -69,6 +72,8 @@ def sql_text(expression, qualified=False, names=None):
             return str(e.value)
         if isinstance(e, ast.Star):
             return "*"
+        if isinstance(e, ast.ScoreCall):
+            return "score()"
         if isinstance(e, ast.AggregateCall):
             return f"{e.function.lower()}({'DISTINCT ' if e.distinct else ''}{text(e.argument)})"
         if isinstance(e, ast.SpatialCall):
@@ -253,6 +258,14 @@ class PlanExplainer:
                         rows = min(rows, amount)
                     else:
                         details.append(f"Radius: {amount:g} m; Refinement: exact distance <= radius")
+            elif choice.algorithm == "text_scan":
+                label = f"Text Search using {choice.index.name} on {self._table_label(table)}"
+                query, ranking, top_k, rows = choice.value
+                column = self._text(ast.ColumnRef(choice.field, qualifier))
+                details.append(f"Text Cond: match({column}, {self._text(ast.Literal(query))})")
+                details.append(f"Ranking: {RANKINGS[ranking]}; " + (f"Top-k: {top_k}" if top_k is not None else "All matches"))
+                # Calcula todo el ranking antes de entregar la primera fila.
+                startup = cost
             elif choice.algorithm == "index_scan":
                 label = f"Index Scan using {choice.index.name} on {self._table_label(table)}"
                 column = ast.ColumnRef(choice.field, qualifier)
@@ -395,6 +408,9 @@ class PlanExplainer:
                 if counters is not None:
                     detail_line(f"Nodes Visited: {counters['nodes_visited']}; Leaves Visited: {counters['leaves_visited']}")
                     detail_line(f"Spatial Candidates: {counters['candidates']}; Exact Refinements: {counters['refined']}")
+                counters = next((stats.text[key] for key in node.keys if key in stats.text), None)
+                if counters is not None:
+                    detail_line(f"Postings Read: {counters['postings_read']}; Index Pages Read: {counters['pages_read']}")
             if analyze and node.is_sort and stats is not None and measured is not None:
                 if stats.initial_runs > 0:
                     detail_line(f"Sort Method: external merge  Runs: {stats.initial_runs}  "

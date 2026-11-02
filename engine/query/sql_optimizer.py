@@ -172,9 +172,14 @@ class SQLOptimizer:
     def _text_choice(self, plan, binding, indexes):
         match = plan.get("text_match")
         index = next(index for index in indexes if index.text and index.field == match.column.name)
-        return self.costs._plan("text", "text_scan", binding.statistics.pages,
+        top_k = plan.get("text_k")
+        with binding.latch:
+            candidates, pages = index.index.estimate(match.query)
+        rows = candidates if top_k is None else min(candidates, top_k)
+        # Además del índice, cada fila entregada lee su registro.
+        return self.costs._plan("text", "text_scan", pages + rows,
                                 "Índice invertido: solo lee los documentos con términos de la consulta.",
-                                index=index, field=index.field, value=(match.query, match.ranking, plan.get("text_k")))
+                                index=index, field=index.field, value=(match.query, match.ranking, top_k, rows))
 
     def choice(self, plan):
         if plan.operation == "Scan":

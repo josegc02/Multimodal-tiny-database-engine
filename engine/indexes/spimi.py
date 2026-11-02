@@ -522,6 +522,15 @@ class SpimiIndex:
         """Alias explícito para búsquedas BM25."""
         return self.rank_bm25(text, top_k, k1=k1, b=b)
 
+    # Estima (candidatos, páginas por leer) de un ranking sin leer las postings.
+    # Usa index.df(), así que cuenta los borrados que aún no se consolidan.
+    def estimate(self, text: Optional[str]) -> Tuple[int, int]:
+        terms = self.analyze(text)
+        postings = sum(self.df(term) for term in terms)
+        candidates = min(postings, self.doc_count)
+        document_pages = math.ceil(self.doc_count / DOCUMENTS_PER_PAGE)
+        return candidates, len(terms) + pages_for(postings * POSTING.size) + min(candidates, document_pages)
+
     # Pone en cero los contadores de lecturas.
     def reset_stats(self) -> None:
         self.stats = SpimiStats()

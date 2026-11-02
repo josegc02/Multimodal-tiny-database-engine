@@ -157,7 +157,7 @@ class SQLExecutor:
     def _text_scan(self, plan, binding, physical, stats):
         """Rankea bajo el latch de la tabla y entrega las filas de mayor a menor puntaje."""
         table, index = plan.get("table"), physical.index.index
-        query, ranking, top_k = physical.value
+        query, ranking, top_k, _ = physical.value
         rank = index.rank_bm25 if ranking == "bm25" else index.rank_tfidf
         totals = stats.text.setdefault(id(plan), dict(postings_read=0, pages_read=0, results=0))
         with binding.latch:

@@ -105,7 +105,7 @@ class TestPlanner(TextSQLTestCase):
                 self.plan(sql)
 
 
-class TestExecution(TextSQLTestCase):
+class TextRowsTestCase(TextSQLTestCase):
     ROWS = [(1, 2001, "gato gato gato negro", "a", "uno"),
             (2, 2005, "gato blanco y perro", "b", "dos"),
             (3, 2010, "perro negro", "c", "tres"),
@@ -131,6 +131,8 @@ class TestExecution(TextSQLTestCase):
         storage = self.motor.catalog.table("docs").storage
         return [(storage.get(rid)["id"], score) for rid, score in rank(query, count)]
 
+
+class TestExecution(TextRowsTestCase):
     def test_examples_of_the_project_statement(self):
         expected = self.ranked(self.index().rank_tfidf, "gato", 2)
         found = self.rows("SELECT id FROM docs WHERE MATCH(contenido, 'gato') USING TF_IDF LIMIT 2")
@@ -199,6 +201,40 @@ class TestExecution(TextSQLTestCase):
         self.assertEqual(found, expected)
         self.assertEqual(found[0][0], 7)
         self.assertNotIn(1, [doc_id for doc_id, _ in found])
+
+
+class TestExplain(TextRowsTestCase):
+    def test_top_k(self):
+        plan = self.execute("EXPLAIN SELECT * FROM docs WHERE MATCH(contenido, 'gato') USING TF_IDF LIMIT 2").plan
+        text = "\n".join(plan)
+        self.assertIn("Text Search using docs_contenido on docs", text)
+        self.assertIn("Text Cond: match(contenido, 'gato')", text)
+        self.assertIn("Ranking: TF-IDF (cosine); Top-k: 2", text)
+
+    def test_explain_without_top_k(self):
+        plan = "\n".join(self.execute("EXPLAIN SELECT id FROM docs WHERE MATCH(contenido, 'gato') USING BM25 "
+                                      "AND anio > 2000 LIMIT 2").plan)
+        self.assertIn("Ranking: BM25; All matches", plan)
+        self.assertIn("Filter: (anio > 2000)", plan)
+
+    def test_explain_estimates_rows_from_the_terms(self):
+        plan = self.execute("EXPLAIN SELECT id FROM docs WHERE MATCH(contenido, 'gato') USING BM25").plan
+        self.assertIn("rows=3", plan[0])
+        self.assertEqual(self.index().stats.postings_read, 0)
+
+    def test_analyze_reports_the_postings_read(self):
+        self.index().reset_stats()
+        plan = "\n".join(self.execute("EXPLAIN ANALYZE SELECT id FROM docs "
+                                      "WHERE MATCH(contenido, 'gato negro') USING BM25 LIMIT 2").plan)
+        self.assertIn(f"Postings Read: {self.index().stats.postings_read};", plan)
+        self.assertIn("Postings Read: 5;", plan)
+        self.assertIn("Index Pages Read:", plan)
+
+    def test_explain_shows_score_in_sort_and_filter(self):
+        plan = "\n".join(self.execute("EXPLAIN SELECT id FROM docs WHERE MATCH(contenido, 'gato') USING BM25 "
+                                      "AND SCORE() > 0.1 ORDER BY SCORE()").plan)
+        self.assertIn("Sort Key: score()", plan)
+        self.assertIn("Filter: (score() > 0.1)", plan)
 
 
 class TestExecutionInEveryStorage(TextSQLTestCase):
