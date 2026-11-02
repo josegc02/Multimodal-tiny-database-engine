@@ -698,3 +698,55 @@ Documentos y consultas pasan por la misma función, `tokens(texto, idioma)` en `
 * Sin tildes, `sería` y `seria` son la misma palabra, así que `seria` también se elimina.
 * Una consulta sin tilde no siempre coincide con el documento en verbos agudos (`corrio` y `corrió`).
 * Snowball no une todas las variantes: `año` y `años` tienen raíces distintas, y el inglés `ran` no se reduce a `run`.
+
+### 7. Índice invertido con SPIMI
+
+El índice está en `engine/indexes/spimi.py` y usa SPIMI (*Single-Pass In-Memory Indexing*), que no necesita cargar la colección completa en memoria.
+
+**Formato en disco.** El archivo se divide en páginas de 4 KB. La página 0 es la cabecera, con el idioma, los totales y la ubicación de tres zonas contiguas:
+
+| Zona | Contenido |
+|---|---|
+| Postings | Listas de `(doc_id, tf)` escritas una tras otra, ordenadas por `doc_id` |
+| Diccionario | Por término, su `df` y el byte donde empieza su lista |
+| Documentos | Por `doc_id`, su RID, longitud y norma, en registros de 19 bytes |
+
+**Construcción.** Cada documento pasa por el preprocesamiento y recibe un `doc_id` creciente. Sus postings se acumulan en un hash; cuando el bloque llega a su límite (8 MiB en disco por defecto), se ordena por término y se escribe en un archivo temporal. Un documento nunca se parte entre bloques. Después, una mezcla k-way con cola de prioridad, con un buffer de lectura por bloque, une los bloques. Como los `doc_id` crecen, basta concatenar las listas de un término en orden de bloque para que sigan ordenadas. Los términos de más de 255 bytes se descartan, porque suelen ser hashes o base64, y así toda entrada cabe en una página.
+
+**Lectura.** En la primera búsqueda se carga en memoria el primer término de cada página del diccionario. Buscar un término ubica su página con búsqueda binaria, lee esa página y lee la lista de corrido. Consultar un documento lee una sola página, porque su posición se calcula con el `doc_id`. Abrir el índice no lo reconstruye.
+
+**Esquema de pesos.** Se usa `lnc.ltc`, el del ejemplo de la diapositiva 68 de la clase 07, que también presenta *Introduction to Information Retrieval*:
+
+```text
+Documento: w(t,d) = 1 + log10(tf)
+Consulta:  w(t,q) = (1 + log10(tf)) × log10(N / df)
+Norma:     norma(d) = √Σ w(t,d)²
+```
+
+El peso del documento no usa `idf`, así que su norma solo depende de él y sigue siendo exacta cuando la colección cambia. La fórmula `1 + log10(tf)` es la que usan los ejemplos resueltos de clase, y se suma 1 para que un término presente no pese 0. Para el documento `"seguro de carro, seguro de auto"`, la norma calculada es 1.92, igual que en la diapositiva.
+
+**Mantenimiento.** Reescribir el índice en cada cambio sería muy costoso, así que se usa un índice auxiliar. Las inserciones van a un delta en memoria y las eliminaciones a un conjunto de borrados, y ambos se registran en un log. Cada lectura combina el índice principal y el delta, y descarta lo borrado. Al abrir, el log vuelve a aplicarse; si la última escritura quedó cortada, se descarta. Cuando los cambios superan el 10 % de los documentos, con un mínimo de 1.000, se consolida en un archivo nuevo que reemplaza al anterior de forma atómica. Los `doc_id` se renumeran, por lo que el resultado equivale a construir desde cero. El log lleva la generación del índice, para ignorarlo si el proceso cae entre reemplazar el archivo y borrarlo. Un límite proporcional mantiene constante el costo amortizado por posting; con un límite fijo, el costo total sería cuadrático.
+
+En tablas cuyos RID se mueven (secuencial y B+ agrupado), el catálogo reconstruye el índice al final de la sentencia, como con los demás índices. El índice se registra como índice de texto, para que el planificador no lo use en `WHERE columna = valor`: busca términos, no el valor exacto.
+
+**Costos.** La mezcla cuesta `O(P log k)`, con `P` postings y `k` bloques. Buscar un término cuesta una búsqueda binaria en memoria, una página del diccionario y la lectura contigua de su lista.
+
+**Validación.** Las pruebas comparan el índice con un cálculo por fuerza bruta, con bloques de distintos tamaños y tras series de inserciones y eliminaciones aleatorias, antes y después de consolidar. El archivo sale idéntico byte por byte con cualquier tamaño de bloque, y un índice consolidado coincide con uno construido desde cero, salvo la generación de la cabecera. También se comprueban los ejemplos de clase: la mezcla de `brutus` (clase 09, diapositiva 9), la intersección `Bruto AND Cesar` (clase 07, diapositiva 78) y la norma de la diapositiva 68.
+
+**Medición preliminar.** Con texto sintético de 40 palabras por documento y un vocabulario de 20.000 términos con frecuencias tipo Zipf:
+
+| Documentos | Construcción | Tamaño | Lectura de una lista (mediana) |
+|---:|---:|---:|---:|
+| 1.000 | 2,4 s | 0,5 MB | 0,27 ms |
+| 10.000 | 7,8 s | 3,2 MB | 0,26 ms |
+| 100.000 | 38,8 s | 28,1 MB | 0,30 ms |
+
+La memoria adicional de construir 20.000 documentos fue de 4,0 MB con bloques de 256 KB y de 16,5 MB con bloques de 2 MiB, porque durante la mezcla solo se retiene una entrada y un buffer de 64 KB por bloque. Estas cifras solo comprueban la escalabilidad del índice: la comparación con BM25 y GIN se hará con datos reales en la comparación experimental.
+
+**Simplificaciones.**
+
+* Un documento borrado sigue contando en `df` hasta consolidar, lo que altera un poco el `idf`. Las postings devueltas sí son exactas, y `N` y la longitud promedio se ajustan de inmediato.
+* Las postings no se comprimen, así que el índice ocupa más disco.
+* No se guardan posiciones, por lo que no se pueden buscar frases exactas.
+* El diccionario usa un solo nivel en memoria en vez de un B+ completo. Ocupa memoria proporcional a sus páginas, algo mínimo con 100.000 documentos.
+* La mezcla abre todos los bloques a la vez, así que el número de bloques está limitado por los archivos abiertos que admite el sistema.

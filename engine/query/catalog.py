@@ -92,11 +92,18 @@ class TableBinding:
                 f'llave duplicada viola la restricción de unicidad "{self.primary_key_name}": '
                 f"ya existe la llave ({self.primary_key})=({value})")
 
+    def _equality_index(self, column):
+        """Índice vigente que resuelve `column == valor`; los de texto buscan términos."""
+        registered = self.indexes.get(column)
+        if registered is None or not registered.valid or getattr(registered.metadata, "text", False):
+            return None
+        return registered
+
     def _key_exists(self, value):
         with self.latch:
             column = self.primary_key
-            registered = self.indexes.get(column)
-            if registered is not None and registered.valid:
+            registered = self._equality_index(column)
+            if registered is not None:
                 return any(self.storage.get(rid) is not None for rid in registered.index.search(value))
             if getattr(self.storage, "key_field", None) == column and callable(
                     getattr(self.storage, "search_by_key", None)):
@@ -106,8 +113,8 @@ class TableBinding:
     def rows_with(self, column, value):
         """(RID, registro) con `column == value`, usando un índice vigente si existe."""
         with self.latch:
-            registered = self.indexes.get(column)
-            if registered is not None and registered.valid:
+            registered = self._equality_index(column)
+            if registered is not None:
                 found = [(rid, self.storage.get(rid)) for rid in registered.index.search(value)]
                 return [(rid, record) for rid, record in found
                         if record is not None and record[column] == value]
