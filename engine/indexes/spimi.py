@@ -420,6 +420,66 @@ class SpimiIndex:
         common = set.intersection(*({doc_id for doc_id, _ in self.postings(term)} for term in terms))
         return [self.document(doc_id).rid for doc_id in sorted(common)]
 
+    @staticmethod
+    def _top_k(scores: Iterable[Tuple[int, float]], top_k: int) -> List[Tuple[int, float]]:
+        """Conserva solo los k puntajes mayores; desempata por doc_id ascendente."""
+        if type(top_k) is not int or top_k < 0:
+            raise ValueError("top_k debe ser un entero no negativo")
+        if not top_k:
+            return []
+        # heapq es un min-heap: (score, -doc_id) deja en la raíz el peor
+        # resultado y, a igual score, el doc_id más grande.
+        best = []
+        for doc_id, score in scores:
+            candidate = (score, -doc_id)
+            if len(best) < top_k:
+                heapq.heappush(best, candidate)
+            elif candidate > best[0]:
+                heapq.heapreplace(best, candidate)
+        return [(-doc_id, score) for score, doc_id in
+                sorted(best, key=lambda item: (-item[0], -item[1]))]
+
+    def rank_tfidf(self, text: Optional[str], top_k: int = 10) -> List[Tuple[RID, float]]:
+        """Ranking lnc.ltc con coseno, sin recorrer documentos sin términos comunes.
+
+        Los documentos ya guardan su norma ``lnc``: ``1 + log10(tf)`` sin idf.
+        La consulta usa ``ltc``: ``(1 + log10(tf)) * log10(N / df)``. Solo se
+        leen las postings de los términos de la consulta y la tabla de documentos
+        de los candidatos que recibieron contribuciones.
+        """
+        if type(top_k) is not int or top_k < 0:
+            raise ValueError("top_k debe ser un entero no negativo")
+        query = self.analyze(text)
+        if not top_k or not query or not self.doc_count:
+            return []
+        weights = {}
+        for term, tf in query.items():
+            df = self.df(term)
+            if df:
+                weight = tf_weight(tf) * math.log10(self.doc_count / df)
+                if weight:
+                    weights[term] = weight
+        query_norm = math.sqrt(sum(weight * weight for weight in weights.values()))
+        if not query_norm:
+            return []
+
+        dots: Dict[int, float] = {}
+        for term, query_weight in weights.items():
+            for doc_id, tf in self.postings(term):
+                dots[doc_id] = dots.get(doc_id, 0.0) + query_weight * tf_weight(tf)
+
+        def scores():
+            for doc_id, dot in dots.items():
+                document = self.document(doc_id)
+                if document.norm:
+                    yield doc_id, dot / (query_norm * document.norm)
+
+        return [(self.document(doc_id).rid, score) for doc_id, score in self._top_k(scores(), top_k)]
+
+    def cosine_search(self, text: Optional[str], top_k: int = 10) -> List[Tuple[RID, float]]:
+        """Nombre usado en el laboratorio para el ranking TF-IDF por coseno."""
+        return self.rank_tfidf(text, top_k)
+
     # Pone en cero los contadores de lecturas.
     def reset_stats(self) -> None:
         self.stats = SpimiStats()

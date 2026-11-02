@@ -703,6 +703,12 @@ Documentos y consultas pasan por la misma función, `tokens(texto, idioma)` en `
 
 El índice está en `engine/indexes/spimi.py` y usa SPIMI (*Single-Pass In-Memory Indexing*), que no necesita cargar la colección completa en memoria.
 
+El ranking TF-IDF usa el esquema **lnc.ltc** de la clase: el documento conserva
+`1 + log10(tf)` y su norma precomputada, mientras que la consulta usa
+`(1 + log10(tf)) · log10(N / df)`. `SpimiIndex.rank_tfidf(texto, top_k)` acumula
+solo las posting lists de términos de la consulta, normaliza por coseno y mantiene
+el top-k con un heap; `cosine_search` es su alias usado por el laboratorio.
+
 **Formato en disco.** El archivo se divide en páginas de 4 KB. La página 0 es la cabecera, con el idioma, los totales y la ubicación de tres zonas contiguas:
 
 | Zona | Contenido |
