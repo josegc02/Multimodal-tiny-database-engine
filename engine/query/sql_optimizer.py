@@ -169,6 +169,13 @@ class SQLOptimizer:
                             return selected
         return None
 
+    def _text_choice(self, plan, binding, indexes):
+        match = plan.get("text_match")
+        index = next(index for index in indexes if index.text and index.field == match.column.name)
+        return self.costs._plan("text", "text_scan", binding.statistics.pages,
+                                "Índice invertido: solo lee los documentos con términos de la consulta.",
+                                index=index, field=index.field, value=(match.query, match.ranking, plan.get("text_k")))
+
     def choice(self, plan):
         if plan.operation == "Scan":
             table = plan.get("table")
@@ -178,6 +185,8 @@ class SQLOptimizer:
             indexes = binding.index_info()
             schema = binding.storage.schema
             kinds = dict(zip(schema.fields, schema.types))
+            if plan.get("text_match") is not None:
+                return self._text_choice(plan, binding, indexes)
             spatial = self._spatial_choice(plan, binding, qualifier, indexes)
             if spatial is not None:
                 return spatial
@@ -203,7 +212,8 @@ class SQLOptimizer:
         source = plan.children[0]
         scan = base_scan(source)
         binding = self.catalog.table(scan.get("table").name) if scan else None
-        spatial_source = scan is not None and self.choice(scan).algorithm.startswith("rtree_")
+        # El recorrido espacial o de texto ya eligió las filas: un índice de orden no puede reemplazarlo.
+        spatial_source = scan is not None and self.choice(scan).algorithm.startswith(("rtree_", "text_"))
         if plan.operation == "Sort":
             items = plan.get("order_by")
             simple = scan is not None and not spatial_source and all(isinstance(i.expression, ast.ColumnRef) for i in items)

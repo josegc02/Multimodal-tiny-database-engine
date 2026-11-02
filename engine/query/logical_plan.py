@@ -11,6 +11,9 @@ from engine.query.errors import SQLSemanticError
 from engine.spatial.geometry import Point, Polygon
 
 
+SCORE_COLUMN = "$score"  # campo interno de cada fila con el valor de SCORE()
+
+
 @dataclass(frozen=True)
 class LogicalPlan:
     operation: str

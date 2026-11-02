@@ -105,5 +105,118 @@ class TestPlanner(TextSQLTestCase):
                 self.plan(sql)
 
 
+class TestExecution(TextSQLTestCase):
+    ROWS = [(1, 2001, "gato gato gato negro", "a", "uno"),
+            (2, 2005, "gato blanco y perro", "b", "dos"),
+            (3, 2010, "perro negro", "c", "tres"),
+            (4, 2015, "raton de campo", "d", "cuatro"),
+            (5, 2020, "gato en el tejado con un raton", "e", "cinco"),
+            (6, 2025, "ave marina", "f", "seis")]
+
+    def setUp(self):
+        super().setUp()
+        self.fill()
+
+    def fill(self):
+        values = ", ".join(str(row) for row in self.ROWS)
+        self.execute(f"INSERT INTO docs VALUES {values}")
+
+    def index(self):
+        return self.motor.catalog.table("docs").indexes["contenido"].index
+
+    def rows(self, sql):
+        return self.execute(sql).filas
+
+    def ranked(self, rank, query, count=100):
+        storage = self.motor.catalog.table("docs").storage
+        return [(storage.get(rid)["id"], score) for rid, score in rank(query, count)]
+
+    def test_examples_of_the_project_statement(self):
+        expected = self.ranked(self.index().rank_tfidf, "gato", 2)
+        found = self.rows("SELECT id FROM docs WHERE MATCH(contenido, 'gato') USING TF_IDF LIMIT 2")
+        self.assertEqual(found, [(doc_id,) for doc_id, _ in expected])
+        expected = self.ranked(self.index().rank_bm25, "gato negro")
+        found = self.rows("SELECT id, SCORE() as relevancia FROM docs "
+                          "WHERE MATCH(contenido, 'gato negro') USING BM25 ORDER BY relevancia DESC")
+        self.assertEqual(found, expected)
+        columns = self.execute("SELECT *, SCORE() as relevancia FROM docs "
+                               "WHERE MATCH(contenido, 'gato') USING BM25").columnas
+        self.assertEqual(columns, ["id", "anio", "contenido", "otro", "titulo", "relevancia"])
+
+    def test_limit_without_order_by_returns_the_top_k(self):
+        for technique, rank in (("TF_IDF", self.index().rank_tfidf), ("BM25", self.index().rank_bm25)):
+            with self.subTest(technique=technique):
+                everything = self.ranked(rank, "gato raton")
+                found = self.rows(f"SELECT id, SCORE() FROM docs WHERE MATCH(contenido, 'gato raton') "
+                                  f"USING {technique} LIMIT 2")
+                self.assertEqual(found, everything[:2])
+                found = self.rows(f"SELECT id, SCORE() FROM docs WHERE MATCH(contenido, 'gato raton') "
+                                  f"USING {technique} LIMIT 2 OFFSET 1")
+                self.assertEqual(found, everything[1:3])
+
+    def test_other_filters_do_not_lose_rows_of_the_top_k(self):
+        everything = self.ranked(self.index().rank_bm25, "gato")
+        recent = [row for row in everything if row[0] != 1]
+        found = self.rows("SELECT id, SCORE() FROM docs WHERE MATCH(contenido, 'gato') USING BM25 "
+                          "AND anio > 2001 LIMIT 2")
+        self.assertEqual(found, recent[:2])
+
+    def test_order_by_another_column_returns_only_matches(self):
+        self.execute("CREATE INDEX docs_anio ON docs (anio) USING BTREE")
+        found = self.rows("SELECT id FROM docs WHERE MATCH(contenido, 'gato') USING BM25 ORDER BY anio DESC LIMIT 2")
+        self.assertEqual(found, [(5,), (2,)])
+        found = self.rows("SELECT anio, COUNT(*) FROM docs WHERE MATCH(contenido, 'perro') USING BM25 "
+                          "GROUP BY anio ORDER BY anio")
+        self.assertEqual(found, [(2005, 1), (2010, 1)])
+
+    def test_order_by_score_ascending(self):
+        expected = self.ranked(self.index().rank_bm25, "gato")
+        found = self.rows("SELECT id, SCORE() AS s FROM docs WHERE MATCH(contenido, 'gato') USING BM25 ORDER BY s ASC")
+        self.assertEqual(sorted(found), sorted(expected))
+        self.assertEqual([score for _, score in found], sorted(score for _, score in expected))
+
+    def test_score_can_be_used_in_conditions_and_expressions(self):
+        (_, best), *_ = self.ranked(self.index().rank_bm25, "gato")
+        found = self.rows(f"SELECT id FROM docs WHERE MATCH(contenido, 'gato') USING BM25 AND SCORE() >= {best!r}")
+        self.assertEqual(len(found), 1)
+        doubled = self.rows("SELECT SCORE() * 2 FROM docs WHERE MATCH(contenido, 'gato') USING BM25 LIMIT 1")
+        self.assertAlmostEqual(doubled[0][0], 2 * best)
+
+    def test_aggregates_count_every_match(self):
+        count = self.rows("SELECT COUNT(*) FROM docs WHERE MATCH(contenido, 'gato') USING BM25 LIMIT 1")
+        self.assertEqual(count, [(3,)])
+
+    def test_query_without_results(self):
+        for query in ("inexistente", "", "de la"):
+            with self.subTest(query=query):
+                self.assertEqual(self.rows(f"SELECT id FROM docs WHERE MATCH(contenido, '{query}') USING BM25"), [])
+
+    def test_results_follow_inserts_and_deletes(self):
+        self.execute("INSERT INTO docs VALUES (7, 2026, 'gato gato gato gato', 'g', 'siete')")
+        self.execute("DELETE FROM docs WHERE id = 1")
+        expected = self.ranked(self.index().rank_bm25, "gato")
+        found = self.rows("SELECT id, SCORE() FROM docs WHERE MATCH(contenido, 'gato') USING BM25")
+        self.assertEqual(found, expected)
+        self.assertEqual(found[0][0], 7)
+        self.assertNotIn(1, [doc_id for doc_id, _ in found])
+
+
+class TestExecutionInEveryStorage(TextSQLTestCase):
+    def test_every_storage_returns_the_same_ranking(self):
+        results = []
+        for method in ("HEAP", "SEQUENTIAL", "BTREE"):
+            table = f"t_{method.lower()}"
+            self.execute(f"CREATE TABLE {table} (id INT PRIMARY KEY, contenido TEXT) USING {method}")
+            self.execute(f"CREATE INDEX i_{table} ON {table} (contenido) USING SPIMI")
+            self.execute(f"INSERT INTO {table} VALUES (2, 'gato gato pardo'), (1, 'gato'), (3, 'perro')")
+            self.execute(f"DELETE FROM {table} WHERE id = 3")
+            self.execute(f"INSERT INTO {table} VALUES (4, 'perro gato')")
+            results.append(sorted(self.execute(f"SELECT id, SCORE() FROM {table} "
+                                               "WHERE MATCH(contenido, 'gato') USING BM25").filas))
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(results[0], results[2])
+        self.assertEqual([doc_id for doc_id, _ in results[0]], [1, 2, 4])
+
+
 if __name__ == "__main__":
     unittest.main()

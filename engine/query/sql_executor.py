@@ -13,7 +13,7 @@ from engine.query.external_algorithms import (
     Aggregate, BufferConfig, ExecutionStats, OrderKey,
     external_hash_group_by, external_hash_join, external_sort, streaming_group_by,
 )
-from engine.query.logical_plan import LogicalPlan, LogicalPlanner, column_key, normalize_insert
+from engine.query.logical_plan import SCORE_COLUMN, LogicalPlan, LogicalPlanner, column_key, normalize_insert
 from engine.query.errors import SQLExecutionError
 from engine.query.parser import parse
 from engine.query.sql_optimizer import SQLOptimizer, base_scan
@@ -90,6 +90,8 @@ class SQLExecutor:
         physical = self.optimizer.choice(plan)
         if physical is not None and physical.algorithm.startswith("rtree_"):
             yield from self._spatial_scan(plan, binding, physical, stats)
+        elif physical is not None and physical.algorithm == "text_scan":
+            yield from self._text_scan(plan, binding, physical, stats)
         elif physical is None or physical.algorithm == "sequential_scan":
             for rid, record in binding.storage.scan():
                 yield _context(table, rid, record)
@@ -149,6 +151,28 @@ class SQLExecutor:
                     requested = min(len(index), max(1, requested * 2))
             else:
                 rows = query()
+            totals["results"] += len(rows)
+        yield from rows
+
+    def _text_scan(self, plan, binding, physical, stats):
+        """Rankea bajo el latch de la tabla y entrega las filas de mayor a menor puntaje."""
+        table, index = plan.get("table"), physical.index.index
+        query, ranking, top_k = physical.value
+        rank = index.rank_bm25 if ranking == "bm25" else index.rank_tfidf
+        totals = stats.text.setdefault(id(plan), dict(postings_read=0, pages_read=0, results=0))
+        with binding.latch:
+            if not physical.index.valid:
+                raise SQLExecutionError(f"El índice {physical.index.name} no está disponible")
+            stats.index_probes += 1
+            postings_read, pages_read = index.stats.postings_read, index.stats.pages_read
+            found = rank(query, index.doc_count if top_k is None else top_k)
+            totals["postings_read"] += index.stats.postings_read - postings_read
+            totals["pages_read"] += index.stats.pages_read - pages_read
+            rows = []
+            for rid, score in found:
+                record = binding.storage.get(rid)
+                if record is not None:
+                    rows.append({**_context(table, rid, record), SCORE_COLUMN: score})
             totals["results"] += len(rows)
         yield from rows
 
