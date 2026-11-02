@@ -439,6 +439,12 @@ class SpimiIndex:
         return [(-doc_id, score) for score, doc_id in
                 sorted(best, key=lambda item: (-item[0], -item[1]))]
 
+    # Postings de los términos de la consulta que tienen documentos vivos. Su largo es el df
+    # sin borrados; index.df() los incluye hasta consolidar y daría un idf distinto o negativo.
+    def _query_postings(self, query: Dict[str, int]) -> Dict[str, List[Posting]]:
+        lists = {term: self.postings(term) for term in query}
+        return {term: postings for term, postings in lists.items() if postings}
+
     def rank_tfidf(self, text: Optional[str], top_k: int = 10) -> List[Tuple[RID, float]]:
         """Ranking lnc.ltc con coseno, sin recorrer documentos sin términos comunes.
 
@@ -452,20 +458,19 @@ class SpimiIndex:
         query = self.analyze(text)
         if not top_k or not query or not self.doc_count:
             return []
+        lists = self._query_postings(query)
         weights = {}
-        for term, tf in query.items():
-            df = self.df(term)
-            if df:
-                weight = tf_weight(tf) * math.log10(self.doc_count / df)
-                if weight:
-                    weights[term] = weight
+        for term, postings in lists.items():
+            weight = tf_weight(query[term]) * math.log10(self.doc_count / len(postings))
+            if weight:
+                weights[term] = weight
         query_norm = math.sqrt(sum(weight * weight for weight in weights.values()))
         if not query_norm:
             return []
 
         dots: Dict[int, float] = {}
         for term, query_weight in weights.items():
-            for doc_id, tf in self.postings(term):
+            for doc_id, tf in lists[term]:
                 dots[doc_id] = dots.get(doc_id, 0.0) + query_weight * tf_weight(tf)
 
         def scores():
@@ -499,12 +504,10 @@ class SpimiIndex:
         if not top_k or not query or not self.doc_count or not average_length:
             return []
         scores: Dict[int, float] = {}
-        for term in query:
-            df = self.df(term)
-            if not df:
-                continue
+        for postings in self._query_postings(query).values():
+            df = len(postings)
             idf = math.log1p((self.doc_count - df + 0.5) / (df + 0.5))
-            for doc_id, tf in self.postings(term):
+            for doc_id, tf in postings:
                 document = self.document(doc_id)
                 normalization = k1 * (1 - b + b * document.length / average_length)
                 scores[doc_id] = scores.get(doc_id, 0.0) + idf * tf * (k1 + 1) / (tf + normalization)

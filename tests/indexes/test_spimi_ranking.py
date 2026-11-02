@@ -66,6 +66,41 @@ class TestTfIdfRanking(unittest.TestCase):
             self.index.rank_tfidf("gato", -1)
 
 
+class TestRankingWithDeletes(unittest.TestCase):
+    ROWS = [("gato gato perro", RID(0, 0)), ("gato", RID(1, 0)), ("gato perro", RID(2, 0)),
+            ("gato raton", RID(3, 0)), ("gato ave", RID(4, 0)), ("perro loro", RID(5, 0))]
+    DELETED = ROWS[3:5]
+
+    def setUp(self):
+        self.directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.directory, True)
+        self.index = SpimiIndex(os.path.join(self.directory, "docs.spimi"), min_changes=10 ** 9)
+        self.addCleanup(self.index.close)
+        self.index.build(self.ROWS)
+        for text, rid in self.DELETED:
+            self.index.delete(text, rid)
+        self.rebuilt = SpimiIndex(os.path.join(self.directory, "rebuilt.spimi"))
+        self.addCleanup(self.rebuilt.close)
+        self.rebuilt.build(row for row in self.ROWS if row not in self.DELETED)
+
+    def test_deleted_documents_do_not_change_scores(self):
+        for rank in ("rank_tfidf", "rank_bm25"):
+            for query in ("gato", "perro", "gato perro", "loro gato"):
+                with self.subTest(rank=rank, query=query):
+                    actual = getattr(self.index, rank)(query)
+                    expected = getattr(self.rebuilt, rank)(query)
+                    self.assertEqual([rid for rid, _ in actual], [rid for rid, _ in expected])
+                    for (_, score), (_, expected_score) in zip(actual, expected):
+                        self.assertAlmostEqual(score, expected_score)
+
+    def test_scores_are_not_negative_when_df_exceeds_n(self):
+        self.assertGreater(self.index.df(next(iter(self.index.analyze("gato")))), self.index.doc_count)
+        for rank in ("rank_tfidf", "rank_bm25"):
+            with self.subTest(rank=rank):
+                self.assertGreater(len(getattr(self.index, rank)("gato perro")), 0)
+                self.assertTrue(all(score > 0 for _, score in getattr(self.index, rank)("gato perro")))
+
+
 class TestBm25Ranking(TestTfIdfRanking):
     def brute_force(self, query, k1=1.2, b=0.75):
         query_terms = self.index.analyze(query)
