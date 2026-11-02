@@ -471,5 +471,177 @@ class TestLectura(SpimiTestCase):
             self.assertEqual((index.df("cas"), index.df("gat")), (0, 1))
 
 
+class TestMantenimiento(SpimiTestCase):
+    def open(self, documentos=(), **opciones):
+        index = SpimiIndex(self.path, **opciones)
+        self.addCleanup(index.close)
+        if documentos:
+            index.build(con_rid(documentos))
+        return index
+
+    def test_insertar_y_buscar(self):
+        index = self.open(["casa grande"])
+        index.insert("casa bonita", RID(9, 0))
+        self.assertEqual(index.postings("cas"), [(0, 1), (1, 1)])
+        self.assertEqual(index.postings("bonit"), [(1, 1)])
+        self.assertEqual((index.df("cas"), index.doc_count, index.total_length), (2, 2, 4))
+        self.assertEqual(index.document(1).rid, RID(9, 0))
+
+    def test_insertar_en_indice_vacio(self):
+        index = self.open()
+        index.insert("casa", RID(0, 0))
+        self.assertEqual(index.postings("cas"), [(0, 1)])
+
+    def test_norma_del_delta_es_exacta(self):
+        index = self.open(["casa"])
+        index.insert("seguro de carro, seguro de auto", RID(1, 0))
+        self.assertAlmostEqual(index.document(1).norm, 1.92, places=2)
+
+    def test_eliminar(self):
+        index = self.open(["casa grande", "casa bonita"])
+        self.assertTrue(index.delete("casa grande", RID(0, 0)))
+        self.assertEqual(index.postings("cas"), [(1, 1)])
+        self.assertEqual(index.postings("grand"), [])
+        self.assertEqual((index.doc_count, index.total_length), (1, 2))
+        with self.assertRaises(IndexError):
+            index.document(0)
+
+    def test_df_cuenta_borrados_hasta_consolidar(self):
+        index = self.open(["casa", "casa"])
+        index.delete("casa", RID(0, 0))
+        self.assertEqual(index.df("cas"), 2)
+        index.consolidate()
+        self.assertEqual(index.df("cas"), 1)
+
+    def test_eliminar_del_delta(self):
+        index = self.open(["casa"])
+        index.insert("gato", RID(5, 0))
+        self.assertTrue(index.delete("gato", RID(5, 0)))
+        self.assertEqual(index.postings("gat"), [])
+        self.assertEqual(index.doc_count, 1)
+
+    def test_eliminar_rid_desconocido(self):
+        index = self.open(["casa"])
+        self.assertFalse(index.delete("casa", RID(99, 0)))
+        self.assertEqual(index.doc_count, 1)
+
+    def test_rid_reutilizado(self):
+        index = self.open(["casa"])
+        index.delete("casa", RID(0, 0))
+        index.insert("gato", RID(0, 0))
+        self.assertTrue(index.delete("gato", RID(0, 0)))
+        self.assertEqual((index.postings("cas"), index.postings("gat")), ([], []))
+
+    def test_reabrir_con_cambios_pendientes(self):
+        with SpimiIndex(self.path) as index:
+            index.build(con_rid(["casa", "gato"]))
+            index.insert("perro", RID(9, 0))
+            index.delete("gato", RID(1, 0))
+        with SpimiIndex(self.path) as index:
+            self.assertEqual(index.postings("perr"), [(2, 1)])
+            self.assertEqual(index.postings("gat"), [])
+            self.assertEqual((index.doc_count, index.next_doc_id, index.total_length), (2, 3, 2))
+            index.insert("zorro", RID(10, 0))
+            self.assertEqual(index.postings("zorr"), [(3, 1)])
+        with SpimiIndex(self.path) as index:
+            self.assertEqual(index.doc_count, 3)
+
+    def test_ultima_escritura_cortada_se_descarta(self):
+        with SpimiIndex(self.path) as index:
+            index.build(con_rid(["casa"]))
+            index.insert("gato", RID(1, 0))
+        with open(f"{self.path}.delta", "ab") as log:
+            log.write(b'{"op": "insert", "doc"')
+        with SpimiIndex(self.path) as index:
+            self.assertEqual(index.doc_count, 2)
+            index.insert("perro", RID(2, 0))
+        with SpimiIndex(self.path) as index:
+            self.assertEqual(index.postings("perr"), [(2, 1)])
+
+    def test_log_de_otra_generacion_se_ignora(self):
+        with SpimiIndex(self.path) as index:
+            index.build(con_rid(["casa"]))
+            index.insert("gato", RID(1, 0))
+            with open(index._log_path, "rb") as log:
+                viejo = log.read()
+            index.consolidate()
+        # Simula una caída entre reemplazar el archivo y borrar el log.
+        with open(f"{self.path}.delta", "wb") as log:
+            log.write(viejo)
+        with SpimiIndex(self.path) as index:
+            self.assertEqual(index.doc_count, 2)
+            self.assertEqual(index.postings("gat"), [(1, 1)])
+        self.assertFalse(os.path.exists(f"{self.path}.delta"))
+
+    def test_consolidar_equivale_a_construir_desde_cero(self):
+        with SpimiIndex(self.path) as index:
+            index.build([("casa grande", RID(0, 0)), ("gato", RID(1, 0)), ("casa bonita", RID(2, 0))])
+            index.delete("gato", RID(1, 0))
+            index.insert("perro casa", RID(3, 0))
+            index.consolidate()
+            self.assertEqual((index.doc_count, index.next_doc_id), (3, 3))
+        with open(self.path, "rb") as f:
+            consolidado = f.read()
+        otro = os.path.join(self.dir, "otro.spimi")
+        with SpimiIndex(otro) as index:
+            index.build([("casa grande", RID(0, 0)), ("casa bonita", RID(2, 0)), ("perro casa", RID(3, 0))])
+        with open(otro, "rb") as f:
+            limpio = f.read()
+        self.assertEqual(consolidado[PAGE_SIZE:], limpio[PAGE_SIZE:])  # la cabecera difiere en la generación
+
+    def test_consolidar_borra_el_log_y_conserva_el_contenido(self):
+        with SpimiIndex(self.path) as index:
+            index.build(con_rid(["casa"]))
+            index.insert("gato", RID(1, 0))
+            index.consolidate()
+            self.assertFalse(os.path.exists(index._log_path))
+            self.assertEqual(index.postings("gat"), [(1, 1)])
+        with SpimiIndex(self.path) as index:
+            self.assertEqual(index.document(1).rid, RID(1, 0))
+        self.assertEqual(os.listdir(self.dir), [os.path.basename(self.path)])
+
+    def test_consolidar_todo_borrado(self):
+        index = self.open(["casa"])
+        index.delete("casa", RID(0, 0))
+        index.consolidate()
+        self.assertEqual((index.doc_count, index.term_count, index.page_count), (0, 0, 1))
+        index.insert("gato", RID(1, 0))
+        self.assertEqual(index.postings("gat"), [(0, 1)])
+
+    def test_sin_cambios_no_consolida(self):
+        index = self.open(["casa"])
+        with patch.object(index, "_merge", side_effect=AssertionError("no debe consolidar")):
+            index.consolidate()
+
+    def test_consolida_solo_al_superar_el_limite(self):
+        index = self.open(["casa"] * 100, min_changes=5, merge_ratio=0.2)
+        generacion = index.generation
+        for i in range(24):  # con 124 documentos el límite es 24,8
+            index.insert("gato", RID(1000, i))
+        self.assertEqual(index.generation, generacion)
+        index.insert("gato", RID(1000, 24))  # 25 >= 0,2 * 125
+        self.assertEqual(index.generation, generacion + 1)
+        self.assertEqual(index.df("gat"), 25)
+        self.assertEqual(index.dictionary_pages, 1)
+
+    def test_error_al_consolidar_no_pierde_datos(self):
+        index = self.open(["casa"])
+        index.insert("gato", RID(1, 0))
+        with patch.object(SpimiIndex, "_copy_documents", side_effect=OSError("disco lleno")):
+            with self.assertRaises(OSError):
+                index.consolidate()
+        self.assertEqual(index.postings("gat"), [(1, 1)])
+        self.assertEqual(index.postings("cas"), [(0, 1)])
+        self.assertEqual(sorted(os.listdir(self.dir)), sorted([os.path.basename(self.path),
+                                                               os.path.basename(index._log_path)]))
+
+    def test_reconstruir_descarta_el_delta(self):
+        index = self.open(["casa"])
+        index.insert("gato", RID(1, 0))
+        index.build(con_rid(["perro"]))
+        self.assertEqual((index.postings("gat"), index.doc_count), ([], 1))
+        self.assertFalse(os.path.exists(index._log_path))
+
+
 if __name__ == "__main__":
     unittest.main()

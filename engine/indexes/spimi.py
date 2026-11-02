@@ -18,12 +18,20 @@ diapositiva 68), así que solo depende del documento y no cambia al modificar la
 
 Para leer, el índice guarda en memoria el primer término de cada página del diccionario:
 ubica la página con búsqueda binaria y solo lee esa página y la lista del término.
+
+Reescribir el índice en cada cambio sería muy caro, así que se usa un índice auxiliar: las
+inserciones van a un delta en memoria y las eliminaciones a un conjunto de borrados, y ambos
+se registran en un log para sobrevivir a un reinicio. Cuando los cambios superan un porcentaje
+del índice, se consolida en un archivo nuevo. El log lleva la generación del índice: si el
+proceso cae entre reemplazar el archivo y borrar el log, ese log se ignora. Hasta consolidar,
+df(termino) sigue contando los documentos borrados; postings(termino) ya no los devuelve.
 """
 
 from __future__ import annotations
 
 import bisect
 import heapq
+import json
 import math
 import os
 import shutil
@@ -34,7 +42,7 @@ from itertools import groupby
 from operator import itemgetter
 from typing import Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple
 
-from engine.indexes.rtree import RID_FILES
+from engine.indexes.rtree import _rid, _rid_key
 from engine.storage.record import RID
 from engine.text.preprocessing import IDIOMAS, tokens
 
@@ -42,19 +50,21 @@ PAGE_SIZE = 4096
 MAGIC = b"SPI1"
 
 # magic, idioma, documentos, siguiente doc_id, términos, longitud total, páginas,
-# inicio y páginas de: diccionario, postings y documentos
-HEADER = struct.Struct(">4s2sIIIQIIIIIII")
+# inicio y páginas de: diccionario, postings y documentos; generación
+HEADER = struct.Struct(">4s2sIIIQIIIIIIII")
 POSTING = struct.Struct(">II")  # doc_id, tf
 BLOCK_ENTRY = struct.Struct(">BI")  # bytes del término, postings
 DICTIONARY_PAGE = struct.Struct(">H")  # entradas de la página
 DICTIONARY_ENTRY = struct.Struct(">BIQ")  # bytes del término, df, byte donde empieza su lista
-DOCUMENT = struct.Struct(">IHBBId")  # RID (página, slot, archivo), borrado, longitud, norma
+DOCUMENT = struct.Struct(">IHBId")  # RID (página, slot, archivo), longitud, norma
 
-DOCUMENTS_PER_PAGE = PAGE_SIZE // DOCUMENT.size  # 204
+DOCUMENTS_PER_PAGE = PAGE_SIZE // DOCUMENT.size  # 215
 
 DEFAULT_BLOCK_SIZE = 8 * 1024 * 1024  # tamaño del bloque en disco; en memoria ocupa más
 READ_BUFFER = 16 * PAGE_SIZE  # buffer de lectura de cada bloque durante la mezcla
 MAX_TERM_BYTES = 255  # un token más largo no es una palabra (hashes, base64)
+MERGE_RATIO = 0.1  # se consolida cuando los cambios superan esta fracción de los documentos
+MIN_CHANGES = 1000  # mínimo de cambios para consolidar: en tablas pequeñas no compensa
 
 Posting = Tuple[int, int]
 
@@ -92,6 +102,24 @@ def tf_weight(tf: int) -> float:
     return 1 + math.log10(tf)
 
 
+# Norma de coseno de un documento a partir de sus tf.
+def document_norm(frequencies: Iterable[int]) -> float:
+    return math.sqrt(sum(tf_weight(tf) ** 2 for tf in frequencies))
+
+
+# Escribe el registro de un documento; las páginas de la tabla no parten registros.
+def write_document(table, doc_id: int, document: DocumentInfo) -> None:
+    table.write(DOCUMENT.pack(*_rid_key(document.rid), document.length, document.norm))
+    if (doc_id + 1) % DOCUMENTS_PER_PAGE == 0:
+        table.write(b"\0" * (PAGE_SIZE - DOCUMENTS_PER_PAGE * DOCUMENT.size))
+
+
+# Lee el registro que está en una posición de una página de la tabla.
+def read_document(data: bytes, slot: int) -> DocumentInfo:
+    page_id, slot_id, file, length, norm = DOCUMENT.unpack_from(data, slot * DOCUMENT.size)
+    return DocumentInfo(_rid((page_id, slot_id, file)), length, norm)
+
+
 # Junta las entradas de una página del diccionario y la rellena hasta 4 KB.
 def encode_dictionary_page(entries: List[bytes]) -> bytes:
     return (DICTIONARY_PAGE.pack(len(entries)) + b"".join(entries)).ljust(PAGE_SIZE, b"\0")
@@ -122,12 +150,18 @@ class SpimiIndex:
     """Índice invertido persistente. El idioma se fija al crearlo y queda en la cabecera."""
 
     # Abre el archivo si existe o crea uno vacío. Sin `language` usa el del archivo.
-    def __init__(self, filepath: str, language: Optional[str] = None, *, block_size: int = DEFAULT_BLOCK_SIZE):
+    def __init__(self, filepath: str, language: Optional[str] = None, *, block_size: int = DEFAULT_BLOCK_SIZE,
+                 merge_ratio: float = MERGE_RATIO, min_changes: int = MIN_CHANGES):
         if language is not None and language not in IDIOMAS:
             raise ValueError(f"Idioma no soportado: {language}")
         if block_size <= 0:
             raise ValueError("block_size debe ser positivo")
         self.block_size = block_size
+        self.merge_ratio = merge_ratio
+        self.min_changes = min_changes
+        self.generation = 0
+        self._log_file = None
+        self._clear_delta()
         self.stats = SpimiStats()
         self._dictionary_index: Optional[List[str]] = None
         self.filepath = os.fspath(filepath)
@@ -138,6 +172,7 @@ class SpimiIndex:
                 self._read_header()
                 if language is not None and language != self.language:
                     raise ValueError("El idioma no coincide con el del archivo")
+                self._replay_log()
             else:
                 self.language = language or "es"
                 self._reset()
@@ -155,20 +190,25 @@ class SpimiIndex:
             raise ValueError(f"{self.filepath} no es un archivo SPIMI")
         (_, language, self.doc_count, self.next_doc_id, self.term_count, self.total_length, self.page_count,
          self.dictionary_start, self.dictionary_pages, self.postings_start, self.postings_pages,
-         self.documents_start, self.documents_pages) = HEADER.unpack(data)
+         self.documents_start, self.documents_pages, self.generation) = HEADER.unpack(data)
         self.language = language.decode("ascii")
 
-    # Guarda los totales y la ubicación de cada zona en la página 0.
+    # Guarda los totales y la ubicación de cada zona en la página 0. Los cambios del delta
+    # no se incluyen en los totales: el log los vuelve a aplicar al abrir.
     def _write_header(self) -> None:
         self._fh.seek(0)
-        self._fh.write(HEADER.pack(MAGIC, self.language.encode("ascii"), self.doc_count, self.next_doc_id,
-                                   self.term_count, self.total_length, self.page_count,
+        self._fh.write(HEADER.pack(MAGIC, self.language.encode("ascii"), self.doc_count - self._delta_count,
+                                   self.next_doc_id - self._delta_ids, self.term_count,
+                                   self.total_length - self._delta_length, self.page_count,
                                    self.dictionary_start, self.dictionary_pages,
                                    self.postings_start, self.postings_pages,
-                                   self.documents_start, self.documents_pages).ljust(PAGE_SIZE, b"\0"))
+                                   self.documents_start, self.documents_pages,
+                                   self.generation).ljust(PAGE_SIZE, b"\0"))
 
     # Deja el índice vacío: solo queda la cabecera.
     def _reset(self) -> None:
+        self._remove_log()
+        self._clear_delta()
         self._fh.truncate(0)
         self.doc_count = self.next_doc_id = self.term_count = self.total_length = 0
         self.page_count = 1
@@ -219,21 +259,16 @@ class SpimiIndex:
         try:
             with open(self._documents_path, "wb") as table:
                 for text, rid in documents:
-                    length = 0
-                    squares = 0.0
-                    for term, tf in self.analyze(text).items():
+                    terms = self.analyze(text)
+                    for term, tf in terms.items():
                         if term not in block:
                             block[term] = []
                             size += BLOCK_ENTRY.size + len(term.encode("utf-8"))
                         block[term].append((doc_id, tf))
                         size += POSTING.size
-                        length += tf
-                        squares += tf_weight(tf) ** 2
-                    table.write(DOCUMENT.pack(rid.page_id, rid.slot_id, RID_FILES.index(rid.file), 0,
-                                              length, math.sqrt(squares)))
+                    length = sum(terms.values())
+                    write_document(table, doc_id, DocumentInfo(rid, length, document_norm(terms.values())))
                     doc_id += 1
-                    if doc_id % DOCUMENTS_PER_PAGE == 0:
-                        table.write(b"\0" * (PAGE_SIZE - DOCUMENTS_PER_PAGE * DOCUMENT.size))
                     total_length += length
                     # Se revisa aquí para que un documento nunca quede partido entre bloques.
                     if size >= self.block_size:
@@ -260,9 +295,17 @@ class SpimiIndex:
                 f.write(encoded)
                 f.write(encode_postings(block[term]))
 
-    # Mezcla k-way: escribe las postings de corrido y al final agrega el diccionario.
+    # Mezcla los bloques temporales y cierra sus archivos aunque falle.
     def _merge_blocks(self, paths: List[str]) -> None:
         readers = [read_block(path) for path in paths]
+        try:
+            self._merge(readers)
+        finally:
+            for reader in readers:
+                reader.close()
+
+    # Mezcla k-way: escribe las postings de corrido y al final agrega el diccionario.
+    def _merge(self, sources: Iterable[Iterable[Tuple[str, List[Posting]]]]) -> None:
         dictionary_path = f"{self.filepath}.dictionary.tmp"
         try:
             with open(dictionary_path, "w+b") as dictionary:
@@ -272,7 +315,7 @@ class SpimiIndex:
                 page: List[bytes] = []
                 free = PAGE_SIZE - DICTIONARY_PAGE.size
                 # heapq.merge es la cola de prioridad; es estable: empata en orden de bloque.
-                for term, entries in groupby(heapq.merge(*readers, key=itemgetter(0)), key=itemgetter(0)):
+                for term, entries in groupby(heapq.merge(*sources, key=itemgetter(0)), key=itemgetter(0)):
                     df = 0
                     for _, postings in entries:
                         self._fh.write(encode_postings(postings))
@@ -298,8 +341,6 @@ class SpimiIndex:
                 self.page_count = self.dictionary_start + self.dictionary_pages
                 self._dictionary_index = None
         finally:
-            for reader in readers:
-                reader.close()
             self._remove_blocks([dictionary_path])
 
     # Copia la tabla de documentos al final del índice y completa su última página.
@@ -352,17 +393,21 @@ class SpimiIndex:
         self.stats.postings_read += df
         return decode_postings(data[offset:offset + size])
 
-    # Número de documentos que contienen un término ya preprocesado.
+    # Número de documentos que contienen un término; incluye los borrados sin consolidar.
     def df(self, term: str) -> int:
         entry = self._lookup(term)
-        return entry[0] if entry else 0
+        return (entry[0] if entry else 0) + len(self._delta.get(term, ()))
 
-    # Lista de (doc_id, tf) de un término ya preprocesado, ordenada por doc_id.
+    # Lista de (doc_id, tf) de un término ya preprocesado, ordenada por doc_id y sin borrados.
     def postings(self, term: str) -> List[Posting]:
         entry = self._lookup(term)
-        return self._read_postings(*entry) if entry else []
+        result = self._read_postings(*entry) if entry else []
+        delta = self._delta.get(term, ())
+        self.stats.postings_read += len(delta)
+        result.extend(delta)
+        return [posting for posting in result if posting[0] not in self._deleted]
 
-    # Recorre el diccionario en orden: (término, df, inicio).
+    # Recorre el diccionario del índice principal en orden: (término, df, inicio).
     def terms(self) -> Iterator[Tuple[str, int, int]]:
         for page in range(self.dictionary_pages):
             yield from decode_dictionary_page(self._read_pages(self.dictionary_start + page))
@@ -385,12 +430,190 @@ class SpimiIndex:
 
     # Devuelve el RID, la longitud y la norma de un documento leyendo una sola página.
     def document(self, doc_id: int) -> DocumentInfo:
-        if not 0 <= doc_id < self.next_doc_id:
+        if not 0 <= doc_id < self.next_doc_id or doc_id in self._deleted:
             raise IndexError(f"doc_id fuera de rango: {doc_id}")
+        if doc_id in self._delta_documents:
+            return self._delta_documents[doc_id]
         page, slot = divmod(doc_id, DOCUMENTS_PER_PAGE)
-        data = self._read_pages(self.documents_start + page)
-        page_id, slot_id, file, _, length, norm = DOCUMENT.unpack_from(data, slot * DOCUMENT.size)
-        return DocumentInfo(RID(page_id, slot_id, RID_FILES[file]), length, norm)
+        return read_document(self._read_pages(self.documents_start + page), slot)
+
+    # Recorre los documentos vivos en orden de doc_id.
+    def _live_documents(self) -> Iterator[Tuple[int, DocumentInfo]]:
+        main_count = self.next_doc_id - self._delta_ids
+        for page in range(self.documents_pages):
+            data = self._read_pages(self.documents_start + page)
+            first = page * DOCUMENTS_PER_PAGE
+            for doc_id in range(first, min(first + DOCUMENTS_PER_PAGE, main_count)):
+                if doc_id not in self._deleted:
+                    yield doc_id, read_document(data, doc_id - first)
+        for doc_id in sorted(self._delta_documents):
+            if doc_id not in self._deleted:
+                yield doc_id, self._delta_documents[doc_id]
+
+    # Busca el doc_id de un RID. El mapa se arma la primera vez que se elimina algo.
+    def _doc_id_of(self, rid: RID) -> Optional[int]:
+        if self._doc_ids is None:
+            self._doc_ids = {_rid_key(document.rid): doc_id for doc_id, document in self._live_documents()}
+        return self._doc_ids.get(_rid_key(rid))
+
+    # --- Mantenimiento ------------------------------------------------------------
+
+    # Ruta del log con los cambios que aún no están en el índice principal.
+    @property
+    def _log_path(self) -> str:
+        return f"{self.filepath}.delta"
+
+    # Deja vacío el estado en memoria de los cambios sin consolidar.
+    def _clear_delta(self) -> None:
+        self._delta: Dict[str, List[Posting]] = {}
+        self._delta_documents: Dict[int, DocumentInfo] = {}
+        self._deleted = set()
+        self._doc_ids: Optional[Dict[Tuple[int, int, int], int]] = None
+        self._delta_count = self._delta_ids = self._delta_length = self._changes = 0
+
+    # Agrega un cambio al log y lo envía al sistema antes de aplicarlo.
+    def _append_log(self, change: dict) -> None:
+        if self._log_file is None:
+            self._log_file = open(self._log_path, "ab")
+            if self._log_file.tell() == 0:
+                self._log_file.write(json.dumps({"generation": self.generation}).encode("utf-8") + b"\n")
+        self._log_file.write(json.dumps(change, ensure_ascii=False).encode("utf-8") + b"\n")
+        self._log_file.flush()
+
+    # Cierra y borra el log.
+    def _remove_log(self) -> None:
+        if self._log_file is not None:
+            self._log_file.close()
+            self._log_file = None
+        self._remove_blocks([self._log_path])
+
+    # Vuelve a aplicar el log al abrir. Si la escritura final quedó cortada, la descarta.
+    def _replay_log(self) -> None:
+        if not os.path.exists(self._log_path):
+            return
+        with open(self._log_path, "rb") as log:
+            first = log.readline()
+            valid = len(first)
+            try:
+                current = json.loads(first).get("generation") == self.generation
+            except ValueError:
+                current = False
+            if current:
+                for line in log:
+                    try:
+                        change = json.loads(line) if line.endswith(b"\n") else None
+                    except ValueError:
+                        change = None
+                    if change is None:
+                        break
+                    if change["op"] == "insert":
+                        self._apply_insert(change["doc"], _rid(tuple(change["rid"])), change["terms"])
+                    else:
+                        self._apply_delete(change["doc"])
+                    valid += len(line)
+        if not current:
+            self._remove_log()
+        elif valid != os.path.getsize(self._log_path):
+            with open(self._log_path, "r+b") as log:
+                log.truncate(valid)
+
+    # Registra un documento nuevo en el delta y actualiza los totales.
+    def _apply_insert(self, doc_id: int, rid: RID, terms: Dict[str, int]) -> None:
+        for term, tf in terms.items():
+            self._delta.setdefault(term, []).append((doc_id, tf))
+        length = sum(terms.values())
+        self._delta_documents[doc_id] = DocumentInfo(rid, length, document_norm(terms.values()))
+        if self._doc_ids is not None:
+            self._doc_ids[_rid_key(rid)] = doc_id
+        self.next_doc_id = doc_id + 1
+        self.doc_count += 1
+        self.total_length += length
+        self._delta_ids += 1
+        self._delta_count += 1
+        self._delta_length += length
+        self._changes += 1
+
+    # Marca un documento como borrado y actualiza los totales.
+    def _apply_delete(self, doc_id: int) -> None:
+        document = self.document(doc_id)
+        self._deleted.add(doc_id)
+        if self._doc_ids is not None:
+            self._doc_ids.pop(_rid_key(document.rid), None)
+        self.doc_count -= 1
+        self.total_length -= document.length
+        self._delta_count -= 1
+        self._delta_length -= document.length
+        self._changes += 1
+
+    # Consolida cuando los cambios superan el límite. El límite es proporcional para que
+    # el costo total de consolidar crezca de forma lineal con la colección.
+    def _maybe_consolidate(self) -> None:
+        if self._changes >= max(self.min_changes, self.merge_ratio * self.doc_count):
+            self.consolidate()
+
+    # Agrega un documento al índice.
+    def insert(self, text: Optional[str], rid: RID) -> None:
+        terms = self.analyze(text)
+        doc_id = self.next_doc_id
+        self._append_log({"op": "insert", "doc": doc_id, "rid": _rid_key(rid), "terms": terms})
+        self._apply_insert(doc_id, rid, terms)
+        self._maybe_consolidate()
+
+    # Elimina el documento de un RID. Devuelve False si no estaba en el índice.
+    def delete(self, text: Optional[str], rid: RID) -> bool:
+        doc_id = self._doc_id_of(rid)
+        if doc_id is None:
+            return False
+        self._append_log({"op": "delete", "doc": doc_id})
+        self._apply_delete(doc_id)
+        self._maybe_consolidate()
+        return True
+
+    # Reescribe las listas de una fuente sin borrados y con los doc_id nuevos.
+    @staticmethod
+    def _renumber(entries: Iterable[Tuple[str, List[Posting]]], new_ids: Dict[int, int]):
+        for term, postings in entries:
+            postings = [(new_ids[doc_id], tf) for doc_id, tf in postings if doc_id in new_ids]
+            if postings:
+                yield term, postings
+
+    # Une el índice principal y el delta en un archivo nuevo y reemplaza al anterior.
+    # Los doc_id se renumeran en orden, así que el resultado equivale a construir desde cero.
+    def consolidate(self) -> None:
+        if not self._changes:
+            return
+        path = f"{self.filepath}.consolidate.tmp"
+        self._remove_blocks([path])
+        target = SpimiIndex(path, self.language, block_size=self.block_size)
+        try:
+            new_ids: Dict[int, int] = {}
+            with open(target._documents_path, "wb") as table:
+                for doc_id, document in self._live_documents():
+                    new_ids[doc_id] = len(new_ids)
+                    write_document(table, new_ids[doc_id], document)
+            target.doc_count = target.next_doc_id = len(new_ids)
+            target.total_length = self.total_length
+            main = ((term, self._read_postings(df, start)) for term, df, start in self.terms())
+            delta = ((term, self._delta[term]) for term in sorted(self._delta))
+            target._merge([self._renumber(main, new_ids), self._renumber(delta, new_ids)])
+            target._copy_documents()
+            target.generation = self.generation + 1
+            target.close()
+        except Exception:
+            target.close()
+            self._remove_blocks([path])
+            raise
+        finally:
+            self._remove_blocks([target._documents_path])
+        self._fh.close()
+        try:
+            os.replace(path, self.filepath)
+        finally:
+            self._fh = open(self.filepath, "r+b")
+        self._remove_log()
+        self._clear_delta()
+        self._dictionary_index = None
+        self._read_header()
 
     # --- Ciclo de vida -----------------------------------------------------------
 
@@ -405,6 +628,9 @@ class SpimiIndex:
 
     # Guarda los cambios y cierra el archivo.
     def close(self) -> None:
+        if self._log_file is not None:
+            self._log_file.close()
+            self._log_file = None
         if not self._fh.closed:
             self.flush()
             self._fh.close()
