@@ -703,6 +703,19 @@ Documentos y consultas pasan por la misma función, `tokens(texto, idioma)` en `
 
 El índice está en `engine/indexes/spimi.py` y usa SPIMI (*Single-Pass In-Memory Indexing*), que no necesita cargar la colección completa en memoria.
 
+El ranking TF-IDF usa el esquema **lnc.ltc** de la clase: el documento conserva
+`1 + log10(tf)` y su norma precomputada, mientras que la consulta usa
+`(1 + log10(tf)) · log10(N / df)`. `SpimiIndex.rank_tfidf(texto, top_k)` acumula
+solo las posting lists de términos de la consulta, normaliza por coseno y mantiene
+el top-k con un heap; `cosine_search` es su alias usado por el laboratorio.
+
+El ranking **Okapi BM25** se expone como `SpimiIndex.rank_bm25(texto, top_k,
+k1=1.2, b=0.75)`. Usa las posting lists, el `df`, la longitud por documento y
+`average_length` ya disponibles en el índice. Su idf suavizado es
+`ln(1 + (N - df + 0.5) / (df + 0.5))`; `k1` controla la saturación de tf y `b`
+la normalización por longitud. Al igual que TF-IDF, solo evalúa documentos de
+postings de términos presentes en la consulta y mantiene un heap de tamaño k.
+
 **Formato en disco.** El archivo se divide en páginas de 4 KB. La página 0 es la cabecera, con el idioma, los totales y la ubicación de tres zonas contiguas:
 
 | Zona | Contenido |

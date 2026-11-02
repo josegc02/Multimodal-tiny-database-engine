@@ -420,6 +420,102 @@ class SpimiIndex:
         common = set.intersection(*({doc_id for doc_id, _ in self.postings(term)} for term in terms))
         return [self.document(doc_id).rid for doc_id in sorted(common)]
 
+    @staticmethod
+    def _top_k(scores: Iterable[Tuple[int, float]], top_k: int) -> List[Tuple[int, float]]:
+        """Conserva solo los k puntajes mayores; desempata por doc_id ascendente."""
+        if type(top_k) is not int or top_k < 0:
+            raise ValueError("top_k debe ser un entero no negativo")
+        if not top_k:
+            return []
+        # heapq es un min-heap: (score, -doc_id) deja en la raíz el peor
+        # resultado y, a igual score, el doc_id más grande.
+        best = []
+        for doc_id, score in scores:
+            candidate = (score, -doc_id)
+            if len(best) < top_k:
+                heapq.heappush(best, candidate)
+            elif candidate > best[0]:
+                heapq.heapreplace(best, candidate)
+        return [(-doc_id, score) for score, doc_id in
+                sorted(best, key=lambda item: (-item[0], -item[1]))]
+
+    def rank_tfidf(self, text: Optional[str], top_k: int = 10) -> List[Tuple[RID, float]]:
+        """Ranking lnc.ltc con coseno, sin recorrer documentos sin términos comunes.
+
+        Los documentos ya guardan su norma ``lnc``: ``1 + log10(tf)`` sin idf.
+        La consulta usa ``ltc``: ``(1 + log10(tf)) * log10(N / df)``. Solo se
+        leen las postings de los términos de la consulta y la tabla de documentos
+        de los candidatos que recibieron contribuciones.
+        """
+        if type(top_k) is not int or top_k < 0:
+            raise ValueError("top_k debe ser un entero no negativo")
+        query = self.analyze(text)
+        if not top_k or not query or not self.doc_count:
+            return []
+        weights = {}
+        for term, tf in query.items():
+            df = self.df(term)
+            if df:
+                weight = tf_weight(tf) * math.log10(self.doc_count / df)
+                if weight:
+                    weights[term] = weight
+        query_norm = math.sqrt(sum(weight * weight for weight in weights.values()))
+        if not query_norm:
+            return []
+
+        dots: Dict[int, float] = {}
+        for term, query_weight in weights.items():
+            for doc_id, tf in self.postings(term):
+                dots[doc_id] = dots.get(doc_id, 0.0) + query_weight * tf_weight(tf)
+
+        def scores():
+            for doc_id, dot in dots.items():
+                document = self.document(doc_id)
+                if document.norm:
+                    yield doc_id, dot / (query_norm * document.norm)
+
+        return [(self.document(doc_id).rid, score) for doc_id, score in self._top_k(scores(), top_k)]
+
+    def cosine_search(self, text: Optional[str], top_k: int = 10) -> List[Tuple[RID, float]]:
+        """Nombre usado en el laboratorio para el ranking TF-IDF por coseno."""
+        return self.rank_tfidf(text, top_k)
+
+    def rank_bm25(self, text: Optional[str], top_k: int = 10, *, k1: float = 1.2,
+                  b: float = 0.75) -> List[Tuple[RID, float]]:
+        """Ranking Okapi BM25 usando tf, df y longitudes ya almacenadas en SPIMI.
+
+        Usa el idf BM25 suavizado ``ln(1 + (N - df + .5) / (df + .5))`` para
+        que términos muy frecuentes no den puntajes negativos. ``k1`` controla
+        la saturación del tf y ``b`` cuánto corrige la longitud del documento.
+        """
+        if type(top_k) is not int or top_k < 0:
+            raise ValueError("top_k debe ser un entero no negativo")
+        if type(k1) not in (int, float) or not math.isfinite(k1) or k1 <= 0:
+            raise ValueError("k1 debe ser un número finito positivo")
+        if type(b) not in (int, float) or not math.isfinite(b) or not 0 <= b <= 1:
+            raise ValueError("b debe ser un número finito entre 0 y 1")
+        query = self.analyze(text)
+        average_length = self.average_length
+        if not top_k or not query or not self.doc_count or not average_length:
+            return []
+        scores: Dict[int, float] = {}
+        for term in query:
+            df = self.df(term)
+            if not df:
+                continue
+            idf = math.log1p((self.doc_count - df + 0.5) / (df + 0.5))
+            for doc_id, tf in self.postings(term):
+                document = self.document(doc_id)
+                normalization = k1 * (1 - b + b * document.length / average_length)
+                scores[doc_id] = scores.get(doc_id, 0.0) + idf * tf * (k1 + 1) / (tf + normalization)
+        return [(self.document(doc_id).rid, score)
+                for doc_id, score in self._top_k(scores.items(), top_k)]
+
+    def bm25_search(self, text: Optional[str], top_k: int = 10, *, k1: float = 1.2,
+                    b: float = 0.75) -> List[Tuple[RID, float]]:
+        """Alias explícito para búsquedas BM25."""
+        return self.rank_bm25(text, top_k, k1=k1, b=b)
+
     # Pone en cero los contadores de lecturas.
     def reset_stats(self) -> None:
         self.stats = SpimiStats()
