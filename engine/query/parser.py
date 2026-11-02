@@ -10,7 +10,7 @@ from dataclasses import fields, replace
 from engine.query.ast import (
     AggregateCall, Between, BinaryOp, ColumnDefinition, ColumnRef, CopyStatement,
     CreateIndexStatement, CreateTableStatement, DeleteStatement, ExplainStatement, ForeignKeyDefinition, InList,
-    InsertStatement, IsNull, Join, Literal, OrderByItem, SelectItem,
+    InsertStatement, IsNull, Join, Literal, MatchCall, OrderByItem, ScoreCall, SelectItem,
     SelectStatement, SpatialCall, Star, Statement, TableRef, TransactionStatement, UnaryOp, Node,
 )
 from engine.query.errors import SQLParseError
@@ -488,6 +488,29 @@ class Parser:
             self._expect(")")
         return SpatialCall(function, (left, right), metric)
 
+    # Lee MATCH(columna, 'consulta') USING TF_IDF | BM25.
+    def _match_call(self):
+        self._advance()
+        self._expect("(")
+        with self._nested():
+            name = self._identifier()
+            column = ColumnRef(self._identifier(), name) if self._match(".") else ColumnRef(name)
+            self._expect(",")
+            query = self._expect("STRING").value
+            self._expect(")")
+        token = self._peek(1)
+        if not self._match("USING") or token.kind != "IDENTIFIER" or token.value not in ("tf_idf", "bm25"):
+            self._error("MATCH requiere USING TF_IDF o USING BM25")
+        self._advance()
+        return MatchCall(column, query, token.value)
+
+    # Lee SCORE().
+    def _score_call(self):
+        self._advance()
+        self._expect("(")
+        self._expect(")")
+        return ScoreCall()
+
     def _delete(self):
         self._expect("FROM")
         table = self._table()
@@ -576,6 +599,12 @@ class Parser:
             return self._literal()
         if self._peek().kind in AGGREGATES:
             return self._aggregate()
+        # MATCH y SCORE solo son funciones antes de "(": siguen siendo nombres de columna válidos.
+        if self._peek().kind == "IDENTIFIER" and self._peek(1).kind == "(":
+            if self._peek().value == "match":
+                return self._match_call()
+            if self._peek().value == "score":
+                return self._score_call()
         if self._peek().kind == "IDENTIFIER":
             first = self._identifier()
             if self._match("."):

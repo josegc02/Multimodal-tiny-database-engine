@@ -46,6 +46,18 @@ class ColumnRef(Expression):
 
 
 @dataclass(frozen=True)
+class MatchCall(Expression):
+    column: ColumnRef
+    query: str
+    ranking: str  # "tf_idf" o "bm25"
+
+
+@dataclass(frozen=True)
+class ScoreCall(Expression):
+    pass
+
+
+@dataclass(frozen=True)
 class Star(Expression):
     table: str | None = None
 
