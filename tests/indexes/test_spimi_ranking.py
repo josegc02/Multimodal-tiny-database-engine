@@ -3,8 +3,9 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from engine.indexes.spimi import SpimiIndex, tf_weight
+from engine.indexes.spimi import DOCUMENTS_PER_PAGE, SpimiIndex, tf_weight
 from engine.storage.record import RID
 
 
@@ -99,6 +100,42 @@ class TestRankingWithDeletes(unittest.TestCase):
             with self.subTest(rank=rank):
                 self.assertGreater(len(getattr(self.index, rank)("gato perro")), 0)
                 self.assertTrue(all(score > 0 for _, score in getattr(self.index, rank)("gato perro")))
+
+
+class TestDocumentPagesRead(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.directory, True)
+        self.index = SpimiIndex(os.path.join(self.directory, "docs.spimi"))
+        self.addCleanup(self.index.close)
+        self.count = 3 * DOCUMENTS_PER_PAGE
+        self.index.build((f"gato perro raton{number % 2}", RID(number, 0)) for number in range(self.count))
+
+    def document_pages(self, method):
+        pages = []
+        read_pages = self.index._read_pages
+
+        def read(start, count=1):
+            if start >= self.index.documents_start:
+                pages.append(start)
+            return read_pages(start, count)
+
+        with patch.object(self.index, "_read_pages", read):
+            self.assertTrue(method("gato raton0"))
+        return pages
+
+    def test_each_page_of_the_document_table_is_read_once(self):
+        start = self.index.documents_start
+        for method in (self.index.rank_tfidf, self.index.rank_bm25, self.index.search):
+            with self.subTest(method=method.__name__):
+                self.assertEqual(self.document_pages(method), [start, start + 1, start + 2])
+
+    def test_documents_includes_those_in_the_delta(self):
+        self.index.insert("gato raton0 nuevo", RID(self.count, 0))
+        documents = self.index._documents([0, self.count])
+        self.assertEqual(documents[0].rid, RID(0, 0))
+        self.assertEqual(documents[self.count].rid, RID(self.count, 0))
+        self.assertEqual(documents[self.count].length, self.index.document(self.count).length)
 
 
 class TestBm25Ranking(TestTfIdfRanking):

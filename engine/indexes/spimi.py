@@ -418,7 +418,8 @@ class SpimiIndex:
         if not terms:
             return []
         common = set.intersection(*({doc_id for doc_id, _ in self.postings(term)} for term in terms))
-        return [self.document(doc_id).rid for doc_id in sorted(common)]
+        documents = self._documents(common)
+        return [documents[doc_id].rid for doc_id in sorted(common)]
 
     @staticmethod
     def _top_k(scores: Iterable[Tuple[int, float]], top_k: int) -> List[Tuple[int, float]]:
@@ -450,8 +451,8 @@ class SpimiIndex:
 
         Los documentos ya guardan su norma ``lnc``: ``1 + log10(tf)`` sin idf.
         La consulta usa ``ltc``: ``(1 + log10(tf)) * log10(N / df)``. Solo se
-        leen las postings de los términos de la consulta y la tabla de documentos
-        de los candidatos que recibieron contribuciones.
+        leen las postings de los términos de la consulta y las páginas de la
+        tabla de documentos que contienen a los candidatos.
         """
         if type(top_k) is not int or top_k < 0:
             raise ValueError("top_k debe ser un entero no negativo")
@@ -473,13 +474,14 @@ class SpimiIndex:
             for doc_id, tf in lists[term]:
                 dots[doc_id] = dots.get(doc_id, 0.0) + query_weight * tf_weight(tf)
 
+        documents = self._documents(dots)
+
         def scores():
             for doc_id, dot in dots.items():
-                document = self.document(doc_id)
-                if document.norm:
-                    yield doc_id, dot / (query_norm * document.norm)
+                if documents[doc_id].norm:
+                    yield doc_id, dot / (query_norm * documents[doc_id].norm)
 
-        return [(self.document(doc_id).rid, score) for doc_id, score in self._top_k(scores(), top_k)]
+        return [(documents[doc_id].rid, score) for doc_id, score in self._top_k(scores(), top_k)]
 
     def cosine_search(self, text: Optional[str], top_k: int = 10) -> List[Tuple[RID, float]]:
         """Nombre usado en el laboratorio para el ranking TF-IDF por coseno."""
@@ -503,15 +505,16 @@ class SpimiIndex:
         average_length = self.average_length
         if not top_k or not query or not self.doc_count or not average_length:
             return []
+        lists = self._query_postings(query)
+        documents = self._documents({doc_id for postings in lists.values() for doc_id, _ in postings})
         scores: Dict[int, float] = {}
-        for postings in self._query_postings(query).values():
+        for postings in lists.values():
             df = len(postings)
             idf = math.log1p((self.doc_count - df + 0.5) / (df + 0.5))
             for doc_id, tf in postings:
-                document = self.document(doc_id)
-                normalization = k1 * (1 - b + b * document.length / average_length)
+                normalization = k1 * (1 - b + b * documents[doc_id].length / average_length)
                 scores[doc_id] = scores.get(doc_id, 0.0) + idf * tf * (k1 + 1) / (tf + normalization)
-        return [(self.document(doc_id).rid, score)
+        return [(documents[doc_id].rid, score)
                 for doc_id, score in self._top_k(scores.items(), top_k)]
 
     def bm25_search(self, text: Optional[str], top_k: int = 10, *, k1: float = 1.2,
@@ -543,6 +546,20 @@ class SpimiIndex:
             return self._delta_documents[doc_id]
         page, slot = divmod(doc_id, DOCUMENTS_PER_PAGE)
         return read_document(self._read_pages(self.documents_start + page), slot)
+
+    # Devuelve varios documentos vivos leyendo cada página de la tabla una sola vez.
+    def _documents(self, doc_ids: Iterable[int]) -> Dict[int, DocumentInfo]:
+        result = {}
+        loaded, data = None, b""
+        for doc_id in sorted(doc_ids):
+            if doc_id in self._delta_documents:
+                result[doc_id] = self._delta_documents[doc_id]
+                continue
+            page, slot = divmod(doc_id, DOCUMENTS_PER_PAGE)
+            if page != loaded:
+                loaded, data = page, self._read_pages(self.documents_start + page)
+            result[doc_id] = read_document(data, slot)
+        return result
 
     # Recorre los documentos vivos en orden de doc_id.
     def _live_documents(self) -> Iterator[Tuple[int, DocumentInfo]]:
