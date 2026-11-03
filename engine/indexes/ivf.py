@@ -2,9 +2,16 @@
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    matches: list[tuple[int, float]]
+    vectors_compared: int
 
 
 class IVFIndex:
@@ -138,8 +145,8 @@ class IVFIndex:
             raise ValueError("El coseno requiere vectores no nulos")
         return result
 
-    def search(self, query: Sequence[float], k: int = 10, nprobe: int = 1) -> list[tuple[int, float]]:
-        """Busca los k vecinos más cercanos visitando nprobe listas."""
+    def search(self, query: Sequence[float], k: int = 10, nprobe: int = 1) -> SearchResult:
+        """Busca vecinos y devuelve también cuántos vectores se compararon."""
         if self.centroids is None:
             raise ValueError("El índice debe entrenarse antes de buscar")
         if not isinstance(k, int) or k < 1:
@@ -157,14 +164,16 @@ class IVFIndex:
             range(self.nlist),
             key=lambda i: (-centroid_scores[i] if descending else centroid_scores[i], i),
         )[:nprobe]
+        vectors_compared = sum(len(self.lists[i]) for i in nearest_lists)
         candidates = (
             (identifier, self._score(vector, query))
             for list_id in nearest_lists
             for identifier, vector in self.lists[list_id].items()
         )
-        return sorted(
+        matches = sorted(
             candidates, key=lambda item: (-item[1] if descending else item[1], item[0])
         )[:k]
+        return SearchResult(matches, vectors_compared)
 
     def _score(self, vector: np.ndarray, query: np.ndarray) -> float:
         if self.metric == "euclidean":
