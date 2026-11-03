@@ -1,16 +1,32 @@
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from benchmarks.generate_text_datasets import documents, generate
+from benchmarks.generate_text_datasets import digest, documents, generate
 from benchmarks.text_queries import queries
 from benchmarks.text_relevance import is_relevant
-from benchmarks.text_validation import read_documents
+from benchmarks.text_validation import read_documents, validate_bundle
 from engine.text.preprocessing import tokens
 
 
 class TestTextDatasets(unittest.TestCase):
+    def test_integrity_checker_rejects_tampering_and_wrong_judgments(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "data"
+            metadata = generate(root, sizes=(12, 24))
+            summary = validate_bundle(root)
+            self.assertEqual(summary[12]["relevant_per_query"]["q01"], 2)
+            path = root / "qrels_12.csv"
+            path.write_text(path.read_text(encoding="utf-8").replace("q01,1,1", "q01,2,1"), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Checksum"):
+                validate_bundle(root)
+            metadata["files"][path.name]["sha256"] = digest(path)
+            (root / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Juicio"):
+                validate_bundle(root)
+
     def test_nested_deterministic_and_variable_documents(self):
         small = list(documents(24))
         self.assertEqual(small, list(documents(48))[:24])

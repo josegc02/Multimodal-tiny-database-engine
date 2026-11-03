@@ -1,11 +1,10 @@
-import json
 import tempfile
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
-from benchmarks.generate_text_datasets import documents, generate
+from benchmarks.generate_text_datasets import digest, documents, generate
 from benchmarks.load_text_dataset import load_dataset, schema
 from engine.indexes.spimi import SpimiIndex
 from engine.storage.heap_file import HeapFile
@@ -20,6 +19,7 @@ class TestLoadTextDataset(unittest.TestCase):
             generate(root / "data", sizes=(48,))
             result = load_dataset(root / "data/noticias_48.csv", root / "db")
             self.assertEqual(result["documents"], 48)
+            self.assertEqual(result["source_sha256"], digest(root / "data/noticias_48.csv"))
             texts = TextStore(str(root / "db/noticias.text"))
             resources.callback(texts.close)
             storage = HeapFile(str(root / "db/noticias.db"), schema(texts))
