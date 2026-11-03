@@ -71,3 +71,46 @@ class TestPostgresText(unittest.TestCase):
         with self.assertRaises(psycopg.errors.UniqueViolation):
             self.load()
         self.assertIsNone(self.connection.execute("SELECT to_regclass('texto.noticias_24')").fetchone()[0])
+
+    def test_ranked_results_match_scan_and_native_query(self):
+        self.load()
+        before = search(self.connection, 24, "inflación precios alimentos", 10)
+        native = search_tsquery(self.connection, 24, "inflación | precios | alimentos", 10)
+        self.assertEqual(before, native)
+        self.assertTrue(before)
+        build_index(self.connection, 24)
+        analyze(self.connection, 24)
+        after = search(self.connection, 24, "inflación precios alimentos", 10)
+        self.assertEqual(before, after)
+        self.assertEqual(after, sorted(after, key=lambda row: (-row[1], row[0])))
+        self.assertTrue(all(score > 0 for _, score in after))
+
+    def test_empty_unknown_stopwords_and_hostile_text(self):
+        self.load()
+        for text in ("", "!!!", "de la el", "zzzinexistentexyz"):
+            self.assertEqual(search(self.connection, 24, text), [])
+        for text in ("don't", "gato'); DROP TABLE texto.noticias_24; --", "gato & !perro:*", "niño\\niña"):
+            search(self.connection, 24, text)
+        self.assertEqual(search(self.connection, 24, "inflación", 0), [])
+        self.assertTrue(verify(self.connection, self.csv, 24)["exact_match"])
+        for k in (-1, 1.5, True):
+            with self.assertRaises(ValueError):
+                ranked_statement(24, "gato", k)
+
+    def test_index_is_available_and_used_when_requested_locally(self):
+        self.load()
+        build_index(self.connection, 24)
+        analyze(self.connection, 24)
+        natural = explain(self.connection, 24, "inflación")
+        self.assertIn("Plan", natural[0])
+        # Solo diagnóstico: en 24 filas PostgreSQL puede preferir Seq Scan.
+        self.connection.execute("SET LOCAL enable_seqscan = off")
+        plan = explain(self.connection, 24, "inflación")
+
+        def nodes(node):
+            yield node
+            for child in node.get("Plans", []):
+                yield from nodes(child)
+
+        names = [node.get("Index Name") for node in nodes(plan[0]["Plan"])]
+        self.assertIn("noticias_24_gin", names)
