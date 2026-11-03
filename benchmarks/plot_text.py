@@ -54,6 +54,16 @@ def plot(directory):
     fig.savefig(directory / "construction.png", dpi=160)
     plt.close(fig)
 
+    queries = read_rows(directory / "query_summary.csv")
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4), constrained_layout=True)
+    for ax, words in zip(axes, (1, 3, 6)):
+        curve(ax, [row for row in queries if row["words"] == words], "query_seconds", 1000)
+        ax.set_title(f"{words} palabra(s)")
+        ax.set_ylabel("Milisegundos por consulta (log)")
+    fig.suptitle("Consultas calientes top-10: media y rango entre repeticiones")
+    fig.savefig(directory / "query_latency.png", dpi=160)
+    plt.close(fig)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
