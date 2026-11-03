@@ -124,3 +124,23 @@ preprocesamiento, bag of words, coseno), PPT 07 (pesos TF-IDF) y PPT 09
 (índice invertido externo). El Laboratorio 10 contempla variación del volumen
 y corpus de noticias para comparar búsquedas. PostgreSQL y la comparación
 experimental quedan para #50 y #51, respectivamente.
+
+## Validación de la entrega
+
+- Generados y verificados los CSV de 1K, 10K y 100K con semilla 42:
+  checksums, cardinalidades, prefijos y juicios exhaustivos.
+- Carga persistente ejecutada con 1K y 100K documentos; SPIMI confirmó
+  respectivamente 1.000 y 100.000 documentos indexados.
+- Nueve tests nuevos cubren reproducibilidad, grupos de consultas,
+  relevancia independiente del ranking, corrupción, CSV inválido,
+  conservación de textos, reapertura y ejecución SQL desde la fachada.
+- Suite completa: 523 tests, resultado OK, 2 omitidos por el entorno.
+  Persisten avisos de recursos sin cerrar en pruebas preexistentes.
+
+```sh
+.venv/bin/python -m unittest tests.test_text_datasets tests.test_load_text_dataset -q
+.venv/bin/python -m unittest discover -q
+```
+
+Estas verificaciones no son resultados de rendimiento ni una comparación
+entre técnicas; esas mediciones corresponden al issue #51.
