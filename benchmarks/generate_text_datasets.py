@@ -8,6 +8,7 @@ import random
 from pathlib import Path
 
 from benchmarks.text_collection import CONTEXT, FIELDS, SIZES, TOPICS, VERSION
+from benchmarks.text_queries import queries
 
 OUTPUT = Path(__file__).resolve().parents[1] / "datasets/text/generated"
 
@@ -57,6 +58,10 @@ def generate(output=OUTPUT, sizes=SIZES, seed=42):
         path = output / f"noticias_{size}.csv"
         write_csv(path, FIELDS, documents(size, seed))
         files[path.name] = {"rows": size, "sha256": digest(path)}
+    query_rows = queries()
+    query_path = output / "queries.csv"
+    write_csv(query_path, tuple(query_rows[0]), query_rows)
+    files[query_path.name] = {"rows": len(query_rows), "sha256": digest(query_path)}
     manifest = {"version": VERSION, "seed": seed, "sizes": sizes, "language": "es",
                 "source": "synthetic-editorial-topics", "fields": FIELDS, "files": files}
     (output / "metadata.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
