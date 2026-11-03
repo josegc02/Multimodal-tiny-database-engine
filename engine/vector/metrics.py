@@ -3,6 +3,8 @@
 import math
 from collections.abc import Sequence
 
+import numpy as np
+
 
 def euclidean(a: Sequence[float], b: Sequence[float]) -> float:
     """Distancia euclidiana entre dos vectores de igual dimensión."""
@@ -25,3 +27,32 @@ def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
     if norm_a == 0 or norm_b == 0:
         raise ValueError("La similitud del coseno requiere vectores no nulos")
     return dot_product(a, b) / (norm_a * norm_b)
+
+
+def _batch_arrays(a, b) -> tuple[np.ndarray, np.ndarray]:
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    if a.ndim != 2 or b.ndim != 2 or a.shape != b.shape:
+        raise ValueError("Los lotes deben tener la misma forma (n, d)")
+    return a, b
+
+
+def euclidean_batch(a, b) -> np.ndarray:
+    """Distancia por fila entre dos lotes de forma (n, d)."""
+    a, b = _batch_arrays(a, b)
+    return np.linalg.norm(a - b, axis=1)
+
+
+def dot_product_batch(a, b) -> np.ndarray:
+    """Producto punto por fila entre dos lotes de forma (n, d)."""
+    a, b = _batch_arrays(a, b)
+    return np.einsum("ij,ij->i", a, b)
+
+
+def cosine_similarity_batch(a, b) -> np.ndarray:
+    """Similitud del coseno por fila; rechaza cualquier vector nulo."""
+    a, b = _batch_arrays(a, b)
+    norms = np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1)
+    if np.any(norms == 0):
+        raise ValueError("La similitud del coseno requiere vectores no nulos")
+    return np.einsum("ij,ij->i", a, b) / norms
