@@ -45,3 +45,19 @@ def load_csv(connection, csv_path, size):
         connection.execute("INSERT INTO texto.dataset_loads (size,sha256,source_name,language) "
                            "VALUES (%s,%s,%s,'spanish')", (size, fingerprint, csv_path.name))
     return {"size": size, "sha256": fingerprint, "table": f"texto.{name}"}
+
+
+def build_index(connection, size):
+    """Construcción separada del COPY, para medirla por separado en #51."""
+    from psycopg import sql
+
+    name = table_name(size)
+    with connection.transaction():
+        connection.execute(sql.SQL("CREATE INDEX {} ON texto.{} USING GIN (full_text)").format(
+            sql.Identifier(name + "_gin"), sql.Identifier(name)))
+
+
+def analyze(connection, size):
+    from psycopg import sql
+
+    connection.execute(sql.SQL("ANALYZE texto.{}").format(sql.Identifier(table_name(size))))
