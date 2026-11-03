@@ -8,10 +8,13 @@ import numpy as np
 class IVFIndex:
     """Agrupa vectores por su centroide más cercano."""
 
-    def __init__(self, nlist: int, *, seed: int = 0):
+    def __init__(self, nlist: int, *, metric: str = "euclidean", seed: int = 0):
         if not isinstance(nlist, int) or nlist < 1:
             raise ValueError("nlist debe ser un entero positivo")
+        if metric not in ("euclidean", "dot_product", "cosine"):
+            raise ValueError("Métrica no soportada")
         self.nlist = nlist
+        self.metric = metric
         self.seed = seed
         self.dimension: int | None = None
         self.centroids: np.ndarray | None = None
@@ -25,33 +28,46 @@ class IVFIndex:
             raise ValueError("Se requieren al menos nlist vectores de igual dimensión")
         if not np.isfinite(data).all():
             raise ValueError("Los vectores deben contener números finitos")
+        if self.metric == "cosine" and np.any(np.linalg.norm(data, axis=1) == 0):
+            raise ValueError("El coseno requiere vectores no nulos")
 
         rng = np.random.default_rng(self.seed)
-        centroids = data[rng.choice(len(data), self.nlist, replace=False)].copy()
+        training_data = data
+        if self.metric == "cosine":
+            training_data = data / np.linalg.norm(data, axis=1)[:, None]
+        centroids = training_data[rng.choice(len(data), self.nlist, replace=False)].copy()
         for _ in range(100):
-            assignments = np.argmin(
-                np.sum((data[:, None, :] - centroids[None, :, :]) ** 2, axis=2),
-                axis=1,
-            )
+            training_metric = "cosine" if self.metric == "cosine" else "euclidean"
+            assignments = self._assign(training_data, centroids, training_metric)
             updated = centroids.copy()
             for i in range(self.nlist):
-                members = data[assignments == i]
+                members = training_data[assignments == i]
                 if len(members):
                     updated[i] = members.mean(axis=0)
+                    if self.metric == "cosine":
+                        norm = np.linalg.norm(updated[i])
+                        if norm:
+                            updated[i] /= norm
+                        else:
+                            updated[i] = centroids[i]
             if np.array_equal(updated, centroids):
                 break
             centroids = updated
 
-        assignments = np.argmin(
-            np.sum((data[:, None, :] - centroids[None, :, :]) ** 2, axis=2),
-            axis=1,
-        )
+        assignments = self._assign(training_data, centroids, self.metric)
         lists = [dict() for _ in range(self.nlist)]
         for identifier, vector, list_id in zip(ids, data, assignments):
             lists[int(list_id)][identifier] = vector.copy()
         self.dimension = data.shape[1]
         self.centroids = centroids
         self.lists = lists
+
+    @staticmethod
+    def _assign(data: np.ndarray, centroids: np.ndarray, metric: str) -> np.ndarray:
+        if metric == "euclidean":
+            distances = np.sum((data[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
+            return np.argmin(distances, axis=1)
+        return np.argmax(data @ centroids.T, axis=1)
 
     def search(self, query: Sequence[float], k: int = 10, nprobe: int = 1) -> list[tuple[int, float]]:
         """Busca los k vecinos más cercanos visitando nprobe listas."""
@@ -64,12 +80,31 @@ class IVFIndex:
         query = np.asarray(query, dtype=float)
         if query.shape != (self.dimension,) or not np.isfinite(query).all():
             raise ValueError("La consulta debe tener la dimensión del índice y valores finitos")
+        if self.metric == "cosine" and np.linalg.norm(query) == 0:
+            raise ValueError("El coseno requiere vectores no nulos")
 
-        distances = np.linalg.norm(self.centroids - query, axis=1)
-        nearest_lists = np.argsort(distances, kind="stable")[:nprobe]
+        if self.metric == "euclidean":
+            centroid_scores = np.linalg.norm(self.centroids - query, axis=1)
+        else:
+            centroid_scores = self.centroids @ query
+        descending = self.metric != "euclidean"
+        nearest_lists = sorted(
+            range(self.nlist),
+            key=lambda i: (-centroid_scores[i] if descending else centroid_scores[i], i),
+        )[:nprobe]
         candidates = (
-            (identifier, float(np.linalg.norm(vector - query)))
+            (identifier, self._score(vector, query))
             for list_id in nearest_lists
-            for identifier, vector in self.lists[int(list_id)].items()
+            for identifier, vector in self.lists[list_id].items()
         )
-        return sorted(candidates, key=lambda item: (item[1], item[0]))[:k]
+        return sorted(
+            candidates, key=lambda item: (-item[1] if descending else item[1], item[0])
+        )[:k]
+
+    def _score(self, vector: np.ndarray, query: np.ndarray) -> float:
+        if self.metric == "euclidean":
+            return float(np.linalg.norm(vector - query))
+        product = float(vector @ query)
+        if self.metric == "dot_product":
+            return product
+        return product / float(np.linalg.norm(vector) * np.linalg.norm(query))
