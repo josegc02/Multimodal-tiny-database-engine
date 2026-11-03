@@ -19,7 +19,8 @@ docker compose -f postgres_text/docker-compose.yml up -d --wait
 .venv/bin/python -m postgres_text.verify
 ```
 
-PostgreSQL 16 se publica solo en `127.0.0.1:5434`, base `texto`, usuario y
+La imagen está fijada por digest (PostgreSQL 16.15, Debian bookworm) para
+repetir el entorno probado. PostgreSQL se publica solo en `127.0.0.1:5434`, base `texto`, usuario y
 clave de desarrollo `bd2`. El proyecto Compose `bd2-texto` y su volumen son
 independientes del servicio PostGIS de la Parte 2. El estado se conserva al
 detener el servicio:

@@ -1,7 +1,7 @@
 name: bd2-texto
 services:
   postgres:
-    image: postgres:16-bookworm
+    image: postgres:16-bookworm@sha256:e8a07d2c7579b038938cdba6c539e580e5001caf9ea203d397b5cc83e76bd938
     environment:
       POSTGRES_USER: bd2
       POSTGRES_PASSWORD: bd2
