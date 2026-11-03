@@ -839,3 +839,51 @@ Las consultas se midieron después de un calentamiento y devuelven IDs y
 scores; PostgreSQL incluye el viaje local del cliente al servidor. Los planes
 naturales se conservan: en tablas pequeñas PostgreSQL puede preferir Seq Scan.
 No se forzó GIN durante las mediciones.
+
+#### 9.3 Relevancia
+
+![Precisión](../benchmarks/results/text/precision.png)
+![Recall](../benchmarks/results/text/recall.png)
+
+Las consultas de una y tres palabras alcanzaron Precision@10 = 1 en las
+tres técnicas y tamaños. Para seis palabras, en 1K TF-IDF obtuvo 0,975,
+BM25 0,9583 y GIN 1. En 10K y 100K, TF-IDF y GIN obtuvieron 1, mientras
+BM25 obtuvo 0,9167. Estos valores altos reflejan también la sencillez de
+las plantillas sintéticas y no equivalen a calidad demostrada en noticias reales.
+
+El caso q16, «energía solar renovable desarrollo proyectos regionales»,
+explica la caída de BM25 en 100K: sus diez resultados fueron no relevantes
+según el tema principal. Por ejemplo, el documento 14306 trata de banca y
+menciona energía solar como noticia secundaria. La consulta añade «desarrollo»,
+que también coincide con «desarrolla» en textos de banca tras stemming.
+La combinación de frecuencia, longitud y coincidencias permite que esos
+documentos superen a noticias solares. Es una explicación compatible con los
+textos y la fórmula, no un defecto probado de BM25 ni un ajuste de parámetros
+realizado sobre los juicios. Los IDs y scores se pueden auditar en rankings.csv.
+
+Con 100K, Recall@10 fue 0,0006 para consultas generales y 0,0012 para
+específicas con diez aciertos. En BM25 de seis palabras fue 0,0011. El recall
+baja al aumentar el corpus porque su denominador contiene todos los
+documentos relevantes del tamaño correspondiente, mientras el límite sigue
+siendo diez. No debe interpretarse esa caída como pérdida automática de
+precisión. Los juicios se establecieron por etiquetas editoriales, independientemente
+de los resultados de cualquiera de los tres rankings.
+
+#### 9.4 Disco y memoria
+
+![Disco](../benchmarks/results/text/disk.png)
+![Memoria](../benchmarks/results/text/memory.png)
+
+En 100K, SPIMI ocupa 28,500 MiB y GIN 11,570 MiB como índices de búsqueda.
+El almacenamiento total es mucho más cercano: 157,913 MiB en el motor y
+153,672 MiB en PostgreSQL. El total incluye los textos; PostgreSQL también
+conserva el tsvector y la clave primaria. No incluye CSV, WAL ni temporales
+de construcción. El menor tamaño de GIN no permite inferir el mismo ahorro
+porcentual para toda la base.
+
+El pico RSS observado fue 209,757 MiB para el proceso TF-IDF, 210,424 MiB
+para BM25 y 78,556 MiB para el backend PostgreSQL. Son ámbitos distintos:
+Python incluye intérprete, qrels y cachés; el backend incluye mappings
+compartidos y buffers. El cliente PostgreSQL se mide separadamente en CSV.
+Estos números describen residencia del proceso durante la corrida y no
+demuestran que el índice GIN necesite solo una fracción de la memoria de SPIMI.
