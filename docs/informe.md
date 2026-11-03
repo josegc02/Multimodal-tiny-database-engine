@@ -887,3 +887,32 @@ Python incluye intérprete, qrels y cachés; el backend incluye mappings
 compartidos y buffers. El cliente PostgreSQL se mide separadamente en CSV.
 Estos números describen residencia del proceso durante la corrida y no
 demuestran que el índice GIN necesite solo una fracción de la memoria de SPIMI.
+
+#### 9.5 Ventajas, desventajas y conclusiones
+
+| Técnica | Ventajas en esta implementación | Desventajas y límites |
+|---|---|---|
+| TF-IDF + coseno | Pesos interpretables, normas precalculadas, buena precisión; menor media en varios grupos | Requiere normalización y acumulación de candidatos; términos con IDF cero no aportan; SPIMI sin compresión |
+| BM25 | Saturación de frecuencia y ajuste por longitud; k1 y b configurables; reutiliza SPIMI | Parámetros y corpus afectan el orden; menciones secundarias desplazaron resultados en q16; no ganó en todas las consultas |
+| GIN + ts_rank | Índice compacto en esta corrida, mantenimiento integrado y planes inspeccionables; menor preparación completa | GIN no resuelve solo el orden por relevancia; coste previo del tsvector; diccionarios y ranking diferentes al motor |
+
+La evidencia respalda que las tres implementaciones procesan los tamaños
+exigidos y permiten auditar tanto eficiencia como calidad. GIN fue ventajoso
+en preparación total y espacio del índice en este corpus. TF-IDF mantuvo
+latencias competitivas y la mejor media en dos grupos de 100K. BM25 mostró
+que normalizar por longitud y saturar frecuencia no garantiza superar al
+coseno para toda intención: los distractores del corpus importan.
+
+No se identifica un ganador universal. La decisión depende de si se prioriza
+construcción, almacenamiento, latencia de una familia de consultas o relevancia
+para una intención concreta. El resultado de q16 también muestra por qué
+deben conservarse juicios e IDs, en lugar de comparar únicamente scores.
+La exactitud de las fórmulas propias tiene sus pruebas por fuerza bruta;
+en este experimento se evalúa calidad temática, que es una pregunta diferente.
+
+Las conclusiones quedan limitadas a noticias sintéticas, caché caliente,
+ejecución serial y tres repeticiones en una estación de trabajo. PostgreSQL
+usa tablas temporales de sesión y no se está midiendo durabilidad con WAL,
+concurrencia ni rendimiento de producción. Un siguiente experimento debería
+usar un corpus real con juicios humanos, más repeticiones y consultas de
+selectividad variada antes de extrapolar estos resultados.
