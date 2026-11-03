@@ -121,3 +121,19 @@ class HNSWIndex:
                 entry = candidates[0][1]
         if level > self.max_level:
             self.entrypoint, self.max_level = identifier, level
+
+    def search(self, query: Sequence[float], k: int = 10,
+               ef_search: int = 50) -> list[tuple[int, float]]:
+        """Busca k vecinos con una lista de candidatos de tamaño ef_search."""
+        if type(k) is not int or k < 1:
+            raise ValueError("k debe ser un entero positivo")
+        if type(ef_search) is not int or ef_search < k:
+            raise ValueError("ef_search debe ser un entero mayor o igual a k")
+        if self.entrypoint is None:
+            return []
+        query = self._validate_vector(query)
+        entry = self.entrypoint
+        for layer in range(self.max_level, 0, -1):
+            entry, _ = self._greedy(query, entry, layer)
+        candidates, _ = self._search_layer(query, entry, 0, ef_search)
+        return [(identifier, distance) for distance, identifier in candidates[:k]]
