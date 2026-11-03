@@ -34,3 +34,48 @@ Precision@10 divide por 10 aunque haya menos respuestas. Recall@10 divide
 por relevantes del mismo tamaño; sin relevantes se reporta NA. Los IDs
 duplicados son un error, no aciertos adicionales. Los qrels son sintéticos
 y no permiten afirmar superioridad sobre noticias reales.
+
+## Ejecutar y auditar
+
+```sh
+.venv/bin/python -m pip install -r requirements.txt -r requirements-text-postgres.txt
+docker compose -f postgres_text/docker-compose.yml up -d --wait
+# Generar solo si aún no existe datasets/text/generated:
+.venv/bin/python -m benchmarks.generate_text_datasets
+.venv/bin/python -m benchmarks.bench_text
+.venv/bin/python -m benchmarks.validate_text_results benchmarks/results/text
+.venv/bin/python -m benchmarks.plot_text benchmarks/results/text
+.venv/bin/python -m benchmarks.text_report benchmarks/results/text
+```
+
+El directorio de salida debe ser nuevo; no se sobrescriben resultados.
+Para otra corrida, usar `--output benchmarks/results/smoke/otra-corrida`.
+Una prueba rápida admite `--sizes 1000 --repetitions 1`. `--sin-postgres`
+marca explícitamente la corrida como parcial; no es la comparación oficial.
+El Docker debe ser local y contener el backend del DSN: `--container` indica
+el nombre y `--dsn` la conexión. Para PostgreSQL remoto, esta medición de
+memoria no es aplicable y la corrida falla en lugar de reportar memoria del
+cliente como si fuera la del servidor.
+
+No ejecutar otras cargas intensivas simultáneamente si se desea reducir la
+variación del equipo. Las corridas publicadas corresponden a una estación
+de trabajo, no a un servidor dedicado ni a una medición de caché fría.
+
+## Archivos
+
+| Archivo | Contenido |
+|---|---|
+| `metadata.json` | Código, entorno, hashes, parámetros, marca de completitud |
+| `build_runs.csv` | Carga/construcción, disco y memoria por corrida |
+| `query_runs.csv` | Una fila por consulta, repetición y técnica |
+| `rankings.csv` | IDs, posiciones, scores y relevancia de cada respuesta |
+| `build_summary.csv` | Medias, desviación, mínimo y máximo entre repeticiones |
+| `query_group_runs.csv` | Promedios por longitud dentro de cada repetición |
+| `query_summary.csv` | Resumen entre repeticiones de esos promedios |
+| `plans.json` | Plan natural de PostgreSQL por consulta, fuera del cronómetro |
+| `tables.md`, PNG | Tablas y gráficas regenerables sin repetir mediciones |
+
+Las gráficas muestran media y rango mínimo–máximo; las desviaciones estándar
+también están en CSV. Los tres grupos tienen 6, 12 y 12 consultas; las medias
+de cada grupo pesan igual cada consulta, sin confundir consultas diferentes
+con repeticiones de una misma medición.
