@@ -65,6 +65,18 @@ def validate_bundle(directory):
             if next(actual, None) is not None:
                 raise ValueError("Sobran juicios de relevancia")
         summary[size] = {"documents": size, "relevant_per_query": relevant}
+    largest = max(metadata["sizes"])
+    for size in metadata["sizes"]:
+        if size == largest:
+            continue
+        smaller = read_documents(directory / f"noticias_{size}.csv")
+        bigger = read_documents(directory / f"noticias_{largest}.csv")
+        try:
+            if any(small != big for small, big in zip(smaller, bigger)):
+                raise ValueError(f"El corpus {size} no es prefijo de {largest}")
+        finally:
+            smaller.close()
+            bigger.close()
     return summary
 
 
