@@ -9,6 +9,7 @@ from pathlib import Path
 
 from benchmarks.text_metrics import relevance_at_k, validate_ranking
 from benchmarks.text_workload import read_workload
+from benchmarks.text_validation import validate_bundle
 
 
 def read(path):
@@ -25,6 +26,10 @@ def validate(directory, datasets):
     metadata = json.loads((directory / "metadata.json").read_text())
     if not metadata["complete"]:
         raise ValueError("Corrida incompleta")
+    validate_bundle(datasets)
+    corpus = json.loads((datasets / "metadata.json").read_text())
+    if metadata["corpus"] != corpus:
+        raise ValueError("El corpus no coincide con la procedencia de la corrida")
     techniques = ("TF-IDF", "BM25") if metadata["partial"] else ("TF-IDF", "BM25", "GIN")
     expected = {(size, technique, rep) for size in metadata["sizes"] for technique in techniques
                 for rep in range(1, metadata["repetitions"] + 1)}
@@ -48,6 +53,9 @@ def validate(directory, datasets):
         rankings[group].append(row)
     for query in queries:
         size, technique, rep = key(query)
+        latency = float(query["query_seconds"])
+        if not math.isfinite(latency) or latency <= 0:
+            raise ValueError("Latencia inválida")
         rows = sorted(rankings[(size, technique, rep, query["query_id"])], key=lambda row: int(row["rank"]))
         if [int(row["rank"]) for row in rows] != list(range(1, len(rows) + 1)):
             raise ValueError("Posiciones inválidas")
