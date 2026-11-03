@@ -64,6 +64,17 @@ def plot(directory):
     fig.savefig(directory / "query_latency.png", dpi=160)
     plt.close(fig)
 
+    for metric, title in (("precision", "Precision@10"), ("recall", "Recall@10")):
+        fig, axes = plt.subplots(1, 3, figsize=(14, 4), constrained_layout=True)
+        for ax, words in zip(axes, (1, 3, 6)):
+            curve(ax, [row for row in queries if row["words"] == words], metric, logarithmic=False)
+            ax.set_title(f"{words} palabra(s)")
+            ax.set_ylabel(title)
+            ax.set_ylim(bottom=0, top=1.03 if metric == "precision" else None)
+        fig.suptitle(f"{title}: juicios temáticos sintéticos, promedio macro por consulta")
+        fig.savefig(directory / f"{metric}.png", dpi=160)
+        plt.close(fig)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
