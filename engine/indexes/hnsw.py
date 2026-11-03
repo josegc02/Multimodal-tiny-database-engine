@@ -4,9 +4,16 @@ import heapq
 import json
 import random
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+
+@dataclass(frozen=True)
+class HNSWSearchResult:
+    matches: list[tuple[int, float]]
+    nodes_visited: int
 
 
 class HNSWIndex:
@@ -136,21 +143,25 @@ class HNSWIndex:
             self.entrypoint, self.max_level = identifier, level
 
     def search(self, query: Sequence[float], k: int = 10,
-               ef_search: int = 50) -> list[tuple[int, float]]:
-        """Busca k vecinos con una lista de candidatos de tamaño ef_search."""
+               ef_search: int = 50) -> HNSWSearchResult:
+        """Busca k vecinos y cuenta los nodos distintos visitados."""
         if type(k) is not int or k < 1:
             raise ValueError("k debe ser un entero positivo")
         if type(ef_search) is not int or ef_search < k:
             raise ValueError("ef_search debe ser un entero mayor o igual a k")
         if self.entrypoint is None:
-            return []
+            return HNSWSearchResult([], 0)
         query = self._validate_vector(query)
         entry = self.entrypoint
+        visited: set[int] = set()
         for layer in range(self.max_level, 0, -1):
-            entry, _ = self._greedy(query, entry, layer)
-        candidates, _ = self._search_layer(query, entry, 0, ef_search)
+            entry, layer_visited = self._greedy(query, entry, layer)
+            visited.update(layer_visited)
+        candidates, layer_visited = self._search_layer(query, entry, 0, ef_search)
+        visited.update(layer_visited)
         sign = 1 if self.metric == "euclidean" else -1
-        return [(identifier, sign * distance) for distance, identifier in candidates[:k]]
+        matches = [(identifier, sign * distance) for distance, identifier in candidates[:k]]
+        return HNSWSearchResult(matches, len(visited))
 
     def save(self, path: str | Path) -> None:
         """Guarda el grafo y el estado aleatorio en JSON."""
