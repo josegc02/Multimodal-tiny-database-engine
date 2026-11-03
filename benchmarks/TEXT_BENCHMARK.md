@@ -79,3 +79,37 @@ Las gráficas muestran media y rango mínimo–máximo; las desviaciones estánd
 también están en CSV. Los tres grupos tienen 6, 12 y 12 consultas; las medias
 de cada grupo pesan igual cada consulta, sin confundir consultas diferentes
 con repeticiones de una misma medición.
+
+## Límites de interpretación
+
+- PostgreSQL usa una tabla temporal con el mismo contenido, vector generado
+  y clave primaria de #50. No hay WAL de datos temporales; no se mide
+  durabilidad transaccional. El motor tampoco ejecuta una transacción SQL
+  con WAL: se usan sus archivos directamente. La creación de la PK de
+  PostgreSQL está incluida en carga y su tamaño en el total.
+- La memoria Python incluye intérprete, qrels, cachés de stemming y buffers,
+  además del índice. El RSS inicial se toma después de cargar los qrels.
+  El backend PostgreSQL incluye mappings compartidos y buffers locales;
+  `client_peak_bytes` conserva por separado el pico del cliente Python.
+  Un número menor de RSS no demuestra por sí solo un índice más compacto.
+- SPIMI lee documentos para construir pesos y normas durante construcción;
+  GIN recibe un vector ya calculado durante carga. Comparar únicamente
+  CREATE INDEX con SPIMI exageraría la diferencia de preparación completa.
+- Ambas técnicas del motor comparten el mismo SPIMI. Diferencias pequeñas
+  en su construcción reflejan variación entre corridas, no una ventaja de
+  TF-IDF sobre BM25 al indexar.
+- Las consultas usan candidatos OR, pero los diccionarios y los rankings
+  son distintos. Solo se comparan métricas de calidad por ID, nunca scores.
+- PostgreSQL elige el plan natural (puede ser Seq Scan). GIN etiqueta la
+  configuración con el índice disponible, no una promesa de usarlo siempre.
+  Los planes se conservan para comprobarlo. Se desactiva paralelismo de
+  consulta para limitar la memoria medida a un backend; tablas temporales
+  ya limitan las opciones de paralelismo.
+- No se miden memoria exclusiva del índice, caché fría, concurrencia,
+  temporales máximos en disco, WAL ni p95 de producción. Tres repeticiones
+  permiten una comparación descriptiva, no significancia estadística.
+
+El diseño sigue el Laboratorio 09 (tamaños, repeticiones, curvas y análisis
+con datos concretos) y el Laboratorio 10/PPT 09 (GIN, ranking y planes).
+Los tres tamaños se toman del checklist #51; el laboratorio general pide
+cinco tamaños, pero este entregable usa los 1K/10K/100K especificados.
