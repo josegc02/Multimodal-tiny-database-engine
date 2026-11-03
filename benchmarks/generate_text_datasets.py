@@ -9,6 +9,7 @@ from pathlib import Path
 
 from benchmarks.text_collection import CONTEXT, FIELDS, SIZES, TOPICS, VERSION
 from benchmarks.text_queries import queries
+from benchmarks.text_relevance import judgments
 
 OUTPUT = Path(__file__).resolve().parents[1] / "datasets/text/generated"
 
@@ -62,8 +63,16 @@ def generate(output=OUTPUT, sizes=SIZES, seed=42):
     query_path = output / "queries.csv"
     write_csv(query_path, tuple(query_rows[0]), query_rows)
     files[query_path.name] = {"rows": len(query_rows), "sha256": digest(query_path)}
+    for size in sizes:
+        path = output / f"qrels_{size}.csv"
+        with (output / f"noticias_{size}.csv").open(encoding="utf-8", newline="") as stream:
+            write_csv(path, ("query_id", "doc_id", "relevance"),
+                      judgments(csv.DictReader(stream), query_rows))
+        files[path.name] = {"rows": size * 3, "sha256": digest(path)}
     manifest = {"version": VERSION, "seed": seed, "sizes": sizes, "language": "es",
-                "source": "synthetic-editorial-topics", "fields": FIELDS, "files": files}
+                "source": "synthetic-editorial-topics", "fields": FIELDS, "files": files,
+                "judgments": {"method": "editorial-topic", "exhaustive": True,
+                              "omitted_pair_relevance": 0, "human_assessed": False}}
     (output / "metadata.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return manifest
 
