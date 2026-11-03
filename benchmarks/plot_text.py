@@ -75,6 +75,26 @@ def plot(directory):
         fig.savefig(directory / f"{metric}.png", dpi=160)
         plt.close(fig)
 
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
+    for ax, metric, title in zip(axes, ("index_bytes", "total_bytes"),
+                                  ("Índice de búsqueda", "Datos + índices persistentes")):
+        curve(ax, builds, metric, 1 / 2**20)
+        ax.set_title(title)
+        ax.set_ylabel("MiB (escala log)")
+    fig.suptitle("Espacio en disco: sin CSV, WAL ni temporales de construcción")
+    fig.savefig(directory / "disk.png", dpi=160)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
+    for ax, metric, title in zip(axes, ("rss_initial_bytes", "rss_peak_bytes"),
+                                  ("RSS al comenzar", "Pico RSS de la corrida")):
+        curve(ax, builds, metric, 1 / 2**20, logarithmic=False)
+        ax.set_title(title)
+        ax.set_ylabel("MiB residentes")
+    fig.suptitle("Python worker / backend PostgreSQL; incluye memoria compartida")
+    fig.savefig(directory / "memory.png", dpi=160)
+    plt.close(fig)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
