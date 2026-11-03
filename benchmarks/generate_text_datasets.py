@@ -24,7 +24,7 @@ def documents(count, seed=42):
         category, topic, _, lead = TOPICS[number % len(TOPICS)]
         paragraphs = [f"Boletín {number + 1}. Actualidad de {category}. {lead}"]
         # Diferentes longitudes y tf; algunos documentos superan una página.
-        for _ in range(rng.choice((1, 2, 3, 5, 8, 30))):
+        for _ in range(rng.choice((1, 2, 3, 5, 8, 40))):
             paragraphs.append(rng.choice(CONTEXT))
             if rng.random() < 0.35:
                 paragraphs.append(lead)
