@@ -1,0 +1,2 @@
+# Opcional: cliente PostgreSQL para la Parte 3; no se requiere para el motor.
+psycopg[binary]>=3.2,<4
