@@ -10,6 +10,7 @@ from pathlib import Path
 from benchmarks.text_collection import CONTEXT, FIELDS, SIZES, TOPICS, VERSION
 from benchmarks.text_queries import queries
 from benchmarks.text_relevance import judgments
+from benchmarks.text_sql import load_sql
 
 OUTPUT = Path(__file__).resolve().parents[1] / "datasets/text/generated"
 
@@ -59,6 +60,7 @@ def generate(output=OUTPUT, sizes=SIZES, seed=42):
         path = output / f"noticias_{size}.csv"
         write_csv(path, FIELDS, documents(size, seed))
         files[path.name] = {"rows": size, "sha256": digest(path)}
+        (output / f"cargar_motor_{size}.sql").write_text(load_sql(path, size), encoding="utf-8")
     query_rows = queries()
     query_path = output / "queries.csv"
     write_csv(query_path, tuple(query_rows[0]), query_rows)
