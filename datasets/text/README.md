@@ -76,3 +76,51 @@ hay 168 noticias relevantes para economía y 84 para inflación. El recall
 máximo con diez respuestas es respectivamente 10/168 y 10/84. Al crecer el
 corpus, Recall@10 puede disminuir incluso con diez aciertos; no confundir
 ese efecto del denominador con una degradación del ranking.
+
+## Carga en el motor
+
+Carga persistente por consola, sin iniciar la GUI:
+
+```sh
+.venv/bin/python -m benchmarks.load_text_dataset datasets/text/generated/noticias_1000.csv --output datasets/text/generated/motor_1000
+```
+
+Cambiar `1000` por `10000` o `100000` para los otros tamaños. La salida debe
+ser un directorio nuevo. Primero se valida el CSV completo; después se
+insertan documentos en flujo en HeapFile + TextStore y se construye SPIMI
+en español. `load.json` se escribe solamente tras completar la carga y
+registra el SHA-256 del CSV. Una carga interrumpida deja archivos parciales
+sin ese marcador; usar otro directorio para reintentar.
+
+El cargador no abre ni limpia `demo_data`. Los archivos persistentes se
+pueden reabrir con `HeapFile`, `TextStore`, `SpimiIndex` y la función `schema`
+de `benchmarks.load_text_dataset` (véase `tests/test_load_text_dataset.py`).
+El catálogo del frontend es de sesión y no descubre automáticamente estos
+archivos. Para trabajar en la interfaz, pegar el contenido de
+`cargar_motor_<N>.sql`: crea `noticias_<N>`, ejecuta COPY y construye SPIMI.
+Ese camino usa el COPY existente, que sí materializa el CSV en memoria.
+
+```sql
+SELECT id, SCORE() AS relevancia
+FROM noticias_1000
+WHERE MATCH(contenido, 'inflación precios alimentos') USING BM25
+ORDER BY relevancia DESC LIMIT 10;
+```
+
+Para coseno, sustituir `BM25` por `TF_IDF`. El CSV se usa sin cambios para
+ambas técnicas; `id` es el vínculo con qrels. Los archivos generados están
+ignorados por Git, y se reproducen con los comandos anteriores.
+
+## Checklist #49
+
+- [x] Colección elegida y procedencia/limitaciones documentadas.
+- [x] Versiones reproducibles de 1K, 10K y 100K.
+- [x] Consultas de 1, 3 y 5+ palabras.
+- [x] Juicios de relevancia por tamaño para Precision@10 y Recall@10.
+- [x] Cargador persistente y SQL para la interfaz.
+
+Referencias de clase consultadas: Laboratorio 09 (noticias en español,
+preprocesamiento, bag of words, coseno), PPT 07 (pesos TF-IDF) y PPT 09
+(índice invertido externo). El Laboratorio 10 contempla variación del volumen
+y corpus de noticias para comparar búsquedas. PostgreSQL y la comparación
+experimental quedan para #50 y #51, respectivamente.

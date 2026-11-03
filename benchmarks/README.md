@@ -131,3 +131,9 @@ archivos de datos se crean con `tempfile.mkdtemp()` y se borran al terminar.
 | `tiempo_reorganizacion_seg`, `*_post_reorg_*`, `reorganizaciones_automaticas` | Heap: no tiene reorganización. |
 
 Las conclusiones se recogen en `docs/informe.md`.
+# Datasets de texto (Parte 3)
+
+El issue #49 añade generación reproducible de noticias sintéticas en español,
+consultas y juicios de relevancia por tamaño, con carga en el motor.
+Ver [protocolo y comandos](../datasets/text/README.md).
+
