@@ -5,5 +5,6 @@ from engine.indexes.bplus_tree import BPlusTree
 from engine.indexes.bplus_tree_clustered import BPlusTreeClustered
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
 from engine.indexes.ivf import IVFIndex, SearchResult
+from engine.indexes.hnsw import HNSWIndex
 
-__all__ = ["ExtendibleHash", "BPlusTree", "BPlusTreeClustered", "BPlusTreeUnclustered", "IVFIndex", "SearchResult"]
+__all__ = ["ExtendibleHash", "BPlusTree", "BPlusTreeClustered", "BPlusTreeUnclustered", "IVFIndex", "SearchResult", "HNSWIndex"]
