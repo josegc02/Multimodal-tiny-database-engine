@@ -7,9 +7,10 @@ WHERE full_text @@ query
 ORDER BY score DESC, id ASC LIMIT 10;
 
 -- AND explícito como en el laboratorio; no es el OR usado por el benchmark.
-SELECT id, contenido
+SELECT id, left(contenido, 160) AS resumen
 FROM texto.noticias_1000
-WHERE full_text @@ to_tsquery('pg_catalog.spanish', 'banca & digital');
+WHERE full_text @@ to_tsquery('pg_catalog.spanish', 'banca & digital')
+ORDER BY id LIMIT 10;
 
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT id, ts_rank(full_text, query, 0) AS score
