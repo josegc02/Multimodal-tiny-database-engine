@@ -2,6 +2,8 @@
 
 import argparse
 import csv
+import os
+import tempfile
 from pathlib import Path
 
 COLORS = {"TF-IDF": "#2563eb", "BM25": "#d97706", "GIN": "#059669"}
@@ -38,6 +40,18 @@ def curve(ax, rows, metric, scale=1, logarithmic=True):
 
 
 def plot(directory):
+    previous = os.environ.get("MPLCONFIGDIR")
+    with tempfile.TemporaryDirectory(prefix="bd2-text-plots-") as cache:
+        if previous is None:
+            os.environ["MPLCONFIGDIR"] = cache
+        try:
+            _plot(directory)
+        finally:
+            if previous is None:
+                os.environ.pop("MPLCONFIGDIR", None)
+
+
+def _plot(directory):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
