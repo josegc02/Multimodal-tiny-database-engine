@@ -109,3 +109,38 @@ en lugar de concatenar un título que ese dataset no tiene.
 
 - [PostgreSQL 16: tablas e índices de texto](https://www.postgresql.org/docs/16/textsearch-tables.html).
 - [PostgreSQL 16: consultas y ranking](https://www.postgresql.org/docs/16/textsearch-controls.html).
+
+## Pruebas y evidencia de entrega
+
+```sh
+TEXT_POSTGRES_TEST_DSN=postgresql://bd2:bd2@localhost:5434/texto \
+  .venv/bin/python -m unittest tests.test_postgres_text -v
+TEXT_POSTGRES_TEST_DSN=postgresql://bd2:bd2@localhost:5434/texto \
+  .venv/bin/python -m unittest discover -q
+```
+
+Los tests de integración crean la tabla `texto.noticias_24` dentro de una
+transacción revertida al finalizar cada prueba. Usar una base de desarrollo
+sin una tabla propia con ese nombre. Sin `TEXT_POSTGRES_TEST_DSN`, esos tests
+se omiten; las pruebas del contrato de consultas siguen siendo locales.
+
+Validación realizada con PostgreSQL 16.15 y psycopg 3.3.6:
+
+- Los 1.000, 10.000 y 100.000 documentos se cargaron desde #49. `verify`
+  comparó todos los campos originales, en orden de ID, sin diferencias.
+- El diagnóstico confirmó GIN válido y generación almacenada en español.
+- La consulta OR `inflación precios alimentos` sobre 100K eligió naturalmente
+  Bitmap Index Scan sobre `noticias_100000_gin`, Bitmap Heap Scan y Sort.
+  En 1K, el ejemplo de robótica eligió Seq Scan; ambos son planes válidos.
+- Tests verifican igualdad del ranking antes/después de GIN, orden de
+  scores, consultas vacías/desconocidas, escaping, rollback, recargas,
+  procedencia, configuración de idioma y mantenimiento tras INSERT/UPDATE/DELETE.
+- Suite completa: 542 pruebas, OK, 1 omitida. Persisten advertencias de
+  archivos sin cerrar en pruebas preexistentes; no son fallos del setup GIN.
+
+## Checklist #50
+
+- [x] Tablas con `tsvector` y configuración explícita de idioma.
+- [x] GIN y consultas `to_tsquery` / `ts_rank`.
+- [x] Mismos datasets de 1K, 10K y 100K que el motor, verificados campo a campo.
+- [x] Docker reproducible, comandos Python y ejemplos SQL documentados.
