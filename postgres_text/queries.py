@@ -38,3 +38,11 @@ def search_tsquery(connection, size, expression, top_k=10):
     """Sintaxis PostgreSQL explícita para ejercicios AND/OR del laboratorio."""
     statement, params = ranked_statement(size, expression, top_k)
     return connection.execute(statement, params).fetchall()
+
+
+def explain(connection, size, text, top_k=10):
+    """Plan elegido por PostgreSQL, sin forzar GIN ni ejecutar la consulta."""
+    from psycopg import sql
+
+    statement, params = ranked_statement(size, query_expression(text), top_k)
+    return connection.execute(sql.SQL("EXPLAIN (FORMAT JSON) ") + statement, params).fetchone()[0]
