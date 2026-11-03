@@ -1,0 +1,20 @@
+name: bd2-texto
+services:
+  postgres:
+    image: postgres:16-bookworm@sha256:e8a07d2c7579b038938cdba6c539e580e5001caf9ea203d397b5cc83e76bd938
+    environment:
+      POSTGRES_USER: bd2
+      POSTGRES_PASSWORD: bd2
+      POSTGRES_DB: texto
+    ports:
+      - "127.0.0.1:${TEXT_POSTGRES_PORT:-5434}:5432"
+    volumes:
+      - text-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/01-text.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bd2 -d texto"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+volumes:
+  text-data:

@@ -137,3 +137,7 @@ El issue #49 añade generación reproducible de noticias sintéticas en español
 consultas y juicios de relevancia por tamaño, con carga en el motor.
 Ver [protocolo y comandos](../datasets/text/README.md).
 
+El setup PostgreSQL de #50 carga esos mismos CSV, genera `tsvector` en
+español, construye GIN y permite consultar con `ts_rank`. Ver
+[inicio, consultas y validación](../postgres_text/README.md).
+
