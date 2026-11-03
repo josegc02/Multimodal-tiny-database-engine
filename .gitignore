@@ -21,6 +21,7 @@ generated_sql/
 # Datasets espaciales generados (Parte 2): se regeneran con
 # benchmarks/generate_spatial_datasets.py
 datasets/spatial/generated/
+datasets/text/generated/
 
 # Salidas de benchmarks que no forman parte de los resultados oficiales:
 # corridas de prueba y registros de consola (los datos están en los CSV).
