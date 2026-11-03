@@ -52,3 +52,24 @@ class IVFIndex:
         self.dimension = data.shape[1]
         self.centroids = centroids
         self.lists = lists
+
+    def search(self, query: Sequence[float], k: int = 10, nprobe: int = 1) -> list[tuple[int, float]]:
+        """Busca los k vecinos más cercanos visitando nprobe listas."""
+        if self.centroids is None:
+            raise ValueError("El índice debe entrenarse antes de buscar")
+        if not isinstance(k, int) or k < 1:
+            raise ValueError("k debe ser un entero positivo")
+        if not isinstance(nprobe, int) or not 1 <= nprobe <= self.nlist:
+            raise ValueError("nprobe debe estar entre 1 y nlist")
+        query = np.asarray(query, dtype=float)
+        if query.shape != (self.dimension,) or not np.isfinite(query).all():
+            raise ValueError("La consulta debe tener la dimensión del índice y valores finitos")
+
+        distances = np.linalg.norm(self.centroids - query, axis=1)
+        nearest_lists = np.argsort(distances, kind="stable")[:nprobe]
+        candidates = (
+            (identifier, float(np.linalg.norm(vector - query)))
+            for list_id in nearest_lists
+            for identifier, vector in self.lists[int(list_id)].items()
+        )
+        return sorted(candidates, key=lambda item: (item[1], item[0]))[:k]
