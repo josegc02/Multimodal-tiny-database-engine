@@ -5,6 +5,7 @@ import json
 from contextlib import ExitStack
 from pathlib import Path
 
+from benchmarks.generate_text_datasets import digest
 from benchmarks.text_validation import read_documents, validate_documents
 from engine.indexes.spimi import SpimiIndex
 from engine.storage.heap_file import HeapFile
@@ -20,6 +21,7 @@ def load_dataset(csv_path, output):
     """Valida primero, inserta en flujo y construye SPIMI al terminar la carga."""
     csv_path, output = Path(csv_path).resolve(), Path(output)
     count = validate_documents(csv_path)
+    source_sha256 = digest(csv_path)
     output.mkdir(parents=True, exist_ok=False)
     with ExitStack() as resources:
         texts = TextStore(str(output / "noticias.text"))
@@ -33,7 +35,8 @@ def load_dataset(csv_path, output):
         index.build((row["contenido"], rid) for rid, row in storage.scan())
         if index.doc_count != count:
             raise ValueError("El número de documentos indexados no coincide con el CSV")
-    metadata = {"source": str(csv_path), "documents": count, "language": "es",
+    metadata = {"source": str(csv_path), "source_sha256": source_sha256,
+                "documents": count, "language": "es",
                 "table": "noticias", "indexed_column": "contenido", "complete": True}
     (output / "load.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     return metadata
