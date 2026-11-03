@@ -21,7 +21,7 @@ def initialize(connection):
 
 
 def load_csv(connection, csv_path, size):
-    """COPY binario del CSV original, transacción completa y rechazo de recarga."""
+    """CSV original por bloques, transacción completa y rechazo de recarga."""
     from psycopg import sql
     from benchmarks.generate_text_datasets import digest
     from benchmarks.text_validation import validate_documents

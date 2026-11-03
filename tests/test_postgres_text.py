@@ -8,6 +8,7 @@ from postgres_text.client import analyze, build_index, connect, initialize, load
 from postgres_text.queries import explain, query_expression, ranked_statement, search, search_tsquery
 from postgres_text.schema import table_name
 from postgres_text.verify import verify
+from postgres_text.status import status
 
 
 class TestTextQueryContract(unittest.TestCase):
@@ -114,3 +115,24 @@ class TestPostgresText(unittest.TestCase):
 
         names = [node.get("Index Name") for node in nodes(plan[0]["Plan"])]
         self.assertIn("noticias_24_gin", names)
+
+    def test_status_distinguishes_missing_table_and_ready_index(self):
+        self.assertFalse(status(self.connection, 24)["gin_valid"])
+        self.load()
+        self.assertFalse(status(self.connection, 24)["gin_valid"])
+        build_index(self.connection, 24)
+        actual = status(self.connection, 24)
+        self.assertTrue(actual["gin_valid"])
+        self.assertEqual(actual["language"], "spanish")
+        self.assertIn("to_tsvector", actual["generated_expression"])
+
+    def test_gin_tracks_insert_update_and_delete(self):
+        self.load()
+        build_index(self.connection, 24)
+        self.connection.execute("UPDATE texto.noticias_24 SET contenido='ornitorrinco' WHERE id=1")
+        self.assertEqual([row[0] for row in search(self.connection, 24, "ornitorrinco")], [1])
+        self.connection.execute("INSERT INTO texto.noticias_24 (id,url,contenido,categoria,tema) "
+                                "VALUES (25,'u','ornitorrinco','c','t')")
+        self.assertEqual([row[0] for row in search(self.connection, 24, "ornitorrinco")], [1, 25])
+        self.connection.execute("DELETE FROM texto.noticias_24 WHERE id IN (1,25)")
+        self.assertEqual(search(self.connection, 24, "ornitorrinco"), [])
