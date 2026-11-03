@@ -778,3 +778,64 @@ Al índice solo se le piden `limit + offset` documentos si recortar no puede per
 **Plan de ejecución.** `EXPLAIN` muestra un nodo `Text Search` con el índice, la consulta, la técnica y el top-k. La estimación de filas y costo usa el `df` de cada término, sin leer las postings. `EXPLAIN ANALYZE` agrega las postings y páginas del índice leídas.
 
 **Simplificaciones.** Eliminar una fila no libera el espacio de su texto en `<tabla>.text`, y tras reabrir la tabla un mismo texto puede guardarse de nuevo. Ninguno de los dos casos afecta los datos.
+
+### 9. Comparación experimental de texto (Parte 3)
+
+Se ejecutaron 27 corridas: TF-IDF/coseno, BM25 y PostgreSQL GIN + ts_rank,
+en 1K, 10K y 100K documentos, con tres repeticiones. Cada corrida evaluó
+las 30 consultas de #49, agrupadas en 1, 3 y 6 palabras: 810 consultas
+medidas y 8.100 resultados top-10 auditados. Los documentos son noticias
+sintéticas españolas con juicios por tema principal, no juicios humanos.
+
+El [protocolo reproducible](../benchmarks/TEXT_BENCHMARK.md) describe
+semillas, calentamiento, aislamiento y alcance de cada medida. Los
+[resultados completos](../benchmarks/results/text/tables.md), CSV, rankings,
+metadatos y planes están versionados en `benchmarks/results/text/`.
+Las gráficas muestran medias y rango mínimo–máximo entre repeticiones;
+los CSV incluyen desviación estándar. Se siguieron los laboratorios 09/10
+y los tamaños del checklist #51.
+
+#### 9.1 Construcción y preparación
+
+| Técnica (100K) | Carga (s) | Índice (s) | Carga + índice (s) |
+|---|---:|---:|---:|
+| TF-IDF/coseno | 5,252 | 33,568 | 38,820 |
+| BM25 | 5,246 | 33,710 | 38,956 |
+| GIN + ts_rank | 20,415 | 2,055 | 22,470 |
+
+![Construcción y preparación](../benchmarks/results/text/construction.png)
+
+TF-IDF y BM25 construyen el mismo SPIMI; sus diferencias de tiempo son
+variación experimental. PostgreSQL calcula el tsvector durante COPY, mientras
+SPIMI procesa el texto durante la construcción. Por eso, aunque CREATE INDEX
+GIN tarda aproximadamente 16 veces menos que construir SPIMI en 100K, la
+preparación completa resulta aproximadamente 1,73 veces más rápida. Confundir
+ambas fronteras de medición exageraría la ventaja de GIN. La construcción de
+SPIMI pasa de unos 0,33 s a 3,31 s y 33,6 s: el crecimiento observado es
+aproximadamente proporcional al volumen en este rango, compatible con el
+procesamiento de postings y la mezcla externa. Tres tamaños no demuestran
+una complejidad asintótica por sí solos.
+
+#### 9.2 Tiempo de consulta
+
+| Técnica (100K) | 1 palabra (ms) | 3 palabras (ms) | 6 palabras (ms) |
+|---|---:|---:|---:|
+| TF-IDF/coseno | 42,742 | 51,861 | 69,896 |
+| BM25 | 49,338 | 53,797 | 73,346 |
+| GIN + ts_rank | 45,201 | 48,822 | 79,194 |
+
+![Latencia por longitud](../benchmarks/results/text/query_latency.png)
+
+No hay una técnica con la menor media en todos los grupos: TF-IDF gana
+en una y seis palabras a 100K, mientras GIN tiene la menor media en tres.
+Las diferencias son descriptivas, no una prueba de significancia con solo
+tres repeticiones. Las consultas largas tienden a leer más postings y
+acumular más candidatos bajo semántica OR. GIN acelera la selección con
+`@@`, pero PostgreSQL todavía calcula ts_rank y ordena candidatos. El motor
+normaliza o satura pesos y mantiene top-k con heap. Por eso un índice pequeño
+o barato de construir no garantiza la menor latencia de ranking.
+
+Las consultas se midieron después de un calentamiento y devuelven IDs y
+scores; PostgreSQL incluye el viaje local del cliente al servidor. Los planes
+naturales se conservan: en tablas pequeñas PostgreSQL puede preferir Seq Scan.
+No se forzó GIN durante las mediciones.
