@@ -5,7 +5,6 @@ from pathlib import Path
 
 from benchmarks.load_text_dataset import schema
 from benchmarks.text_disk import engine_disk
-from benchmarks.text_measure import timed
 from benchmarks.text_validation import read_documents
 from engine.indexes.spimi import SpimiIndex
 from engine.storage.heap_file import HeapFile

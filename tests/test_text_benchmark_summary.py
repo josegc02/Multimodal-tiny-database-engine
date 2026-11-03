@@ -4,7 +4,6 @@ import unittest
 from pathlib import Path
 
 from benchmarks.text_output import summarize, write_csv
-from benchmarks.text_summary import export_summaries
 
 
 class TestTextSummary(unittest.TestCase):

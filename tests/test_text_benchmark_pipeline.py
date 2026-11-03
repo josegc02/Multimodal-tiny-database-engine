@@ -7,9 +7,21 @@ from pathlib import Path
 from benchmarks.bench_text import main
 from benchmarks.generate_text_datasets import generate
 from benchmarks.validate_text_results import validate
+from benchmarks.text_workload import read_workload
 
 
 class TestTextPipeline(unittest.TestCase):
+    def test_query_shuffle_preserves_workload_and_judgments(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "data"
+            generate(root, sizes=(24,))
+            first, relevant = read_workload(root, 24, 42)
+            second, other = read_workload(root, 24, 43)
+            self.assertNotEqual(first, second)
+            self.assertEqual(sorted(first, key=lambda q: q["query_id"]),
+                             sorted(second, key=lambda q: q["query_id"]))
+            self.assertEqual(relevant, other)
+
     def test_complete_local_run_and_corruption_detection(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
