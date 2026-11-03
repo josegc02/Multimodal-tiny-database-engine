@@ -10,13 +10,17 @@ import numpy as np
 class HNSWIndex:
     """Grafo de vecinos por capas para búsqueda aproximada."""
 
-    def __init__(self, M: int = 8, ef_construction: int = 50, *, seed: int = 0):
+    def __init__(self, M: int = 8, ef_construction: int = 50, *,
+                 metric: str = "euclidean", seed: int = 0):
         if type(M) is not int or M < 2:
             raise ValueError("M debe ser un entero mayor o igual a 2")
         if type(ef_construction) is not int or ef_construction < M:
             raise ValueError("ef_construction debe ser un entero mayor o igual a M")
+        if metric not in ("euclidean", "dot_product", "cosine"):
+            raise ValueError("Métrica no soportada")
         self.M = M
         self.ef_construction = ef_construction
+        self.metric = metric
         self.seed = seed
         self._rng = random.Random(seed)
         self.dimension: int | None = None
@@ -38,10 +42,17 @@ class HNSWIndex:
             raise ValueError("El vector debe ser un arreglo 1D de números finitos")
         if self.dimension is not None and len(result) != self.dimension:
             raise ValueError("El vector debe tener la dimensión del índice")
+        if self.metric == "cosine" and np.linalg.norm(result) == 0:
+            raise ValueError("El coseno requiere vectores no nulos")
         return result
 
     def _distance(self, a: np.ndarray, b: np.ndarray) -> float:
-        return float(np.linalg.norm(a - b))
+        if self.metric == "euclidean":
+            return float(np.linalg.norm(a - b))
+        product = float(a @ b)
+        if self.metric == "dot_product":
+            return -product
+        return -product / float(np.linalg.norm(a) * np.linalg.norm(b))
 
     def _greedy(self, query: np.ndarray, entry: int, layer: int) -> tuple[int, set[int]]:
         current = entry
@@ -136,4 +147,5 @@ class HNSWIndex:
         for layer in range(self.max_level, 0, -1):
             entry, _ = self._greedy(query, entry, layer)
         candidates, _ = self._search_layer(query, entry, 0, ef_search)
-        return [(identifier, distance) for distance, identifier in candidates[:k]]
+        sign = 1 if self.metric == "euclidean" else -1
+        return [(identifier, sign * distance) for distance, identifier in candidates[:k]]
