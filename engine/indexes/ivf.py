@@ -23,6 +23,8 @@ class IVFIndex:
     def train(self, vectors: Mapping[int, Sequence[float]]) -> None:
         """Entrena K-Means y asigna todos los vectores a listas invertidas."""
         ids = list(vectors)
+        if any(type(identifier) is not int for identifier in ids):
+            raise ValueError("Los identificadores deben ser enteros")
         data = np.asarray(list(vectors.values()), dtype=float)
         if data.ndim != 2 or data.shape[0] < self.nlist or data.shape[1] == 0:
             raise ValueError("Se requieren al menos nlist vectores de igual dimensión")
@@ -69,6 +71,34 @@ class IVFIndex:
             return np.argmin(distances, axis=1)
         return np.argmax(data @ centroids.T, axis=1)
 
+    def insert(self, identifier: int, vector: Sequence[float]) -> None:
+        """Inserta un vector en la lista de su centroide más cercano."""
+        if self.centroids is None:
+            raise ValueError("El índice debe entrenarse antes de insertar")
+        if type(identifier) is not int:
+            raise ValueError("El identificador debe ser un entero")
+        if any(identifier in items for items in self.lists):
+            raise ValueError("El identificador ya existe")
+        vector = self._validate_vector(vector)
+        list_id = int(self._assign(vector[None, :], self.centroids, self.metric)[0])
+        self.lists[list_id][identifier] = vector.copy()
+
+    def delete(self, identifier: int) -> bool:
+        """Elimina un vector; devuelve False si no existe."""
+        for items in self.lists:
+            if identifier in items:
+                del items[identifier]
+                return True
+        return False
+
+    def _validate_vector(self, vector: Sequence[float]) -> np.ndarray:
+        result = np.asarray(vector, dtype=float)
+        if result.shape != (self.dimension,) or not np.isfinite(result).all():
+            raise ValueError("El vector debe tener la dimensión del índice y valores finitos")
+        if self.metric == "cosine" and np.linalg.norm(result) == 0:
+            raise ValueError("El coseno requiere vectores no nulos")
+        return result
+
     def search(self, query: Sequence[float], k: int = 10, nprobe: int = 1) -> list[tuple[int, float]]:
         """Busca los k vecinos más cercanos visitando nprobe listas."""
         if self.centroids is None:
@@ -77,11 +107,7 @@ class IVFIndex:
             raise ValueError("k debe ser un entero positivo")
         if not isinstance(nprobe, int) or not 1 <= nprobe <= self.nlist:
             raise ValueError("nprobe debe estar entre 1 y nlist")
-        query = np.asarray(query, dtype=float)
-        if query.shape != (self.dimension,) or not np.isfinite(query).all():
-            raise ValueError("La consulta debe tener la dimensión del índice y valores finitos")
-        if self.metric == "cosine" and np.linalg.norm(query) == 0:
-            raise ValueError("El coseno requiere vectores no nulos")
+        query = self._validate_vector(query)
 
         if self.metric == "euclidean":
             centroid_scores = np.linalg.norm(self.centroids - query, axis=1)
