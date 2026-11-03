@@ -60,3 +60,52 @@ La salida de búsqueda son pares `[id, score]`, ordenados por score
 descendente y luego ID ascendente. Se devuelven diez por defecto; `--top-k`
 permite cambiarlo. Las consultas vacías, sin términos conocidos o solo con
 stopwords no producen resultados.
+
+## Decisiones para una comparación válida
+
+La columna `full_text` es `tsvector GENERATED ALWAYS AS
+(to_tsvector('pg_catalog.spanish'::regconfig, contenido)) STORED`.
+No depende de `default_text_search_config`: insertar o actualizar contenido
+recalcula el vector automáticamente. GIN también refleja INSERT, UPDATE y
+DELETE. El DDL está en `schema.py`; `init.sql` prepara el namespace y la
+tabla de procedencia. `dataset_loads` registra el hash original de cada CSV.
+
+La búsqueda normal tokeniza y une palabras literales con OR (`|`) antes de
+llamar a `to_tsquery('spanish', ...)`. Eso conserva la intención de recuperar
+candidatos que compartan al menos un término, como el motor. Las consultas
+de 6 palabras de #49 incluyen contexto que puede no aparecer en el corpus;
+convertirlas silenciosamente a AND cambiaría la tarea. `--tsquery` permite
+operadores explícitos para los ejercicios del laboratorio, pero ese modo
+no debe mezclarse con el workload OR en la comparación.
+
+PostgreSQL aplica sus propios diccionarios, stopwords y stemming español;
+el motor usa su pipeline Snowball y su lista de stopwords. Se comparte texto
+original e intención OR, no se garantiza igualdad de lexemas o candidatos.
+Las puntuaciones tampoco son equivalentes: `ts_rank(..., 0)` usa el ranking
+nativo con normalización 0, no BM25 ni el coseno lnc.ltc. No se eliminan las
+posiciones del vector. Los scores de técnicas distintas no se comparan
+numéricamente: #51 debe evaluar las listas de IDs contra los mismos qrels.
+
+GIN acelera la búsqueda de candidatos por `@@`; no devuelve por sí mismo
+el top-k ordenado por relevancia. PostgreSQL calcula `ts_rank` y ordena los
+candidatos. El plan puede elegir Seq Scan para consultas poco selectivas o
+tablas pequeñas. `--explain` muestra el plan natural, sin ejecutar ni forzar
+el índice. Un test usa `SET LOCAL enable_seqscan=off` exclusivamente para
+comprobar disponibilidad del índice; esa configuración no llega al cliente
+normal ni debe usarse como resultado de rendimiento.
+
+`load_csv`, `build_index` y `analyze` son operaciones separadas para #51.
+El tiempo de cargar incluye construir los tsvector almacenados; el tiempo
+de `build_index` solo incluye CREATE INDEX y su commit cuando se usa fuera
+de otra transacción. Deben definirse y reportarse esos límites al medir.
+Este issue prepara el entorno, no genera la comparación experimental.
+
+## Referencias
+
+Se siguieron el PPT 09 (columna generada, `to_tsvector`, GIN y `to_tsquery`)
+y el Laboratorio 10, apartado de noticias (CSV, ranking y revisión del plan).
+Se conserva `contenido` como único texto indexado para coincidir con #49,
+en lugar de concatenar un título que ese dataset no tiene.
+
+- [PostgreSQL 16: tablas e índices de texto](https://www.postgresql.org/docs/16/textsearch-tables.html).
+- [PostgreSQL 16: consultas y ranking](https://www.postgresql.org/docs/16/textsearch-controls.html).
