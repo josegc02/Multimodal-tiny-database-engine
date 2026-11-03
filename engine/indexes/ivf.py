@@ -1,6 +1,8 @@
 """Índice IVF para vectores densos."""
 
+import json
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 import numpy as np
 
@@ -90,6 +92,43 @@ class IVFIndex:
                 del items[identifier]
                 return True
         return False
+
+    def save(self, path: str | Path) -> None:
+        """Guarda centroides y listas en un archivo JSON."""
+        if self.centroids is None:
+            raise ValueError("El índice debe entrenarse antes de guardarlo")
+        payload = {
+            "version": 1,
+            "nlist": self.nlist,
+            "metric": self.metric,
+            "seed": self.seed,
+            "dimension": self.dimension,
+            "centroids": self.centroids.tolist(),
+            "lists": [
+                [[identifier, vector.tolist()] for identifier, vector in items.items()]
+                for items in self.lists
+            ],
+        }
+        Path(path).write_text(json.dumps(payload), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: str | Path) -> "IVFIndex":
+        """Carga un índice guardado con save."""
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        if payload["version"] != 1:
+            raise ValueError("Versión de índice no soportada")
+        index = cls(payload["nlist"], metric=payload["metric"], seed=payload["seed"])
+        index.dimension = payload["dimension"]
+        index.centroids = np.asarray(payload["centroids"], dtype=float)
+        if index.centroids.shape != (index.nlist, index.dimension) or not np.isfinite(index.centroids).all():
+            raise ValueError("Centroides inválidos")
+        if len(payload["lists"]) != index.nlist:
+            raise ValueError("Número de listas inválido")
+        index.lists = [
+            {identifier: index._validate_vector(vector) for identifier, vector in items}
+            for items in payload["lists"]
+        ]
+        return index
 
     def _validate_vector(self, vector: Sequence[float]) -> np.ndarray:
         result = np.asarray(vector, dtype=float)
