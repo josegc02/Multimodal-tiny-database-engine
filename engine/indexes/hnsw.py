@@ -1,5 +1,6 @@
 """Índice HNSW para vectores densos."""
 
+import heapq
 import random
 from collections.abc import Sequence
 
@@ -30,3 +31,93 @@ class HNSWIndex:
         while self._rng.random() < 1 / self.M:
             level += 1
         return level
+
+    def _validate_vector(self, vector: Sequence[float]) -> np.ndarray:
+        result = np.asarray(vector, dtype=float)
+        if result.ndim != 1 or len(result) == 0 or not np.isfinite(result).all():
+            raise ValueError("El vector debe ser un arreglo 1D de números finitos")
+        if self.dimension is not None and len(result) != self.dimension:
+            raise ValueError("El vector debe tener la dimensión del índice")
+        return result
+
+    def _distance(self, a: np.ndarray, b: np.ndarray) -> float:
+        return float(np.linalg.norm(a - b))
+
+    def _greedy(self, query: np.ndarray, entry: int, layer: int) -> tuple[int, set[int]]:
+        current = entry
+        visited = {entry}
+        best = self._distance(query, self.vectors[entry])
+        while True:
+            next_node = current
+            for neighbor in self.links[current][layer]:
+                visited.add(neighbor)
+                distance = self._distance(query, self.vectors[neighbor])
+                if (distance, neighbor) < (best, next_node):
+                    best, next_node = distance, neighbor
+            if next_node == current:
+                return current, visited
+            current = next_node
+
+    def _search_layer(self, query: np.ndarray, entry: int, layer: int,
+                      ef: int) -> tuple[list[tuple[float, int]], set[int]]:
+        distance = self._distance(query, self.vectors[entry])
+        candidates = [(distance, entry)]
+        best = [(-distance, -entry)]
+        visited = {entry}
+        while candidates:
+            current_distance, current = heapq.heappop(candidates)
+            if len(best) == ef and (current_distance, current) > (-best[0][0], -best[0][1]):
+                break
+            for neighbor in self.links[current][layer]:
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                distance = self._distance(query, self.vectors[neighbor])
+                if len(best) < ef or (distance, neighbor) < (-best[0][0], -best[0][1]):
+                    heapq.heappush(candidates, (distance, neighbor))
+                    heapq.heappush(best, (-distance, -neighbor))
+                    if len(best) > ef:
+                        heapq.heappop(best)
+        return sorted((-distance, -identifier) for distance, identifier in best), visited
+
+    def _prune(self, identifier: int, layer: int) -> None:
+        neighbors = self.links[identifier][layer]
+        if len(neighbors) <= self.M:
+            return
+        closest = sorted(
+            neighbors,
+            key=lambda other: (self._distance(self.vectors[identifier], self.vectors[other]), other),
+        )[:self.M]
+        removed = neighbors - set(closest)
+        self.links[identifier][layer] = set(closest)
+        for other in removed:
+            self.links[other][layer].discard(identifier)
+
+    def insert(self, identifier: int, vector: Sequence[float]) -> None:
+        """Inserta un nodo y lo conecta con vecinos en cada capa que alcanza."""
+        if type(identifier) is not int or identifier in self.vectors:
+            raise ValueError("El identificador debe ser un entero nuevo")
+        vector = self._validate_vector(vector)
+        if self.dimension is None:
+            self.dimension = len(vector)
+        level = self._random_level()
+        self.vectors[identifier] = vector.copy()
+        self.levels[identifier] = level
+        self.links[identifier] = [set() for _ in range(level + 1)]
+        if self.entrypoint is None:
+            self.entrypoint, self.max_level = identifier, level
+            return
+
+        entry = self.entrypoint
+        for layer in range(self.max_level, level, -1):
+            entry, _ = self._greedy(vector, entry, layer)
+        for layer in range(min(level, self.max_level), -1, -1):
+            candidates, _ = self._search_layer(vector, entry, layer, self.ef_construction)
+            for _, neighbor in candidates[:self.M]:
+                self.links[identifier][layer].add(neighbor)
+                self.links[neighbor][layer].add(identifier)
+                self._prune(neighbor, layer)
+            if candidates:
+                entry = candidates[0][1]
+        if level > self.max_level:
+            self.entrypoint, self.max_level = identifier, level
