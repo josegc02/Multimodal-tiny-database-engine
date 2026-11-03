@@ -1,8 +1,10 @@
 """Índice HNSW para vectores densos."""
 
 import heapq
+import json
 import random
 from collections.abc import Sequence
+from pathlib import Path
 
 import numpy as np
 
@@ -149,3 +151,58 @@ class HNSWIndex:
         candidates, _ = self._search_layer(query, entry, 0, ef_search)
         sign = 1 if self.metric == "euclidean" else -1
         return [(identifier, sign * distance) for distance, identifier in candidates[:k]]
+
+    def save(self, path: str | Path) -> None:
+        """Guarda el grafo y el estado aleatorio en JSON."""
+        payload = {
+            "version": 1,
+            "M": self.M,
+            "ef_construction": self.ef_construction,
+            "metric": self.metric,
+            "seed": self.seed,
+            "dimension": self.dimension,
+            "entrypoint": self.entrypoint,
+            "max_level": self.max_level,
+            "rng_state": self._rng.getstate(),
+            "nodes": [
+                [identifier, vector.tolist(), self.levels[identifier],
+                 [sorted(neighbors) for neighbors in self.links[identifier]]]
+                for identifier, vector in self.vectors.items()
+            ],
+        }
+        Path(path).write_text(json.dumps(payload), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: str | Path) -> "HNSWIndex":
+        """Carga un índice guardado con save."""
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        if payload["version"] != 1:
+            raise ValueError("Versión de índice no soportada")
+        index = cls(payload["M"], payload["ef_construction"],
+                    metric=payload["metric"], seed=payload["seed"])
+        index.dimension = payload["dimension"]
+        index.entrypoint = payload["entrypoint"]
+        index.max_level = payload["max_level"]
+        for identifier, vector, level, layers in payload["nodes"]:
+            if identifier in index.vectors or len(layers) != level + 1:
+                raise ValueError("Nodo inválido en el índice")
+            index.vectors[identifier] = index._validate_vector(vector)
+            index.levels[identifier] = level
+            index.links[identifier] = [set(neighbors) for neighbors in layers]
+        for identifier, layers in index.links.items():
+            for layer, neighbors in enumerate(layers):
+                if any(other not in index.links or layer >= len(index.links[other])
+                       or identifier not in index.links[other][layer] for other in neighbors):
+                    raise ValueError("Enlaces inválidos en el índice")
+        if (index.entrypoint is None) != (not index.vectors):
+            raise ValueError("Punto de entrada inválido")
+        if index.entrypoint is not None and index.entrypoint not in index.vectors:
+            raise ValueError("Punto de entrada inválido")
+        index._rng.setstate(cls._as_tuple(payload["rng_state"]))
+        return index
+
+    @staticmethod
+    def _as_tuple(value):
+        if isinstance(value, list):
+            return tuple(HNSWIndex._as_tuple(item) for item in value)
+        return value
