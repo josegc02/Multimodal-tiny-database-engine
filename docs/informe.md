@@ -743,7 +743,7 @@ En tablas cuyos RID se mueven (secuencial y B+ agrupado), el catálogo reconstru
 | 10.000 | 7,8 s | 3,2 MB | 0,26 ms |
 | 100.000 | 38,8 s | 28,1 MB | 0,30 ms |
 
-La memoria adicional de construir 20.000 documentos fue de 4,0 MB con bloques de 256 KB y de 16,5 MB con bloques de 2 MiB, porque durante la mezcla solo se retiene una entrada y un buffer de 64 KB por bloque. Estas cifras solo comprueban la escalabilidad del índice: la comparación con BM25 y GIN se hará con datos reales en la comparación experimental.
+La memoria adicional de construir 20.000 documentos fue de 4,0 MB con bloques de 256 KB y de 16,5 MB con bloques de 2 MiB, porque durante la mezcla solo se retiene una entrada y un buffer de 64 KB por bloque. Estas cifras son preliminares y corresponden a otro corpus: la comparación con BM25 y GIN de la sección 9 utiliza las noticias sintéticas de #49. Sus medidas de memoria también tienen otro alcance y no deben mezclarse con esta medición adicional.
 
 **Simplificaciones.**
 
