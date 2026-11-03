@@ -113,3 +113,27 @@ El diseño sigue el Laboratorio 09 (tamaños, repeticiones, curvas y análisis
 con datos concretos) y el Laboratorio 10/PPT 09 (GIN, ranking y planes).
 Los tres tamaños se toman del checklist #51; el laboratorio general pide
 cinco tamaños, pero este entregable usa los 1K/10K/100K especificados.
+
+## Validación y checklist #51
+
+La corrida publicada completó 27 construcciones, 810 consultas medidas y
+8.100 resultados top-10. El auditor recalculó relevancia, comprobó cobertura
+y contrastó los hashes con el corpus. La suite completa pasó con 552 pruebas
+y una omitida, incluyendo integración con PostgreSQL y el worker de memoria.
+Persisten avisos de archivos sin cerrar en pruebas anteriores del proyecto.
+
+Los mensajes de los commits locales de #51 se tradujeron al español a pedido
+del usuario. La revisión equivalente de código quedó en `git_revision` y
+el hash previo en `git_revision_before_message_translation`; los árboles
+de archivos son idénticos. Esto preserva la procedencia de las mediciones.
+
+- [x] Benchmark TF-IDF/coseno, BM25 y PostgreSQL GIN.
+- [x] Datasets 1K, 10K y 100K.
+- [x] Consultas de 1, 3 y 5+ palabras.
+- [x] Tiempo de construcción y preparación completa.
+- [x] Tiempo de consulta.
+- [x] Precision@10 y Recall@10.
+- [x] Memoria y espacio en disco, con alcance documentado.
+- [x] Seis gráficas comparativas regenerables.
+- [x] Tabla de ventajas y desventajas en el informe.
+- [x] Conclusiones sustentadas en las corridas, sección 9 del informe.
