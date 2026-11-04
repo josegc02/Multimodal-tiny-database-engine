@@ -1,0 +1,95 @@
+{
+  "started_utc": "2026-11-03T01:19:19.954224+00:00",
+  "git_revision": "4d21b9650169260cd1e275a84f8553f4aa626e25",
+  "git_revision_before_message_translation": "0d3afd53fd62d9403a775eb2dd1745e45985e4da",
+  "tracked_dirty": false,
+  "python": "3.14.9",
+  "platform": "Linux-7.2.11-arch1-1-x86_64-with-glibc2.44",
+  "packages": {
+    "snowballstemmer": "3.1.1",
+    "psycopg": "3.3.6",
+    "matplotlib": "3.11.2"
+  },
+  "sizes": [
+    1000,
+    10000,
+    100000
+  ],
+  "repetitions": 3,
+  "seed": 42,
+  "top_k": 10,
+  "bm25": {
+    "k1": 1.2,
+    "b": 0.75
+  },
+  "postgres_rank_normalization": 0,
+  "warmup_passes": 1,
+  "partial": false,
+  "corpus": {
+    "version": 1,
+    "seed": 42,
+    "sizes": [
+      1000,
+      10000,
+      100000
+    ],
+    "language": "es",
+    "source": "synthetic-editorial-topics",
+    "fields": [
+      "id",
+      "url",
+      "contenido",
+      "categoria",
+      "tema"
+    ],
+    "files": {
+      "noticias_1000.csv": {
+        "rows": 1000,
+        "sha256": "4b0f5b21dfcbe4bc93395f5947fa1c9f4b7a8f2fc9de51f100d649af94d59b36"
+      },
+      "noticias_10000.csv": {
+        "rows": 10000,
+        "sha256": "13243893c651c71f9128d2358d3b131b71f07392b0dd593ea64f6934eaaf5ec6"
+      },
+      "noticias_100000.csv": {
+        "rows": 100000,
+        "sha256": "b261008fe691e075bba83dfdee08e2f524e37855254f758d869a383e7e6e678d"
+      },
+      "queries.csv": {
+        "rows": 30,
+        "sha256": "4f05533d62654ae981520ef5f6166d81fc415bcc0edc7a39635382197209ba7b"
+      },
+      "qrels_1000.csv": {
+        "rows": 3000,
+        "sha256": "06cf143a15bdaea7c1aaa204fcffb54dadbb2e9fd70fc687c1be6fd0365dbcb7"
+      },
+      "qrels_10000.csv": {
+        "rows": 30000,
+        "sha256": "8a6e4cb65c3653c4eb3b44c6e8387c8f93e7f9242230cf8664f44d69d098bed8"
+      },
+      "qrels_100000.csv": {
+        "rows": 300000,
+        "sha256": "b650a510c9b92e44957964e0ae03a03198ed38f7934e76a9b23a5e78e389baf0"
+      }
+    },
+    "judgments": {
+      "method": "editorial-topic",
+      "exhaustive": true,
+      "omitted_pair_relevance": 0,
+      "human_assessed": false
+    }
+  },
+  "memory": "Linux VmHWM: fresh Python worker or fresh PostgreSQL backend, shared pages included",
+  "postgres_storage": "temporary session tables; no WAL durability; serial query execution",
+  "complete": true,
+  "postgres": {
+    "version": 160015,
+    "settings": {
+      "shared_buffers": "128MB",
+      "work_mem": "4MB",
+      "maintenance_work_mem": "64MB",
+      "max_parallel_workers_per_gather": "0"
+    }
+  },
+  "finished_utc": "2026-11-03T01:25:46.510533+00:00"
+}
