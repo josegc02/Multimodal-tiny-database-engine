@@ -21,7 +21,9 @@ scores al llamador (incluida la comunicación local con PostgreSQL). Las
 métricas de relevancia y EXPLAIN se calculan fuera del cronómetro.
 
 Memoria: VmHWM del proceso nuevo durante carga+construcción+workload, y
-VmRSS inicial. Para PostgreSQL se mide el backend del servidor dentro del
+VmRSS inicial en Linux. En Windows se usan PeakWorkingSetSize y WorkingSetSize
+de GetProcessMemoryInfo, respectivamente. Ambos se reportan en bytes.
+Para PostgreSQL se mide el backend Linux del servidor dentro del
 contenedor, además del cliente Python. RSS incluye páginas compartidas y
 no representa memoria exclusiva del índice ni todo el servidor. No se
 restan picos ni se presentan esos valores como asignaciones netas.
