@@ -17,7 +17,9 @@ from engine.features.image.sift import SIFTExtractor
 
 DATASETS_DIR = PROJECT_ROOT / "datasets" / "coco_subsets"
 
-def train_codebook(subset_name: str, k: int = 100, max_images: int = 200):
+def train_codebook(subset_name: str, k: int = 100, max_images: int = None):
+    if max_images is None:
+        max_images = max(k * 3, 500)
     print(f"Entrenando codebook K={k} con {subset_name}...")
     subset_dir = DATASETS_DIR / subset_name
     images_dir = subset_dir / "images"
