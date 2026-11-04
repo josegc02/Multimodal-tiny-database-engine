@@ -49,6 +49,9 @@ class MFCCExtractor(BaseFeatureExtractor):
             y = audio
             sr = self.sample_rate
 
+        if len(y) == 0:
+            raise ValueError("El audio está vacío, no se pueden extraer MFCCs")
+
         # Normalizar duración
         y = self.normalize_audio(y)
 
