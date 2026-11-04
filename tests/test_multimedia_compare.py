@@ -6,6 +6,9 @@ from pathlib import Path
 import numpy as np
 
 from benchmarks.multimedia_compare import exact_neighbors, run_trial
+from benchmarks.multimedia_gallery import write_gallery
+from benchmarks.multimedia_plots import plot_results
+from benchmarks.multimedia_report import write_report
 
 
 class TestMultimediaCompare(unittest.TestCase):
@@ -41,6 +44,39 @@ class TestMultimediaCompare(unittest.TestCase):
                             self.assertNotIn(row["query_file"], row["found_files"])
                             self.assertGreaterEqual(row["recall_at_10"], 0)
                             self.assertLessEqual(row["recall_at_10"], 1)
+
+    def test_reports_use_measured_data_and_existing_images(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "out"
+            output.mkdir()
+            image_dir = root / "datasets" / "coco1k" / "images"
+            image_dir.mkdir(parents=True)
+            (image_dir / "a.jpg").touch()
+            records = []
+            for metric in ("euclidean", "cosine"):
+                for technique in ("IVF", "HNSW"):
+                    records.append({"size": 1000, "metric": metric, "technique": technique,
+                                    "queries": 1, "build_seconds": 1.0,
+                                    "mean_query_seconds": 0.01, "mean_recall_at_10": 0.5,
+                                    "rss_initial_bytes": 1024, "rss_peak_bytes": 2048})
+            import csv
+            with (output / "summary.csv").open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(records[0]))
+                writer.writeheader()
+                writer.writerows(records)
+            (output / "queries.json").write_text(json.dumps([{
+                "size": row["size"], "metric": row["metric"], "technique": row["technique"],
+                "query_file": "a.jpg", "category": "test", "recall_at_10": 0.5,
+                "found_files": ["a.jpg"], "exact_files": ["a.jpg"]
+            } for row in records]), encoding="utf-8")
+            plot_results(output)
+            write_gallery(output, root / "datasets")
+            write_report(output)
+            self.assertIn("0.500", (output / "report.md").read_text(encoding="utf-8"))
+            self.assertIn("a.jpg", (output / "gallery.html").read_text(encoding="utf-8"))
+            for name in ("construction.png", "query.png", "recall.png", "memory.png"):
+                self.assertGreater((output / name).stat().st_size, 0)
 
 
 if __name__ == "__main__":
