@@ -23,6 +23,9 @@ generated_sql/
 datasets/spatial/generated/
 datasets/text/generated/
 
+datasets/
+*.zip
+
 # Salidas de benchmarks que no forman parte de los resultados oficiales:
 # corridas de prueba y registros de consola (los datos están en los CSV).
 benchmarks/results/smoke/

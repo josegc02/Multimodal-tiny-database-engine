@@ -16,7 +16,6 @@ import sys
 
 DATASET_DIR = "datasets/coco2017"
 SUBSETS_DIR = "datasets/coco_subsets"
-s
 IMAGES_DIR = os.path.join(DATASET_DIR, "train2017")
 ANNOTATIONS_FILE = os.path.join(DATASET_DIR, "annotations", "instances_train2017.json")
 
