@@ -1,66 +1,70 @@
 """
-Extractor SIFT para imágenes con normalización y caching.
+Extractor de características SIFT para imágenes.
 """
 
 import cv2
 import numpy as np
 from pathlib import Path
 from typing import Union, Tuple
-from ..base import BaseFeatureExtractor
 
 
-class SIFTExtractor(BaseFeatureExtractor):
-
+class SIFTExtractor:
+    """
+    Extractor SIFT que convierte imágenes en vectores de dimensión fija (128D)
+    para su indexación en motores vectoriales como HNSW.
+    """
+    
     DESCRIPTOR_DIM = 128
-
+    
     def __init__(
-            self,
-            n_features: int = 500,
-            contrast_threshold: float = 0.04,
-            image_size: Tuple[int, int] = (512, 512),  # Normalización
-            cache_dir: Union[str, Path, None] = None
+        self,
+        n_features: int = 500,
+        contrast_threshold: float = 0.04,
+        image_size: Tuple[int, int] = (512, 512)
     ):
-        super().__init__(cache_dir)
         self.sift = cv2.SIFT_create(
             nfeatures=n_features,
             contrastThreshold=contrast_threshold
         )
         self.image_size = image_size
-
-    def normalize_image(self, img: np.ndarray) -> np.ndarray:
-        """Normaliza el tamaño de la imagen."""
-        return cv2.resize(img, self.image_size, interpolation=cv2.INTER_AREA)
-
+    
     def extract(self, image: Union[str, Path, np.ndarray]) -> np.ndarray:
-
-        # Cargar imagen
+        """
+        Extrae descriptores SIFT y retorna el vector promedio (128D).
+        """
+        # 1. Cargar imagen
         if isinstance(image, (str, Path)):
-            image_path = Path(image)
-            if not image_path.exists():
-                raise FileNotFoundError(f"Imagen no encontrada: {image_path}")
-            img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+            img = cv2.imread(str(image), cv2.IMREAD_GRAYSCALE)
         else:
             img = image
             if len(img.shape) == 3:
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
+        
         if img is None:
-            raise ValueError("No se pudo cargar la imagen")
-
-        # Normalizar tamaño
-        img = self.normalize_image(img)
-
-        # Extraer features
+            raise ValueError(f"No se pudo cargar la imagen")
+        
+        # 2. Normalizar tamaño
+        img = cv2.resize(img, self.image_size, interpolation=cv2.INTER_AREA)
+        
+        # 3. Detectar y computar
         keypoints, descriptors = self.sift.detectAndCompute(img, None)
-
+        
         if descriptors is None or len(descriptors) == 0:
-            raise ValueError(
-                f"No se detectaron features SIFT. "
-                f"Intenta reducir contrast_threshold o usar otra imagen."
-            )
-
-        # Retornar promedio (vector de dimensión fija)
+            raise ValueError("No se detectaron features SIFT en la imagen")
+        
+        # 4. Retornar promedio (vector 1D de 128 dimensiones)
         return np.mean(descriptors, axis=0).astype(np.float32)
 
-    def get_descriptor_dim(self) -> int:
-        return self.DESCRIPTOR_DIM
+    def extract_to_fixed_vector(
+        self, 
+        image: Union[str, Path, np.ndarray], 
+        method: str = "average"
+    ) -> np.ndarray:
+        """
+        Interfaz compatible con el evaluador. 
+        Por ahora, 'average' es el método soportado para obtener un vector único.
+        """
+        if method == "average":
+            return self.extract(image)
+        else:
+            raise ValueError(f"Método '{method}' no soportado. Usa 'average'.")
