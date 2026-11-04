@@ -21,6 +21,7 @@ def environment(args, corpus):
             "seed": args.seed, "top_k": 10, "bm25": {"k1": 1.2, "b": 0.75},
             "postgres_rank_normalization": 0, "warmup_passes": 1,
             "partial": args.sin_postgres, "corpus": corpus,
-            "memory": "Linux VmHWM: fresh Python worker or fresh PostgreSQL backend, shared pages included",
+            "memory": "Python worker peak RSS: Linux VmHWM or Windows PeakWorkingSetSize; "
+                      "PostgreSQL backend: Linux VmHWM in container; fresh processes, shared pages included",
             "postgres_storage": "temporary session tables; no WAL durability; serial query execution",
             "complete": False}
