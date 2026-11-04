@@ -33,7 +33,7 @@ def load_subset(subset_name: str) -> dict:
 
 
 def group_images_by_category(data: dict) -> dict:
-    """Agrupa las imágenes por categoría."""
+    """Agrupa las imágenes por categoría. Una imagen puede estar en varias categorías."""
     img_to_categories = defaultdict(set)
     for ann in data["annotations"]:
         img_to_categories[ann["image_id"]].add(ann["category_id"])
@@ -42,10 +42,11 @@ def group_images_by_category(data: dict) -> dict:
     for img in data["images"]:
         img_id = img["id"]
         cats = img_to_categories.get(img_id, set())
-        if len(cats) == 1:
-            cat_id = list(cats)[0]
+        
+        # Asignar la imagen a todas sus categorías
+        for cat_id in cats:
             cat_to_images[cat_id].append(img)
-    
+            
     return cat_to_images
 
 
@@ -63,15 +64,15 @@ def generate_queries(
     random.seed(RANDOM_SEED)
     
     queries = []
-    categories = sorted(cat_to_images.keys())
+    # Filtrar categorías que tengan al menos 10 imágenes para que la búsqueda sea viable
+    valid_categories = [cat_id for cat_id, imgs in cat_to_images.items() if len(imgs) >= 10]
+    valid_categories.sort()
     
     if max_queries:
-        categories = random.sample(categories, min(max_queries, len(categories)))
+        valid_categories = random.sample(valid_categories, min(max_queries, len(valid_categories)))
     
-    for cat_id in categories:
+    for cat_id in valid_categories:
         images = cat_to_images[cat_id]
-        if len(images) < 2:
-            continue
         
         query_img = random.choice(images)
         relevant_imgs = [img for img in images if img["id"] != query_img["id"]]
