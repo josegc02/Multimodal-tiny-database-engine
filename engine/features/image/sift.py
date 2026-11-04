@@ -7,10 +7,10 @@ import numpy as np
 from pathlib import Path
 from typing import Union, Tuple, Optional
 
-from engine.features.base import BaseExtractor
+from engine.features.base import BaseFeatureExtractor
 
 
-class SIFTExtractor(BaseExtractor):
+class SIFTExtractor(BaseFeatureExtractor):
     """
     Extractor SIFT que convierte imágenes en vectores de dimensión fija (128D)
     para su indexación en motores vectoriales como HNSW.
@@ -31,6 +31,9 @@ class SIFTExtractor(BaseExtractor):
             contrastThreshold=contrast_threshold
         )
         self.image_size = image_size
+    
+    def get_descriptor_dim(self) -> int:
+        return self.DESCRIPTOR_DIM
     
     def extract(self, image: Union[str, Path, np.ndarray]) -> np.ndarray:
         """
