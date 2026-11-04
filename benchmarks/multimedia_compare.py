@@ -123,6 +123,13 @@ def main(argv=None):
             writer.writeheader()
             writer.writerows(data)
     (args.output / "queries.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    from benchmarks.multimedia_gallery import write_gallery
+    from benchmarks.multimedia_plots import plot_results
+    from benchmarks.multimedia_report import write_report
+
+    plot_results(args.output)
+    write_gallery(args.output, args.dataset_dir)
+    write_report(args.output)
 
 
 if __name__ == "__main__":
