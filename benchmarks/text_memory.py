@@ -18,6 +18,8 @@ def parse_status(text):
 
 
 def process_memory():
+    if platform.system() != "Linux":
+        return 0
     return parse_status(Path("/proc/self/status").read_text())
 
 
