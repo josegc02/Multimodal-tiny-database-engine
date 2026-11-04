@@ -5,10 +5,12 @@ Extractor de características SIFT para imágenes.
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import Union, Tuple
+from typing import Union, Tuple, Optional
+
+from engine.features.base import BaseExtractor
 
 
-class SIFTExtractor:
+class SIFTExtractor(BaseExtractor):
     """
     Extractor SIFT que convierte imágenes en vectores de dimensión fija (128D)
     para su indexación en motores vectoriales como HNSW.
@@ -20,8 +22,10 @@ class SIFTExtractor:
         self,
         n_features: int = 500,
         contrast_threshold: float = 0.04,
-        image_size: Tuple[int, int] = (512, 512)
+        image_size: Tuple[int, int] = (512, 512),
+        cache_dir: Optional[Union[str, Path]] = None,
     ):
+        super().__init__(cache_dir=cache_dir)
         self.sift = cv2.SIFT_create(
             nfeatures=n_features,
             contrastThreshold=contrast_threshold
@@ -32,9 +36,11 @@ class SIFTExtractor:
         """
         Extrae descriptores SIFT y retorna el vector promedio (128D).
         """
-        # 1. Cargar imagen
         if isinstance(image, (str, Path)):
-            img = cv2.imread(str(image), cv2.IMREAD_GRAYSCALE)
+            img_path = Path(image)
+            if not img_path.exists():
+                raise FileNotFoundError(f"Imagen no encontrada: {img_path}")
+            img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
         else:
             img = image
             if len(img.shape) == 3:
@@ -43,16 +49,13 @@ class SIFTExtractor:
         if img is None:
             raise ValueError(f"No se pudo cargar la imagen")
         
-        # 2. Normalizar tamaño
         img = cv2.resize(img, self.image_size, interpolation=cv2.INTER_AREA)
         
-        # 3. Detectar y computar
         keypoints, descriptors = self.sift.detectAndCompute(img, None)
         
         if descriptors is None or len(descriptors) == 0:
             raise ValueError("No se detectaron features SIFT en la imagen")
         
-        # 4. Retornar promedio (vector 1D de 128 dimensiones)
         return np.mean(descriptors, axis=0).astype(np.float32)
 
     def extract_to_fixed_vector(
@@ -60,10 +63,6 @@ class SIFTExtractor:
         image: Union[str, Path, np.ndarray], 
         method: str = "average"
     ) -> np.ndarray:
-        """
-        Interfaz compatible con el evaluador. 
-        Por ahora, 'average' es el método soportado para obtener un vector único.
-        """
         if method == "average":
             return self.extract(image)
         else:
