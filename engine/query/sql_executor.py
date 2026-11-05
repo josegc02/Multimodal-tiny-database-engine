@@ -13,7 +13,7 @@ from engine.query.external_algorithms import (
     Aggregate, BufferConfig, ExecutionStats, OrderKey,
     external_hash_group_by, external_hash_join, external_sort, streaming_group_by,
 )
-from engine.query.logical_plan import SCORE_COLUMN, LogicalPlan, LogicalPlanner, column_key, normalize_insert
+from engine.query.logical_plan import SCORE_COLUMN, SIMILARITY_COLUMN, LogicalPlan, LogicalPlanner, column_key, normalize_insert
 from engine.query.errors import SQLExecutionError
 from engine.query.parser import parse
 from engine.query.sql_optimizer import SQLOptimizer, base_scan
@@ -92,6 +92,8 @@ class SQLExecutor:
             yield from self._spatial_scan(plan, binding, physical, stats)
         elif physical is not None and physical.algorithm == "text_scan":
             yield from self._text_scan(plan, binding, physical, stats)
+        elif physical is not None and physical.algorithm == "vector_scan":
+            yield from self._vector_scan(plan, binding, physical, stats)
         elif physical is None or physical.algorithm == "sequential_scan":
             for rid, record in binding.storage.scan():
                 yield _context(table, rid, record)
@@ -173,6 +175,34 @@ class SQLExecutor:
                 record = binding.storage.get(rid)
                 if record is not None:
                     rows.append({**_context(table, rid, record), SCORE_COLUMN: score})
+            totals["results"] += len(rows)
+        yield from rows
+
+    def _vector_scan(self, plan, binding, physical, stats):
+        """Busca los k vecinos bajo el latch de la tabla y los entrega de mayor a menor similitud."""
+        table, index = plan.get("table"), physical.index.index
+        search, k, _ = physical.value
+        totals = stats.vector.setdefault(id(plan), dict(searches=0, compared=0, results=0))
+        # La extracción del archivo de consulta (SIFT o MFCC) no necesita el latch.
+        try:
+            query = binding.storage.schema.query_vector(search.column.name, search.path)
+        except ValueError as exc:
+            raise SQLExecutionError(str(exc)) from None
+        with binding.latch:
+            if not physical.index.valid:
+                raise SQLExecutionError(f"El índice {physical.index.name} no está disponible")
+            stats.index_probes += 1
+            try:
+                found = index.knn(query, k)
+            except ValueError as exc:
+                raise SQLExecutionError(f"SIMILAR_TO('{search.path}'): {exc}") from None
+            totals["searches"] += 1
+            totals["compared"] += found.compared
+            rows = []
+            for rid, score in found.matches:
+                record = binding.storage.get(rid)
+                if record is not None:
+                    rows.append({**_context(table, rid, record), SIMILARITY_COLUMN: score})
             totals["results"] += len(rows)
         yield from rows
 

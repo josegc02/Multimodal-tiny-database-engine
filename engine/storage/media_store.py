@@ -102,6 +102,20 @@ class MediaStore:
         """Ruta guardada en esa entrada (el valor que ve SQL)."""
         return self._entry(offset, length)[0]
 
+    def query_vector(self, kind: str, path: str) -> np.ndarray:
+        """Vector de un archivo de consulta, con el mismo extractor de la columna.
+
+        No guarda nada: si la ruta ya estaba insertada, reutiliza su vector.
+        """
+        with self._latch:
+            reference = self._known.get((kind, path))
+        if reference is not None:
+            return self._entry(*reference)[1]
+        try:
+            return np.asarray(self._extract(kind, path), dtype=np.float64)
+        except Exception as exc:
+            raise ValueError(f"No se pudo extraer el vector de la consulta {path!r} ({kind.upper()}): {exc}") from exc
+
     def vector(self, kind: str, path: str) -> np.ndarray:
         """Vector de un valor ya insertado."""
         with self._latch:

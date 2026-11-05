@@ -96,6 +96,10 @@ class Schema:
         """Vector extraído al insertar la ruta `path` en la columna multimedia `name`."""
         return self.media_stores[name].vector(self.types[self.fields.index(name)], path)
 
+    def query_vector(self, name: str, path: str):
+        """Vector del archivo de consulta `path` para la columna multimedia `name`."""
+        return self.media_stores[name].query_vector(self.types[self.fields.index(name)], path)
+
     def deserialize(self, data: bytes) -> Dict[str, Any]:
         raw_values = struct.unpack(self.struct_format, data)
         record = {}

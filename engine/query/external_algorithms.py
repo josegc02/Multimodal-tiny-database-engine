@@ -75,6 +75,7 @@ class ExecutionStats:
     profile: dict | None = None
     spatial: dict = field(default_factory=dict)  # id(Scan) -> contadores de consultas espaciales
     text: dict = field(default_factory=dict)  # id(Scan) -> contadores de búsquedas de texto
+    vector: dict = field(default_factory=dict)  # id(Scan) -> contadores de búsquedas por similitud
 
 
 @dataclass(frozen=True)
