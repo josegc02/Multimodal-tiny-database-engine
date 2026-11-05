@@ -916,3 +916,43 @@ usa tablas temporales de sesión y no se está midiendo durabilidad con WAL,
 concurrencia ni rendimiento de producción. Un siguiente experimento debería
 usar un corpus real con juicios humanos, más repeticiones y consultas de
 selectividad variada antes de extrapolar estos resultados.
+
+## Búsqueda multimedia (Parte 4)
+
+### 10. Extensión SQL multimedia
+
+**Tipos `IMAGE` y `AUDIO`.** Una columna multimedia guarda la ruta del archivo y su vector. Igual que `TEXT`, el valor vive en un archivo aparte, `<tabla>.media`, y el registro solo conserva la posición y el largo de su entrada en 12 bytes. Cada entrada tiene el tipo, la ruta en UTF-8 y el vector en `float32`. El vector se extrae una sola vez, al insertar, con `ExtractFeatures` (`engine/features/registry.py`): el promedio de los descriptores SIFT (128 dimensiones) para `IMAGE` y el de los coeficientes MFCC (13 dimensiones) para `AUDIO`, los mismos vectores de la comparación experimental. Si el archivo no existe o no se puede procesar, el `INSERT` falla sin escribir nada. Para usar otro pipeline, como Bag of Visual Words, basta con registrar otra función en ese módulo. `IMAGE` y `AUDIO` no pueden ser clave primaria, clave de orden físico ni llave foránea, y solo admiten índices HNSW o IVF.
+
+**Índices.** `CREATE INDEX i ON t (col) USING HNSW | IVF [WITH (METRIC = euclidean | cosine | dot)]` crea el índice; la métrica por defecto es la euclidiana. `VectorIndex` adapta `HNSWIndex` e `IVFIndex` al contrato del catálogo: asigna un identificador entero a cada RID, toma los vectores del `<tabla>.media` y se mantiene con cada inserción, eliminación y `ROLLBACK`. HNSW usa `M = 8`, `ef_construction = 50` y `ef_search = 50`. Como HNSW no permite borrar nodos, un borrado deja una marca, la búsqueda pide más vecinos para compensarla y el grafo se reconstruye cuando las marcas superan a los nodos vivos. IVF busca de forma exacta hasta tener 16 vectores; después entrena con `nlist ≈ √N` y `nprobe ≈ √nlist`, y vuelve a entrenar cada vez que la tabla duplica el tamaño del último entrenamiento. Si las listas revisadas no reúnen `k` vectores, revisa más listas, de modo que `k=N` siempre devuelve `min(N, filas)` resultados. Con el coseno, una fila cuyo vector es nulo no se indexa, porque la similitud no está definida. Ambos índices viven en memoria y se reconstruyen desde la tabla al registrarse; al cerrar se guardan en disco.
+
+**Consultas.** Los ejemplos del enunciado se ejecutan tal cual:
+
+```sql
+SELECT * FROM imagenes
+    WHERE SIMILAR_TO('foto_consulta.jpg', k=10)
+    USING HNSW WITH METRIC=cosine;
+
+SELECT nombre, artista, SIMILARITY_SCORE() as score
+    FROM canciones
+    WHERE SIMILAR_TO('audio_query.mp3', k=5)
+    USING IVF WITH METRIC=euclidean
+    ORDER BY score DESC;
+```
+
+`SIMILAR_TO` no nombra la columna: usa la única columna de la tabla con un índice del método pedido. Si hay varias, se indica como primer argumento, `SIMILAR_TO(foto, 'q.jpg', k=10)`. `WITH METRIC` es opcional y, si aparece, debe coincidir con la métrica del índice, porque el grafo de HNSW y los centroides de IVF dependen de ella. El vector de la consulta se extrae con el mismo extractor de la columna; si el archivo ya estaba insertado, se reutiliza su vector.
+
+`SIMILARITY_SCORE()` siempre crece con la similitud, para que `ORDER BY score DESC` signifique lo mismo con cualquier métrica, como en el segundo ejemplo: el coseno y el producto punto se devuelven tal cual y la distancia euclidiana `d` como `1 / (1 + d)`. El planificador separa `SIMILAR_TO` del `WHERE` y lo pasa al recorrido de la tabla, que entrega los `k` vecinos de mayor a menor similitud. Por eso `ORDER BY SIMILARITY_SCORE() DESC` no agrega un `Sort`. Las demás condiciones del `WHERE` filtran esos `k` vecinos, así que pueden quedar menos de `k` filas. Un `LIMIT` menor que `k` reduce la búsqueda solo si recortar no puede perder resultados.
+
+**Restricciones.** `SIMILAR_TO` solo se admite una vez, en el `WHERE` de un `SELECT` sobre una tabla y unido con `AND`, y no se combina con `MATCH`. `SIMILARITY_SCORE()` requiere ese `SIMILAR_TO` y no se admite con agregación. Ninguno de los nombres nuevos (`IMAGE`, `AUDIO`, `HNSW`, `IVF`, `METRIC`, `SIMILAR_TO`, `SIMILARITY_SCORE`, `K`) es palabra reservada.
+
+**Plan de ejecución.** `EXPLAIN` muestra un nodo `Vector Search` con el índice y sus parámetros, la métrica, `k` y la fórmula de `SIMILARITY_SCORE()`, sin extraer el vector ni buscar. `EXPLAIN ANALYZE` agrega los nodos visitados (HNSW) o los vectores comparados (IVF):
+
+```text
+Vector Search using imagenes_foto on imagenes  (cost=4.00..4.00 rows=2) (actual time=0.976..0.993 rows=2 loops=1)
+  Vector Cond: similar_to(foto, 'bb.jpg', k=2)
+  Index: HNSW (M: 8; ef_construction: 50; ef_search: 50); Metric: cosine
+  Score: cosine similarity; Top-k before WHERE
+  Nodes Visited: 3; Neighbors Returned: 2
+```
+
+**Simplificaciones.** Una misma ruta reutiliza su vector, también tras reabrir la tabla, porque se asume que los archivos no cambian después de insertarse. Eliminar una fila no libera su entrada en `<tabla>.media`. Las rutas relativas se resuelven desde el directorio en que se ejecuta el motor.

@@ -49,8 +49,16 @@ def _es_flotante(valor):
         return False
 
 
+EXTENSIONES_IMAGEN = (".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".webp")
+EXTENSIONES_AUDIO = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
+
+
 def _tipo(valores):
     valores = [v.strip() for v in valores if v.strip() != ""]
+    # Una columna de rutas a imágenes o audios se carga como IMAGE / AUDIO (el motor extrae el vector).
+    for tipo, extensiones in (("IMAGE", EXTENSIONES_IMAGEN), ("AUDIO", EXTENSIONES_AUDIO)):
+        if valores and all(v.lower().endswith(extensiones) for v in valores):
+            return tipo
     if valores and all(_es_entero(v) for v in valores):
         return "INT"
     if valores and all(_es_flotante(v) for v in valores):
