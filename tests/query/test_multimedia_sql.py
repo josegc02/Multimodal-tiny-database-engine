@@ -398,5 +398,57 @@ class TestEveryIndexAndStorage(MediaRowsTestCase):
                         self.reset()
 
 
+class TestExplain(MediaRowsTestCase):
+    def plan(self, sql):
+        return "\n".join(self.execute(sql).plan)
+
+    def test_explain_shows_index_metric_and_k(self):
+        self.create("HNSW", "cosine")
+        plan = self.plan(f"EXPLAIN SELECT * FROM imagenes WHERE {self.SIMILAR.format(k=3)}")
+        self.assertIn("Vector Search using imagenes_foto on imagenes", plan)
+        self.assertIn("Vector Cond: similar_to(foto, 'img/consulta.jpg', k=3)", plan)
+        self.assertIn("Index: HNSW (M: 8; ef_construction: 50; ef_search: 50); Metric: cosine", plan)
+        self.assertIn("Score: cosine similarity", plan)
+        self.assertIn("rows=3", self.execute(f"EXPLAIN SELECT * FROM imagenes WHERE {self.SIMILAR.format(k=3)}").plan[0])
+
+    def test_explain_does_not_search(self):
+        self.create("HNSW", "cosine")
+        index = self.motor.catalog.table("imagenes").indexes["foto"].index
+        index.reset_stats()
+        self.plan(f"EXPLAIN SELECT * FROM imagenes WHERE {self.SIMILAR.format(k=3)}")
+        self.assertEqual(index.stats.searches, 0)
+
+    def test_explain_limit_reduces_k_and_rows(self):
+        self.create("HNSW", "cosine")
+        plan = self.execute(f"EXPLAIN SELECT * FROM imagenes WHERE {self.SIMILAR.format(k=5)} LIMIT 2").plan
+        self.assertIn("k=2", "\n".join(plan))
+
+    def test_analyze_reports_the_nodes_visited_by_hnsw(self):
+        self.create("HNSW", "euclidean")
+        index = self.motor.catalog.table("imagenes").indexes["foto"].index
+        index.reset_stats()
+        plan = self.plan(f"EXPLAIN ANALYZE SELECT id FROM imagenes WHERE {self.SIMILAR.format(k=3)}")
+        self.assertIn(f"Nodes Visited: {index.stats.vectors_compared}; Neighbors Returned: 3", plan)
+        self.assertGreater(index.stats.vectors_compared, 0)
+        self.assertIn("Score: 1 / (1 + euclidean distance)", plan)
+
+    def test_analyze_reports_the_vectors_compared_by_ivf(self):
+        self.create("IVF", "dot")
+        plan = self.plan("EXPLAIN ANALYZE SELECT id FROM imagenes "
+                         "WHERE SIMILAR_TO('img/consulta.jpg', k=2) USING IVF WITH METRIC=dot")
+        self.assertIn("Index: IVF (nlist: -; exact search until 16 vectors); Metric: dot", plan)
+        self.assertIn("Vectors Compared: 6; Neighbors Returned: 2", plan)
+
+    def test_explain_shows_score_in_sort_and_filter(self):
+        self.create()
+        plan = self.plan(f"EXPLAIN SELECT id FROM imagenes WHERE {self.SIMILAR.format(k=3)} "
+                         "AND SIMILARITY_SCORE() > 0.5 ORDER BY SIMILARITY_SCORE()")
+        self.assertIn("Sort Key: similarity_score()", plan)
+        self.assertIn("Filter: (similarity_score() > 0.5)", plan)
+        plan = self.plan(f"EXPLAIN SELECT id FROM imagenes WHERE {self.SIMILAR.format(k=3)} "
+                         "ORDER BY SIMILARITY_SCORE() DESC")
+        self.assertNotIn("Sort", plan)
+
+
 if __name__ == "__main__":
     unittest.main()

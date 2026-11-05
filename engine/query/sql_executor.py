@@ -182,7 +182,7 @@ class SQLExecutor:
         """Busca los k vecinos bajo el latch de la tabla y los entrega de mayor a menor similitud."""
         table, index = plan.get("table"), physical.index.index
         search, k, _ = physical.value
-        totals = stats.vector.setdefault(id(plan), dict(searches=0, compared=0, results=0))
+        totals = stats.vector.setdefault(id(plan), dict(method=index.method, searches=0, compared=0, results=0))
         # La extracción del archivo de consulta (SIFT o MFCC) no necesita el latch.
         try:
             query = binding.storage.schema.query_vector(search.column.name, search.path)
