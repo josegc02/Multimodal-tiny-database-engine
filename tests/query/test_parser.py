@@ -6,7 +6,7 @@ from engine.query import Parser, SQLLexError, SQLParseError, parse, parse_script
 from engine.query.ast import (
     AggregateCall, Between, BinaryOp, ColumnDefinition, ColumnRef,
     CreateIndexStatement, CreateTableStatement, DeleteStatement, InList,
-    InsertStatement, IsNull, Literal, MatchCall, ScoreCall, SelectItem, SelectStatement, Star,
+    InsertStatement, IsNull, Literal, MatchCall, ScoreCall, SelectItem, SimilarCall, SimilarityScoreCall, SelectStatement, Star,
     TableRef, TransactionStatement, UnaryOp,
 )
 
@@ -159,6 +159,47 @@ class TestMutationAndScriptParser(unittest.TestCase):
         statement = parse("SELECT match, score, tf_idf FROM t WHERE score > 1")
         self.assertEqual([item.expression for item in statement.columns],
                          [ColumnRef("match"), ColumnRef("score"), ColumnRef("tf_idf")])
+
+    def test_similar_to_examples_of_the_project_statement(self):
+        images = parse("SELECT * FROM imagenes WHERE SIMILAR_TO('foto_consulta.jpg', k=10) "
+                       "USING HNSW WITH METRIC=cosine;")
+        self.assertEqual(images.where, SimilarCall("foto_consulta.jpg", 10, "hnsw", "cosine"))
+        songs = parse("SELECT nombre, artista, SIMILARITY_SCORE() as score FROM canciones "
+                      "WHERE SIMILAR_TO('audio_query.mp3', k=5) USING IVF WITH METRIC=euclidean "
+                      "ORDER BY score DESC")
+        self.assertEqual(songs.columns[2], SelectItem(SimilarityScoreCall(), "score"))
+        self.assertEqual(songs.where, SimilarCall("audio_query.mp3", 5, "ivf", "euclidean"))
+        self.assertEqual(songs.order_by[0].direction, "DESC")
+
+    def test_similar_to_with_column_and_default_metric(self):
+        statement = parse("SELECT * FROM t AS a WHERE a.id > 1 AND SIMILAR_TO(a.foto, 'q.png', K = 3) USING ivf")
+        self.assertEqual(statement.where.right, SimilarCall("q.png", 3, "ivf", None, ColumnRef("foto", "a")))
+        for metric, expected in (("dot", "dot"), ("'COSINE'", "cosine"), ("dot_product", "dot")):
+            with self.subTest(metric=metric):
+                sql = f"SELECT * FROM t WHERE SIMILAR_TO('q', k=1) USING HNSW WITH METRIC = {metric}"
+                self.assertEqual(parse(sql).where.metric, expected)
+
+    def test_similar_to_names_are_not_reserved_words(self):
+        statement = parse("SELECT similar_to, similarity_score, k, hnsw, metric FROM t")
+        self.assertEqual([item.expression for item in statement.columns],
+                         [ColumnRef(name) for name in ("similar_to", "similarity_score", "k", "hnsw", "metric")])
+
+    def test_similar_to_rejects_invalid_calls(self):
+        for sql in ("SELECT * FROM t WHERE SIMILAR_TO('q', k=10)",
+                    "SELECT * FROM t WHERE SIMILAR_TO('q', k=10) USING BM25",
+                    "SELECT * FROM t WHERE SIMILAR_TO('q', k=10) USING BTREE",
+                    "SELECT * FROM t WHERE SIMILAR_TO('q') USING HNSW",
+                    "SELECT * FROM t WHERE SIMILAR_TO('q', 10) USING HNSW",
+                    "SELECT * FROM t WHERE SIMILAR_TO('q', n=10) USING HNSW",
+                    "SELECT * FROM t WHERE SIMILAR_TO('q', k=0) USING HNSW",
+                    "SELECT * FROM t WHERE SIMILAR_TO('q', k=2.5) USING HNSW",
+                    "SELECT * FROM t WHERE SIMILAR_TO(1, k=2) USING HNSW",
+                    "SELECT * FROM t WHERE SIMILAR_TO(foto, k=2) USING HNSW",
+                    "SELECT * FROM t WHERE SIMILAR_TO('q', k=2) USING HNSW WITH METRIC=manhattan",
+                    "SELECT * FROM t WHERE SIMILAR_TO('q', k=2) USING HNSW WITH LANGUAGE='es'",
+                    "SELECT SIMILARITY_SCORE(1) FROM t"):
+            with self.subTest(sql=sql), self.assertRaises(SQLParseError):
+                parse(sql)
 
     def test_match_rejects_invalid_calls(self):
         for sql in ("SELECT * FROM t WHERE MATCH(a, 'x')",

@@ -10,7 +10,8 @@ from dataclasses import fields, replace
 from engine.query.ast import (
     AggregateCall, Between, BinaryOp, ColumnDefinition, ColumnRef, CopyStatement,
     CreateIndexStatement, CreateTableStatement, DeleteStatement, ExplainStatement, ForeignKeyDefinition, InList,
-    InsertStatement, IsNull, Join, Literal, MatchCall, OrderByItem, ScoreCall, SelectItem,
+    InsertStatement, IsNull, Join, Literal, MatchCall, OrderByItem, ScoreCall, SelectItem, SimilarCall,
+    SimilarityScoreCall,
     SelectStatement, SpatialCall, Star, Statement, TableRef, TransactionStatement, UnaryOp, Node,
 )
 from engine.query.errors import SQLParseError
@@ -528,12 +529,45 @@ class Parser:
         self._advance()
         return MatchCall(column, query, token.value)
 
-    # Lee SCORE().
-    def _score_call(self):
+    # Lee SCORE() o SIMILARITY_SCORE().
+    def _score_call(self, kind=ScoreCall):
         self._advance()
         self._expect("(")
         self._expect(")")
-        return ScoreCall()
+        return kind()
+
+    # Lee SIMILAR_TO([columna,] 'archivo', k=N) USING HNSW | IVF [WITH METRIC=métrica].
+    def _similar_call(self):
+        self._advance()
+        self._expect("(")
+        with self._nested():
+            column = None
+            if self._peek().kind == "IDENTIFIER":
+                name = self._identifier()
+                column = ColumnRef(self._identifier(), name) if self._match(".") else ColumnRef(name)
+                self._expect(",")
+            path = self._expect("STRING").value
+            self._expect(",")
+            if self._peek().kind != "IDENTIFIER" or self._peek().value != "k":
+                self._error("SIMILAR_TO requiere k=N")
+            self._advance()
+            self._expect("=")
+            k = self._expect("INTEGER").value
+            if k < 1:
+                self._error("k debe ser un entero positivo")
+            self._expect(")")
+        token = self._peek(1)
+        if not self._match("USING") or token.kind != "IDENTIFIER" or token.value not in VECTOR_METHODS:
+            self._error("SIMILAR_TO requiere USING HNSW o USING IVF")
+        self._advance()
+        metric = None
+        if self._match("WITH"):
+            if self._peek().kind != "IDENTIFIER" or self._peek().value != "metric":
+                self._error("Se esperaba METRIC")
+            self._advance()
+            self._expect("=")
+            metric = self._vector_metric()
+        return SimilarCall(path, k, token.value, metric, column)
 
     def _delete(self):
         self._expect("FROM")
@@ -623,12 +657,17 @@ class Parser:
             return self._literal()
         if self._peek().kind in AGGREGATES:
             return self._aggregate()
-        # MATCH y SCORE solo son funciones antes de "(": siguen siendo nombres de columna válidos.
+        # MATCH, SCORE, SIMILAR_TO y SIMILARITY_SCORE solo son funciones antes de "(":
+        # siguen siendo nombres de columna válidos.
         if self._peek().kind == "IDENTIFIER" and self._peek(1).kind == "(":
             if self._peek().value == "match":
                 return self._match_call()
             if self._peek().value == "score":
                 return self._score_call()
+            if self._peek().value == "similar_to":
+                return self._similar_call()
+            if self._peek().value == "similarity_score":
+                return self._score_call(SimilarityScoreCall)
         if self._peek().kind == "IDENTIFIER":
             first = self._identifier()
             if self._match("."):

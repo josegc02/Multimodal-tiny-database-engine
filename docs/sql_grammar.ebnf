@@ -68,7 +68,7 @@ comparison = "=" | "!=" | "<>" | "<" | "<=" | ">" | ">=" ;
 additive = multiplicative, {("+" | "-"), multiplicative} ;
 multiplicative = unary, {("*" | "/" | "%"), unary} ;
 unary = {"+" | "-"}, primary ;
-primary = literal | column_ref | aggregate | spatial_call | text_call | "(", expression, ")" ;
+primary = literal | column_ref | aggregate | spatial_call | text_call | similar_call | "(", expression, ")" ;
 literal = number | string | "NULL" | "TRUE" | "FALSE" | point | polygon ;
 point = "POINT", coordinate_pair ;
 coordinate_pair = "(", ["+" | "-"], number, ",", ["+" | "-"], number, ")" ;
@@ -77,6 +77,9 @@ vertex = ["POINT"], coordinate_pair ;
 metric = "HAVERSINE" | "EUCLIDEAN" ;
 text_call = "MATCH", "(", column_ref, ",", string, ")", "USING", ("TF_IDF" | "BM25")
           | "SCORE", "(", ")" ;
+similar_call = "SIMILAR_TO", "(", [column_ref, ","], string, ",", "K", "=", integer, ")",
+               "USING", ("HNSW" | "IVF"), ["WITH", "METRIC", "=", vector_metric]
+             | "SIMILARITY_SCORE", "(", ")" ;
 spatial_call = "DISTANCIA", "(", expression, ",", expression, [",", (metric | string)], ")"
              | "WITHIN", "(", expression, ",", expression, ")" ;
 column_ref = identifier, [".", identifier] ;
@@ -106,7 +109,7 @@ aggregate_name = "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" ;
      explícito prevalece sobre USING. Ambas métricas devuelven metros.
    - POLYGON es un literal de anillo simple; WITHIN incluye el borde.
    - TEXT, SPIMI, LANGUAGE, MATCH, SCORE, TF_IDF y BM25 no son palabras reservadas.
-   - IMAGE, AUDIO, HNSW, IVF, METRIC, COSINE y DOT tampoco. LANGUAGE solo aplica
+   - IMAGE, AUDIO, HNSW, IVF, METRIC, COSINE, DOT, SIMILAR_TO, SIMILARITY_SCORE y K tampoco. LANGUAGE solo aplica
      a SPIMI y METRIC solo a HNSW e IVF (por defecto euclidean).
    - El anidamiento de paréntesis/llamadas se limita a 64 niveles por defecto.
    - single_statement no acepta SQL sobrante y script no acepta sentencias vacías.

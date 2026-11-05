@@ -58,6 +58,20 @@ class ScoreCall(Expression):
 
 
 @dataclass(frozen=True)
+class SimilarCall(Expression):
+    path: str              # archivo de consulta
+    k: int
+    method: str            # "hnsw" o "ivf"
+    metric: str | None     # "euclidean", "cosine", "dot"; None = la del índice
+    column: ColumnRef | None = None  # None = la única columna multimedia con ese índice
+
+
+@dataclass(frozen=True)
+class SimilarityScoreCall(Expression):
+    pass
+
+
+@dataclass(frozen=True)
 class Star(Expression):
     table: str | None = None
 
