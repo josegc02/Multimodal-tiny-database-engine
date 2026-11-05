@@ -60,5 +60,14 @@ class TestLongTextColumns(unittest.TestCase):
         self.assertEqual(csv_sql._tipo(["corto", "x" * 256]), "TEXT")
 
 
+
+class TestMediaColumns(unittest.TestCase):
+    def test_paths_to_images_and_audios_become_media_columns(self):
+        self.assertEqual(csv_sql._tipo(["fotos/a.JPG", "b.png", ""]), "IMAGE")
+        self.assertEqual(csv_sql._tipo(["canciones/a.wav", "b.mp3"]), "AUDIO")
+        self.assertEqual(csv_sql._tipo(["a.jpg", "b.wav"]), "VARCHAR(10)")
+        self.assertEqual(csv_sql._tipo(["nota.txt"]), "VARCHAR(10)")
+
+
 if __name__ == "__main__":
     unittest.main()

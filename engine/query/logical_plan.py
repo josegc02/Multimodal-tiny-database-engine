@@ -12,6 +12,8 @@ from engine.spatial.geometry import Point, Polygon
 
 
 SCORE_COLUMN = "$score"  # campo interno de cada fila con el valor de SCORE()
+SIMILARITY_COLUMN = "$similarity"  # campo interno con el valor de SIMILARITY_SCORE()
+SIMILAR_TO_PLACEMENT = "SIMILAR_TO solo se admite una vez en el WHERE de un SELECT sobre una tabla, unido con AND"
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,8 @@ def output_name(expression):
         return f"{expression.function.lower()}({', '.join(output_name(a) for a in expression.arguments)})"
     if isinstance(expression, ast.ScoreCall):
         return "score()"
+    if isinstance(expression, ast.SimilarityScoreCall):
+        return "similarity_score()"
     return repr(expression)
 
 
@@ -113,7 +117,7 @@ def normalize_insert(binding, columns, rows):
             value = record[name]
             if (kind == "int" and type(value) is not int
                     or kind == "float" and type(value) not in (int, float)
-                    or kind in ("str", "text") and type(value) is not str
+                    or kind in ("str", "text", "image", "audio") and type(value) is not str
                     or kind == "point" and not isinstance(value, Point)):
                 raise SQLSemanticError(f"Tipo inválido para {name!r}: se requiere {kind}; storage no admite NULL")
             if type(value) is float and not math.isfinite(value):
@@ -161,6 +165,8 @@ class LogicalPlanner:
             raise SQLSemanticError("Comodín fuera de la proyección")
         if isinstance(expression, ast.MatchCall):
             raise SQLSemanticError("MATCH solo se admite una vez en el WHERE de un SELECT sobre una tabla, unido con AND")
+        if isinstance(expression, ast.SimilarCall):
+            raise SQLSemanticError(SIMILAR_TO_PLACEMENT)
         if isinstance(expression, ast.SpatialCall):
             if expression.function not in ("DISTANCIA", "WITHIN") or len(expression.arguments) != 2:
                 raise SQLSemanticError("Función espacial inválida")
@@ -192,6 +198,8 @@ class LogicalPlanner:
             predicate = self._bind(statement.where, scope) if statement.where is not None else None
             if predicate is not None and uses(predicate, ast.ScoreCall):
                 raise SQLSemanticError("SCORE() requiere un MATCH en un SELECT")
+            if predicate is not None and uses(predicate, ast.SimilarityScoreCall):
+                raise SQLSemanticError("SIMILARITY_SCORE() requiere un SIMILAR_TO en un SELECT")
             source = node("Scan", table=statement.table, predicate=predicate)
             if predicate is not None:
                 source = node("Filter", source, predicate=predicate)
@@ -204,6 +212,9 @@ class LogicalPlanner:
         tables = (statement.from_table,) + tuple(join.table for join in statement.joins)
         scope = self._scope(tables)
         match, where = self._split_match(statement, scope)
+        similar, where = self._split_similar(statement, where, scope)
+        if match is not None and similar is not None:
+            raise SQLSemanticError("MATCH y SIMILAR_TO no se pueden combinar en la misma consulta")
         where = self._bind(where, scope) if where is not None else None
         plan = node("Scan", table=statement.from_table, predicate=where if not statement.joins else None)
         joined_scope = self._scope((statement.from_table,))
@@ -282,6 +293,22 @@ class LogicalPlanner:
                     and (ranked or not order_by)):
                 top_k = statement.limit + (statement.offset or 0)
             plan = annotate_scan(plan, text_match=match, text_k=top_k)
+        if any(uses(expr, ast.SimilarityScoreCall) for expr in scored):
+            if similar is None:
+                raise SQLSemanticError("SIMILARITY_SCORE() requiere un SIMILAR_TO en el WHERE")
+            if grouping:
+                raise SQLSemanticError("SIMILARITY_SCORE() no se admite con agregación")
+        if similar is not None:
+            # El recorrido vectorial entrega los k vecinos de mayor a menor similitud.
+            ranked = (not statement.distinct and len(order_by) == 1
+                      and isinstance(order_by[0].expression, ast.SimilarityScoreCall)
+                      and order_by[0].direction == "DESC")
+            # Un LIMIT menor que k recorta la búsqueda solo si no puede perder filas válidas.
+            vector_k = similar.k
+            if (statement.limit is not None and where is None and not statement.distinct and not grouping
+                    and (ranked or not order_by)):
+                vector_k = min(vector_k, statement.limit + (statement.offset or 0))
+            plan = annotate_scan(plan, vector_search=similar, vector_k=vector_k)
         if group_by or aggregates or having is not None:
             def grouped(expr):
                 if expr in group_by:
@@ -351,6 +378,53 @@ class LogicalPlanner:
         rest = [term for term in terms if term is not matches[0]]
         where = reduce(lambda left, right: ast.BinaryOp("AND", left, right), rest) if rest else None
         return replace(matches[0], column=column), where
+
+    def _split_similar(self, statement, where, scope):
+        """Separa el SIMILAR_TO del WHERE y lo enlaza con su columna, índice y métrica.
+
+        Las demás condiciones filtran los k vecinos que devuelve el índice.
+        """
+        terms = []
+        pending = [where] if where is not None else []
+        while pending:
+            term = pending.pop()
+            if isinstance(term, ast.BinaryOp) and term.operator == "AND":
+                pending += [term.right, term.left]
+            else:
+                terms.append(term)
+        calls = [term for term in terms if isinstance(term, ast.SimilarCall)]
+        if not calls:
+            return None, where
+        if len(calls) > 1 or statement.joins:
+            raise SQLSemanticError(SIMILAR_TO_PLACEMENT)
+        call = calls[0]
+        table = statement.from_table.name
+        indexes = self.catalog.table(table).indexes
+        method = call.method.upper()
+        if call.column is not None:
+            column = self._bind(call.column, scope)
+            if scope[column.table][column.name] not in ("image", "audio"):
+                raise SQLSemanticError(f"SIMILAR_TO requiere una columna IMAGE o AUDIO: {column.name}")
+            registered = indexes.get(column.name)
+            if registered is None or not registered.metadata.vector or registered.index.method != call.method:
+                raise SQLSemanticError(f"SIMILAR_TO USING {method} requiere un índice {method} sobre {column.name}")
+        else:
+            candidates = [name for name, registered in indexes.items()
+                          if registered.metadata.vector and registered.index.method == call.method]
+            if len(candidates) != 1:
+                reason = "no tiene" if not candidates else "tiene más de una columna con"
+                raise SQLSemanticError(f"La tabla {table} {reason} un índice {method}; "
+                                       "indica la columna: SIMILAR_TO(columna, 'archivo', k=N)")
+            column = ast.ColumnRef(candidates[0], statement.from_table.alias or table)
+            registered = indexes[column.name]
+        metric = registered.index.metric
+        if call.metric is not None and call.metric != metric:
+            raise SQLSemanticError(
+                f"El índice {registered.metadata.name} usa METRIC={metric}; "
+                f"crea otro con USING {method} WITH (METRIC = {call.metric}) para usar {call.metric}")
+        rest = [term for term in terms if term is not call]
+        where = reduce(lambda left, right: ast.BinaryOp("AND", left, right), rest) if rest else None
+        return replace(call, column=column, metric=metric), where
 
     def _join_pairs(self, expression, right):
         if isinstance(expression, ast.BinaryOp) and expression.operator == "AND":

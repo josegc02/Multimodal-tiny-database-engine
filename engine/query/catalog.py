@@ -93,9 +93,10 @@ class TableBinding:
                 f"ya existe la llave ({self.primary_key})=({value})")
 
     def _equality_index(self, column):
-        """Índice vigente que resuelve `column == valor`; los de texto buscan términos."""
+        """Índice vigente que resuelve `column == valor`; los de texto y los vectoriales no."""
         registered = self.indexes.get(column)
-        if registered is None or not registered.valid or getattr(registered.metadata, "text", False):
+        if (registered is None or not registered.valid or getattr(registered.metadata, "text", False)
+                or getattr(registered.metadata, "vector", False)):
             return None
         return registered
 

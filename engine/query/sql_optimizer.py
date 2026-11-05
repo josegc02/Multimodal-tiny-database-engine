@@ -181,6 +181,17 @@ class SQLOptimizer:
                                 "Índice invertido: solo lee los documentos con términos de la consulta.",
                                 index=index, field=index.field, value=(match.query, match.ranking, top_k, rows))
 
+    def _vector_choice(self, plan, binding, indexes):
+        search = plan.get("vector_search")
+        index = next(index for index in indexes if index.vector and index.field == search.column.name)
+        k = plan.get("vector_k")
+        rows = min(k, index.index.size)
+        # El costo de la búsqueda depende del índice (nodos o listas que visita); se
+        # estima como una lectura por vecino entregado más la del registro.
+        return self.costs._plan("vector", "vector_scan", 2 * rows,
+                                "Índice vectorial: solo lee los k vecinos más similares.",
+                                index=index, field=index.field, value=(search, k, rows))
+
     def choice(self, plan):
         if plan.operation == "Scan":
             table = plan.get("table")
@@ -192,6 +203,8 @@ class SQLOptimizer:
             kinds = dict(zip(schema.fields, schema.types))
             if plan.get("text_match") is not None:
                 return self._text_choice(plan, binding, indexes)
+            if plan.get("vector_search") is not None:
+                return self._vector_choice(plan, binding, indexes)
             spatial = self._spatial_choice(plan, binding, qualifier, indexes)
             if spatial is not None:
                 return spatial
@@ -217,8 +230,8 @@ class SQLOptimizer:
         source = plan.children[0]
         scan = base_scan(source)
         binding = self.catalog.table(scan.get("table").name) if scan else None
-        # El recorrido espacial o de texto ya eligió las filas: un índice de orden no puede reemplazarlo.
-        spatial_source = scan is not None and self.choice(scan).algorithm.startswith(("rtree_", "text_"))
+        # El recorrido espacial, de texto o vectorial ya eligió las filas: un índice de orden no puede reemplazarlo.
+        spatial_source = scan is not None and self.choice(scan).algorithm.startswith(("rtree_", "text_", "vector_"))
         if plan.operation == "Sort":
             items = plan.get("order_by")
             simple = scan is not None and not spatial_source and all(isinstance(i.expression, ast.ColumnRef) for i in items)

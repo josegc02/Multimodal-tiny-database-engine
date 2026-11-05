@@ -49,6 +49,7 @@ class PlanNode:
 
 
 RANKINGS = {"tf_idf": "TF-IDF (cosine)", "bm25": "BM25"}
+SIMILARITY = {"euclidean": "1 / (1 + euclidean distance)", "cosine": "cosine similarity", "dot": "dot product"}
 
 
 def sql_text(expression, qualified=False, names=None):
@@ -74,6 +75,8 @@ def sql_text(expression, qualified=False, names=None):
             return "*"
         if isinstance(e, ast.ScoreCall):
             return "score()"
+        if isinstance(e, ast.SimilarityScoreCall):
+            return "similarity_score()"
         if isinstance(e, ast.AggregateCall):
             return f"{e.function.lower()}({'DISTINCT ' if e.distinct else ''}{text(e.argument)})"
         if isinstance(e, ast.SpatialCall):
@@ -266,6 +269,16 @@ class PlanExplainer:
                 details.append(f"Ranking: {RANKINGS[ranking]}; " + (f"Top-k: {top_k}" if top_k is not None else "All matches"))
                 # Calcula todo el ranking antes de entregar la primera fila.
                 startup = cost
+            elif choice.algorithm == "vector_scan":
+                label = f"Vector Search using {choice.index.name} on {self._table_label(table)}"
+                search, k, rows = choice.value
+                index = choice.index.index
+                column = self._text(ast.ColumnRef(choice.field, qualifier))
+                details.append(f"Vector Cond: similar_to({column}, {self._text(ast.Literal(search.path))}, k={k})")
+                details.append(f"Index: {index.method.upper()} ({index.describe()}); Metric: {index.metric}")
+                details.append(f"Score: {SIMILARITY[index.metric]}; Top-k before WHERE")
+                # Extrae el vector y busca los k vecinos antes de entregar la primera fila.
+                startup = cost
             elif choice.algorithm == "index_scan":
                 label = f"Index Scan using {choice.index.name} on {self._table_label(table)}"
                 column = ast.ColumnRef(choice.field, qualifier)
@@ -411,6 +424,11 @@ class PlanExplainer:
                 counters = next((stats.text[key] for key in node.keys if key in stats.text), None)
                 if counters is not None:
                     detail_line(f"Postings Read: {counters['postings_read']}; Index Pages Read: {counters['pages_read']}")
+                counters = next((stats.vector[key] for key in node.keys if key in stats.vector), None)
+                if counters is not None:
+                    # HNSW recorre nodos del grafo; IVF compara los vectores de las listas revisadas.
+                    visited = "Nodes Visited" if counters["method"] == "hnsw" else "Vectors Compared"
+                    detail_line(f"{visited}: {counters['compared']}; Neighbors Returned: {counters['results']}")
             if analyze and node.is_sort and stats is not None and measured is not None:
                 if stats.initial_runs > 0:
                     detail_line(f"Sort Method: external merge  Runs: {stats.initial_runs}  "

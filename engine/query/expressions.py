@@ -5,7 +5,7 @@ import re
 
 from engine.query import ast
 from engine.query.errors import SQLExecutionError
-from engine.query.logical_plan import SCORE_COLUMN, column_key
+from engine.query.logical_plan import SCORE_COLUMN, SIMILARITY_COLUMN, column_key
 from engine.spatial.distance import Metric, distance
 from engine.spatial.geometry import Point, Polygon
 
@@ -42,6 +42,8 @@ def evaluate(expression, row):
 def _evaluate(expression, row):
     if isinstance(expression, ast.ScoreCall):
         return row[SCORE_COLUMN]
+    if isinstance(expression, ast.SimilarityScoreCall):
+        return row[SIMILARITY_COLUMN]
     if isinstance(expression, ast.SpatialCall):
         left, right = (evaluate(arg, row) for arg in expression.arguments)
         if left is None or right is None:

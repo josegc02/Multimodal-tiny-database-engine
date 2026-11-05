@@ -96,6 +96,22 @@ WHERE MATCH(texto, 'índice de búsqueda') USING BM25
 ORDER BY relevancia DESC LIMIT 10;
 ```
 
+### Ejemplo multimedia
+
+```sql
+CREATE TABLE imagenes (id INT PRIMARY KEY, nombre VARCHAR(30), foto IMAGE);
+CREATE INDEX imagenes_foto ON imagenes (foto) USING HNSW WITH (METRIC = cosine);
+-- Al insertar se guarda la ruta y se extrae el vector (SIFT para IMAGE, MFCC para AUDIO)
+INSERT INTO imagenes VALUES (1, 'gato', 'fotos/gato.jpg'), (2, 'perro', 'fotos/perro.jpg');
+SELECT nombre, SIMILARITY_SCORE() AS score FROM imagenes
+WHERE SIMILAR_TO('fotos/consulta.jpg', k=10) USING HNSW WITH METRIC=cosine
+ORDER BY score DESC;
+
+CREATE TABLE canciones (id INT, nombre VARCHAR(30), audio AUDIO);
+CREATE INDEX canciones_audio ON canciones (audio) USING IVF;                 -- METRIC euclidean por defecto
+SELECT * FROM canciones WHERE SIMILAR_TO('audio_query.wav', k=5) USING IVF;
+```
+
 ### Ejemplo espacial
 
 ```sql
@@ -130,10 +146,12 @@ El archivo es `datasets/spatial/generated/cargar_motor_1000.sql`.
 
 | Sentencia | Detalle |
 | :--- | :--- |
-| `CREATE TABLE t (col INT \| FLOAT \| VARCHAR(n) \| POINT, ...) [USING HEAP \| SEQUENTIAL \| BTREE]` | `SEQUENTIAL` y `BTREE` se ordenan por la clave primaria (o la primera columna); `BTREE` es una tabla organizada como B+ agrupado. `POINT` ocupa 16 bytes. |
-| `CREATE INDEX nombre ON t (col) USING HASH \| BTREE \| RTREE` | Hash extensible, B+ no agrupado o R-Tree (solo sobre `POINT`). |
+| `CREATE TABLE t (col INT \| FLOAT \| VARCHAR(n) \| POINT \| TEXT \| IMAGE \| AUDIO, ...) [USING HEAP \| SEQUENTIAL \| BTREE]` | `SEQUENTIAL` y `BTREE` se ordenan por la clave primaria (o la primera columna); `BTREE` es una tabla organizada como B+ agrupado. `POINT` ocupa 16 bytes. `IMAGE` y `AUDIO` guardan la ruta del archivo y su vector. |
+| `CREATE INDEX nombre ON t (col) USING HASH \| BTREE \| RTREE \| SPIMI \| HNSW \| IVF [WITH (...)]` | Hash extensible, B+ no agrupado, R-Tree (solo `POINT`), SPIMI (`TEXT`/`VARCHAR`, `WITH (LANGUAGE = 'en')`) o HNSW/IVF (`IMAGE`/`AUDIO`, `WITH (METRIC = euclidean \| cosine \| dot)`). |
 | `SELECT [DISTINCT] ... FROM t [JOIN t2 ON ...] [WHERE ...] [GROUP BY ... [HAVING ...]] [ORDER BY ... [ASC\|DESC]] [LIMIT n [OFFSET m]] [USING HAVERSINE \| EUCLIDEAN]` | `AND/OR/NOT`, comparaciones, `BETWEEN`, `IN`, `LIKE`, aritmética y `COUNT/SUM/AVG/MIN/MAX` (también con `DISTINCT`). |
 | `distancia(col, POINT(lat, lon) [, 'euclidean'])`, `WITHIN(col, POLYGON((lat, lon), ...))` | Distancia en metros, en `WHERE` (rango) u `ORDER BY ... LIMIT k` (k-NN), y pertenencia a un polígono. |
+| `MATCH(col, 'consulta') USING TF_IDF \| BM25`, `SCORE()` | Búsqueda de texto con un índice SPIMI, en el `WHERE`; `SCORE()` es la relevancia. |
+| `SIMILAR_TO([col,] 'archivo', k=N) USING HNSW \| IVF [WITH METRIC=euclidean \| cosine \| dot]`, `SIMILARITY_SCORE()` | Los k vecinos más similares al archivo, en el `WHERE`. `SIMILARITY_SCORE()` crece con la similitud: coseno, producto punto o `1 / (1 + distancia euclidiana)`. |
 | `INSERT INTO t [(cols)] VALUES (...), (...)` | Valida tipos y columnas de todo el lote antes de escribir. |
 | `DELETE FROM t [WHERE ...]` | Usa índices si conviene. |
 | `BEGIN [TRANSACTION]`, `COMMIT` / `END`, `ROLLBACK` | Fuera de una transacción cada sentencia es *autocommit*. |
@@ -145,7 +163,8 @@ El optimizador elige por costo estimado entre recorrer la tabla y usar un índic
 - **igualdad:** hash o B+;
 - **rangos, `ORDER BY` y `GROUP BY`:** B+;
 - **JOIN:** hash join externo o *index nested loop*;
-- **consultas espaciales:** el R-Tree cuando existe.
+- **consultas espaciales:** el R-Tree cuando existe;
+- **`MATCH` y `SIMILAR_TO`:** siempre su índice SPIMI, HNSW o IVF.
 
 Gramática completa: [`docs/sql_grammar.ebnf`](docs/sql_grammar.ebnf).
 

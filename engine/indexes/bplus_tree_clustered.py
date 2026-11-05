@@ -38,6 +38,8 @@ class BPlusTreeClustered(BPlusTree):
                 raise ValueError(f"String inválido o demasiado largo: {name}")
             if kind == "text" and not isinstance(value, str):
                 raise ValueError(f"Texto inválido: {name}")
+            if kind in ("image", "audio") and not isinstance(value, str):
+                raise ValueError(f"Ruta multimedia inválida: {name}")
         return self.schema.deserialize(self.schema.serialize(payload))
 
     def _unpack_leaf_payload(self, payload):
