@@ -19,6 +19,8 @@ from engine.spatial.geometry import Point, Polygon
 from engine.text.preprocessing import IDIOMAS
 
 AGGREGATES = {"COUNT", "SUM", "AVG", "MIN", "MAX"}
+VECTOR_METHODS = ("hnsw", "ivf")
+VECTOR_METRICS = ("euclidean", "cosine", "dot")
 COMPARISONS = {"=", "!=", "<>", "<", "<=", ">", ">="}
 
 
@@ -292,34 +294,57 @@ class Parser:
         if method is None:
             self._expect("USING")
             method = self._index_method()
-        language = self._index_language() if self._peek().kind == "WITH" else None
-        if language is not None and method != "spimi":
-            self._error("LANGUAGE solo aplica a índices SPIMI")
-        return CreateIndexStatement(name, table, column, method, language)
+        language = metric = None
+        if self._peek().kind == "WITH":
+            if method == "spimi":
+                language = self._index_option("language", self._index_language)
+            elif method in VECTOR_METHODS:
+                metric = self._index_option("metric", self._vector_metric)
+            else:
+                self._error("WITH solo aplica a índices SPIMI (LANGUAGE), HNSW o IVF (METRIC)")
+        return CreateIndexStatement(name, table, column, method, language, metric)
 
     def _index_method(self):
-        # SPIMI no es palabra reservada, igual que TEXT.
-        if self._peek().kind == "IDENTIFIER" and self._peek().value == "spimi":
-            self._advance()
-            return "spimi"
+        # SPIMI, HNSW e IVF no son palabras reservadas, igual que TEXT.
+        if self._peek().kind == "IDENTIFIER" and self._peek().value in ("spimi",) + VECTOR_METHODS:
+            return self._advance().value
         token = self._match("HASH", "BTREE", "RTREE")
         if token is None:
-            self._error("USING requiere HASH, BTREE, RTREE o SPIMI")
+            self._error("USING requiere HASH, BTREE, RTREE, SPIMI, HNSW o IVF")
         return token.kind.lower()
 
-    # Lee WITH (LANGUAGE = 'es') y devuelve el idioma.
-    def _index_language(self):
+    # Lee WITH (<opción> = valor) y devuelve el valor.
+    def _index_option(self, option, parse_value):
         self._expect("WITH")
         self._expect("(")
-        if self._peek().kind != "IDENTIFIER" or self._peek().value != "language":
-            self._error("Se esperaba LANGUAGE")
+        if self._peek().kind != "IDENTIFIER" or self._peek().value != option:
+            self._error(f"Se esperaba {option.upper()}")
         self._advance()
         self._expect("=")
+        value = parse_value()
+        self._expect(")")
+        return value
+
+    def _index_language(self):
         language = self._expect("STRING").value.lower()
         if language not in IDIOMAS:
             self._error("LANGUAGE debe ser 'es' o 'en'")
-        self._expect(")")
         return language
+
+    # Lee la métrica de un índice o consulta vectorial: euclidean, cosine o dot (con o sin comillas).
+    def _vector_metric(self):
+        token = self._peek()
+        if token.kind == "EUCLIDEAN":
+            value = "euclidean"
+        elif token.kind in ("IDENTIFIER", "STRING"):
+            value = token.value.lower()
+        else:
+            value = None
+        value = {"dot_product": "dot"}.get(value, value)
+        if value not in VECTOR_METRICS:
+            self._error("METRIC debe ser euclidean, cosine o dot")
+        self._advance()
+        return value
 
     def _comma_list(self, parse_item):
         result = [parse_item()]

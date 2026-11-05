@@ -68,6 +68,7 @@ class IndexInfo:
     nulls_first_ascending: bool = False
     spatial: bool = False
     text: bool = False
+    vector: bool = False
 
     def __post_init__(self):
         if not self.name or not self.field or not math.isfinite(self.lookup_pages) or self.lookup_pages < 0:
@@ -76,7 +77,9 @@ class IndexInfo:
     @property
     def supports_equality(self) -> bool:
         # search() de un índice de texto busca términos, no el valor exacto de la columna.
-        return self.valid and not self.text and callable(getattr(self.index, "search", None))
+        # Los índices vectoriales responden k-NN; la igualdad sobre la ruta queda para el recorrido.
+        return (self.valid and not self.text and not self.vector
+                and callable(getattr(self.index, "search", None)))
 
     @property
     def supports_order(self) -> bool:

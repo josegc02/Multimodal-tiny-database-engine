@@ -166,6 +166,7 @@ class CreateIndexStatement(Statement):
     column: str
     method: str
     language: str | None = None
+    metric: str | None = None  # solo HNSW e IVF: "euclidean", "cosine" o "dot"
 
 
 @dataclass(frozen=True)

@@ -176,6 +176,19 @@ class TestMutationAndScriptParser(unittest.TestCase):
         self.assertEqual([(c.name, c.type, c.size) for c in statement.columns],
                          [("foto", "image", None), ("sonido", "audio", None), ("image", "int", None)])
 
+    def test_create_index_using_hnsw_and_ivf(self):
+        for sql, expected in (("CREATE INDEX i ON t USING HNSW (a)", ("hnsw", None)),
+                              ("CREATE INDEX i ON t (a) USING ivf", ("ivf", None)),
+                              ("CREATE INDEX i ON t (a) USING HNSW WITH (METRIC = cosine)", ("hnsw", "cosine")),
+                              ("CREATE INDEX i ON t (a) USING IVF WITH (metric = 'EUCLIDEAN')", ("ivf", "euclidean")),
+                              ("CREATE INDEX i ON t (a) USING IVF WITH (METRIC = euclidean)", ("ivf", "euclidean")),
+                              ("CREATE INDEX i ON t (a) USING HNSW WITH (METRIC = dot_product)", ("hnsw", "dot")),
+                              ("CREATE INDEX i ON t (a) USING HNSW WITH (METRIC = dot)", ("hnsw", "dot"))):
+            with self.subTest(sql=sql):
+                statement = parse(sql)
+                self.assertEqual((statement.method, statement.metric), expected)
+                self.assertIsNone(statement.language)
+
     def test_create_index_using_spimi(self):
         for sql in ("CREATE INDEX i ON t USING SPIMI (a)", "CREATE INDEX i ON t (a) USING spimi"):
             with self.subTest(sql=sql):
@@ -204,6 +217,11 @@ class TestMutationAndScriptParser(unittest.TestCase):
             "CREATE INDEX i ON t (a) USING SPIMI WITH (LANGUAGE = 'fr')",
             "CREATE INDEX i ON t (a) USING SPIMI WITH (IDIOMA = 'es')",
             "CREATE INDEX i ON t (a) USING SPIMI WITH (LANGUAGE = 1)",
+            "CREATE INDEX i ON t (a) USING HNSW WITH (METRIC = manhattan)",
+            "CREATE INDEX i ON t (a) USING HNSW WITH (LANGUAGE = 'es')",
+            "CREATE INDEX i ON t (a) USING SPIMI WITH (METRIC = cosine)",
+            "CREATE INDEX i ON t (a) USING BTREE WITH (METRIC = cosine)",
+            "CREATE INDEX i ON t (a) USING IVF WITH (METRIC = 1)",
         ]
         for sql in invalid:
             with self.subTest(sql=sql), self.assertRaises(SQLParseError):

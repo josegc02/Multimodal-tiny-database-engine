@@ -44,6 +44,9 @@ class MultimediaSQLTestCase(unittest.TestCase):
         self.assertFalse(result.tiene_error, result.error)
         return result
 
+    def explain(self, sql):
+        return "\n".join(str(row[0]) for row in self.execute(sql).filas)
+
     def fails(self, sql):
         result = self.motor.ejecutar(sql)
         self.assertTrue(result.tiene_error, f"Se esperaba un error: {sql}")
@@ -110,6 +113,50 @@ class TestMediaColumns(MultimediaSQLTestCase):
         for method in ("HASH", "BTREE", "SPIMI"):
             with self.subTest(method=method):
                 self.fails(f"CREATE INDEX i ON fotos (foto) USING {method}")
+
+
+class TestVectorIndexes(MultimediaSQLTestCase):
+    def setUp(self):
+        super().setUp()
+        self.execute("CREATE TABLE fotos (id INT PRIMARY KEY, nombre VARCHAR(20), foto IMAGE, sonido AUDIO)")
+        self.execute("INSERT INTO fotos VALUES (1, 'gato', 'img/gato.jpg', 'aud/a.wav'), "
+                     "(2, 'perro', 'img/perro.jpg', 'aud/b.wav')")
+
+    def registered(self, column):
+        return self.motor.catalog.table("fotos").indexes[column]
+
+    def test_create_hnsw_and_ivf_indexes(self):
+        self.execute("CREATE INDEX fotos_hnsw ON fotos USING HNSW (foto) WITH (METRIC = cosine)")
+        self.execute("CREATE INDEX sonido_ivf ON fotos (sonido) USING IVF")
+        foto, sonido = self.registered("foto"), self.registered("sonido")
+        self.assertTrue(foto.metadata.vector and foto.valid)
+        self.assertEqual((foto.index.method, foto.index.metric, foto.index.size), ("hnsw", "cosine", 2))
+        self.assertEqual((sonido.index.method, sonido.index.metric), ("ivf", "euclidean"))
+
+    def test_index_follows_inserts_and_deletes(self):
+        self.execute("CREATE INDEX fotos_hnsw ON fotos (foto) USING HNSW")
+        self.execute("INSERT INTO fotos VALUES (3, 'ave', 'img/ave.jpg', 'aud/a.wav')")
+        self.execute("DELETE FROM fotos WHERE id = 1")
+        index = self.registered("foto").index
+        storage = self.motor.catalog.table("fotos").storage
+        found = [storage.get(rid)["id"] for rid, _ in index.knn(VECTORS["img/gato.jpg"], 5).matches]
+        self.assertEqual(sorted(found), [2, 3])
+
+    def test_equality_on_a_media_column_does_not_use_the_vector_index(self):
+        self.execute("CREATE INDEX fotos_ivf ON fotos (foto) USING IVF")
+        self.assertEqual(self.execute("SELECT id FROM fotos WHERE foto = 'img/perro.jpg'").filas, [(2,)])
+        self.assertIn("Seq Scan", self.explain("EXPLAIN SELECT id FROM fotos WHERE foto = 'img/perro.jpg'"))
+
+    def test_vector_indexes_require_media_columns(self):
+        for sql in ("CREATE INDEX i ON fotos USING HNSW (nombre)",
+                    "CREATE INDEX i ON fotos (nombre) USING IVF WITH (METRIC = 'dot')"):
+            with self.subTest(sql=sql):
+                self.assertIn("IMAGE o AUDIO", self.fails(sql))
+
+    def test_close_writes_the_index_file(self):
+        self.execute("CREATE INDEX fotos_hnsw ON fotos (foto) USING HNSW")
+        self.motor.cerrar()
+        self.assertTrue(os.path.exists(os.path.join(self.temp_dir.name, "fotos_fotos_hnsw.hnsw")))
 
 
 if __name__ == "__main__":
