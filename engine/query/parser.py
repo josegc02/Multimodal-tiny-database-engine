@@ -255,14 +255,13 @@ class Parser:
 
     def _column_definition(self):
         name = self._identifier()
-        # TEXT no es palabra reservada: `text` sigue siendo un nombre de columna válido.
-        if self._peek().kind == "IDENTIFIER" and self._peek().value == "text":
-            self._advance()
-            type_name = "text"
+        # TEXT, IMAGE y AUDIO no son palabras reservadas: siguen siendo nombres de columna válidos.
+        if self._peek().kind == "IDENTIFIER" and self._peek().value in ("text", "image", "audio"):
+            type_name = self._advance().value
         else:
             type_token = self._match("INT", "FLOAT", "STR", "VARCHAR", "POINT")
             if type_token is None:
-                self._error("Se esperaba INT, FLOAT, STR, VARCHAR, TEXT o POINT")
+                self._error("Se esperaba INT, FLOAT, STR, VARCHAR, TEXT, IMAGE, AUDIO o POINT")
             type_name = "str" if type_token.kind == "VARCHAR" else type_token.kind.lower()
         size = None
         if self._match("("):

@@ -11,6 +11,7 @@ _TYPE_FORMATS = {
     "float": "d",   # 8 bytes, double
 }
 TEXT_REFERENCE = struct.Struct(">qi")  # posición y largo del texto en su TextStore
+MEDIA_TYPES = ("image", "audio")  # ruta del archivo + vector, en su MediaStore
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class Schema:
         self.types: List[str] = []
         self.sizes: List[int] = []
         self.text_stores: Dict[str, Any] = {}
+        self.media_stores: Dict[str, Any] = {}
         fmt_parts = [">"]
 
         for entry in schema_def:
@@ -48,6 +50,10 @@ class Schema:
                 self.sizes.append(16)
             elif ftype == "text":
                 self.text_stores[name] = entry[2]
+                fmt_parts.append(f"{TEXT_REFERENCE.size}s")
+                self.sizes.append(TEXT_REFERENCE.size)
+            elif ftype in MEDIA_TYPES:
+                self.media_stores[name] = entry[2]
                 fmt_parts.append(f"{TEXT_REFERENCE.size}s")
                 self.sizes.append(TEXT_REFERENCE.size)
             else:
@@ -80,7 +86,15 @@ class Schema:
                 values.append(struct.pack(">dd", value.lat, value.lon))
             elif ftype == "text":
                 values.append(TEXT_REFERENCE.pack(*self.text_stores[name].put(str(value))))
+            elif ftype in MEDIA_TYPES:
+                if not isinstance(value, str) or not value:
+                    raise ValueError(f"El campo {name!r} requiere la ruta de un archivo")
+                values.append(TEXT_REFERENCE.pack(*self.media_stores[name].put(ftype, value)))
         return struct.pack(self.struct_format, *values)
+
+    def vector(self, name: str, path: str):
+        """Vector extraído al insertar la ruta `path` en la columna multimedia `name`."""
+        return self.media_stores[name].vector(self.types[self.fields.index(name)], path)
 
     def deserialize(self, data: bytes) -> Dict[str, Any]:
         raw_values = struct.unpack(self.struct_format, data)
@@ -92,6 +106,8 @@ class Schema:
                 record[name] = Point(*struct.unpack(">dd", raw))
             elif ftype == "text":
                 record[name] = self.text_stores[name].get(*TEXT_REFERENCE.unpack(raw))
+            elif ftype in MEDIA_TYPES:
+                record[name] = self.media_stores[name].get(*TEXT_REFERENCE.unpack(raw))
             else:
                 record[name] = raw
         return record

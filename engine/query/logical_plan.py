@@ -113,7 +113,7 @@ def normalize_insert(binding, columns, rows):
             value = record[name]
             if (kind == "int" and type(value) is not int
                     or kind == "float" and type(value) not in (int, float)
-                    or kind in ("str", "text") and type(value) is not str
+                    or kind in ("str", "text", "image", "audio") and type(value) is not str
                     or kind == "point" and not isinstance(value, Point)):
                 raise SQLSemanticError(f"Tipo inválido para {name!r}: se requiere {kind}; storage no admite NULL")
             if type(value) is float and not math.isfinite(value):

@@ -321,6 +321,8 @@ class StatementExecutor:
     def _csv_value(text, kind, column, table, line):
         if kind in ("str", "text"):
             return text
+        if kind in ("image", "audio"):
+            return text.strip()
         value = text.strip()
         if not value:
             raise SQLExecutionError(

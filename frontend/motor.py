@@ -41,6 +41,7 @@ from engine.indexes.spimi import SpimiIndex
 from engine.indexes.bplus_tree import CHILD_SIZE, NODE_HEADER_SIZE
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
 from engine.storage.clustered_file import ClusteredBPlusFile
+from engine.storage.media_store import MediaStore
 from engine.storage.text_store import TextStore
 from engine.storage.heap_file import HeapFile
 from engine.storage.sequential_file import SequentialFile
@@ -51,8 +52,10 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Carpeta de trabajo del modo demo (relativa a la raíz del proyecto, no al cwd).
 DEMO_DIR = os.path.join(PROJECT_DIR, "demo_data")
 
+TIPOS_MULTIMEDIA = ("image", "audio")
+
 # Archivos que genera el motor y que el modo demo elimina al iniciar.
-_EXTENSIONES_MOTOR = (".db", ".main", ".aux", ".bpt", ".hash", ".idx", ".rtree", ".reorg", ".tmp", ".text", ".spimi", ".delta")
+_EXTENSIONES_MOTOR = (".db", ".main", ".aux", ".bpt", ".hash", ".idx", ".rtree", ".reorg", ".tmp", ".text", ".spimi", ".delta", ".media")
 _DIRECTORIOS_TEMPORALES = (".bplus-build-",)
 
 
@@ -160,7 +163,7 @@ class Motor:
     def _archivos_tabla(nombre):
         """Archivos que usaría una tabla según su método de almacenamiento."""
         base = os.path.join(DEMO_DIR, nombre)
-        return (f"{base}.db", f"{base}.db.main", f"{base}.db.aux", f"{base}.bpt", f"{base}.text")
+        return (f"{base}.db", f"{base}.db.main", f"{base}.db.aux", f"{base}.bpt", f"{base}.text", f"{base}.media")
 
     def ejecutar(self, sql: str) -> Resultado:
         """Ejecuta SQL y devuelve un Resultado.
@@ -274,12 +277,18 @@ class Motor:
             raise ValueError("La tabla contiene columnas repetidas")
         schema = []
         textos = TextStore(os.path.join(DEMO_DIR, f"{statement.name}.text"))
+        multimedia = None
         for column in statement.columns:
             definition = (column.name, column.type)
             if column.type == "str":
                 definition += (column.size,)
             elif column.type == "text":
                 definition += (textos,)
+            elif column.type in TIPOS_MULTIMEDIA:
+                # Se crea solo si hay columnas multimedia; el archivo aparece con el primer INSERT.
+                if multimedia is None:
+                    multimedia = MediaStore(os.path.join(DEMO_DIR, f"{statement.name}.media"))
+                definition += (multimedia,)
             schema.append(definition)
 
         path = os.path.join(DEMO_DIR, f"{statement.name}.db")
@@ -295,6 +304,9 @@ class Motor:
             raise ValueError("POINT no puede ser clave primaria ni clave de orden físico; usa una columna INT")
         if kinds[key_field] == "text" and (primary_key or statement.storage_method != "heap"):
             raise ValueError("TEXT no puede ser clave primaria ni clave de orden físico; usa una columna INT")
+        if kinds[key_field] in TIPOS_MULTIMEDIA and (primary_key or statement.storage_method != "heap"):
+            raise ValueError(f"{kinds[key_field].upper()} no puede ser clave primaria ni clave de orden físico; "
+                             "usa una columna INT")
         constraint = f"{statement.name}_pkey"
         if statement.storage_method == "sequential":
             storage = SequentialFile(
@@ -345,6 +357,8 @@ class Motor:
                 raise ValueError("POINT no admite llaves foráneas")
             if column.type == "text":
                 raise ValueError("TEXT no admite llaves foráneas")
+            if column.type in TIPOS_MULTIMEDIA:
+                raise ValueError(f"{column.type.upper()} no admite llaves foráneas")
             padre = self.catalog.table(definition.ref_table)
             columna_padre = definition.ref_column or padre.primary_key
             if columna_padre is None:
@@ -378,6 +392,8 @@ class Motor:
             raise ValueError("SPIMI requiere una columna TEXT o VARCHAR")
         if key_type == "text" and statement.method != "spimi":
             raise ValueError("TEXT solo admite índices SPIMI")
+        if key_type in TIPOS_MULTIMEDIA:
+            raise ValueError(f"{key_type.upper()} solo admite índices HNSW o IVF")
         index_path = os.path.join(DEMO_DIR, f"{statement.table}_{statement.name}")
         extension = {"hash": "hash", "btree": "bpt", "rtree": "rtree", "spimi": "spimi"}[statement.method]
         index_file = f"{index_path}.{extension}"
@@ -446,6 +462,8 @@ class Motor:
                     binding.storage.close()
                 for textos in binding.storage.schema.text_stores.values():
                     textos.close()
+                for multimedia in set(binding.storage.schema.media_stores.values()):
+                    multimedia.close()
             except Exception as exc:
                 errores.append(exc)
         if errores:

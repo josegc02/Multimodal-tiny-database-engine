@@ -171,6 +171,11 @@ class TestMutationAndScriptParser(unittest.TestCase):
             with self.subTest(sql=sql), self.assertRaises(SQLParseError):
                 parse(sql)
 
+    def test_image_and_audio_column_types(self):
+        statement = parse("CREATE TABLE t (foto IMAGE, sonido audio, image INT)")
+        self.assertEqual([(c.name, c.type, c.size) for c in statement.columns],
+                         [("foto", "image", None), ("sonido", "audio", None), ("image", "int", None)])
+
     def test_create_index_using_spimi(self):
         for sql in ("CREATE INDEX i ON t USING SPIMI (a)", "CREATE INDEX i ON t (a) USING spimi"):
             with self.subTest(sql=sql):
@@ -186,6 +191,8 @@ class TestMutationAndScriptParser(unittest.TestCase):
             "CREATE TABLE t ()",
             "CREATE TABLE t (id BLOB)",
             "CREATE TABLE t (id TEXT(10))",
+            "CREATE TABLE t (foto IMAGE(10))",
+            "CREATE TABLE t (sonido AUDIO(10))",
             "CREATE TABLE t (id INT(8))",
             "CREATE TABLE t (name STR)",
             "CREATE TABLE t (name STR(0))",
