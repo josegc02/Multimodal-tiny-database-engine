@@ -5,6 +5,9 @@ from unittest.mock import patch
 
 import numpy as np
 
+from engine.query.errors import SQLSemanticError
+from engine.query.logical_plan import LogicalPlanner
+from engine.query.parser import parse
 from frontend.motor import Motor
 
 # Vectores conocidos por ruta: el extractor real (SIFT/MFCC) se prueba en test_multimedia_e2e.
@@ -157,6 +160,102 @@ class TestVectorIndexes(MultimediaSQLTestCase):
         self.execute("CREATE INDEX fotos_hnsw ON fotos (foto) USING HNSW")
         self.motor.cerrar()
         self.assertTrue(os.path.exists(os.path.join(self.temp_dir.name, "fotos_fotos_hnsw.hnsw")))
+
+
+class TestPlanner(MultimediaSQLTestCase):
+    SIMILAR = "SIMILAR_TO('img/consulta.jpg', k=3) USING HNSW"
+
+    def setUp(self):
+        super().setUp()
+        self.execute("CREATE TABLE fotos (id INT PRIMARY KEY, anio INT, foto IMAGE, otra IMAGE, sonido AUDIO)")
+        self.execute("CREATE INDEX fotos_foto ON fotos (foto) USING HNSW WITH (METRIC = cosine)")
+        self.execute("CREATE INDEX fotos_sonido ON fotos (sonido) USING IVF")
+
+    def plan(self, sql):
+        return LogicalPlanner(self.motor.catalog).plan(parse(sql))
+
+    def scan(self, plan):
+        while plan.operation != "Scan":
+            plan = plan.children[0]
+        return plan
+
+    def operations(self, plan):
+        return [plan.operation] + [name for child in plan.children for name in self.operations(child)]
+
+    def vector_k(self, tail, columns="*", where=""):
+        return self.scan(self.plan(f"SELECT {columns} FROM fotos WHERE {self.SIMILAR} {where} {tail}")).get("vector_k")
+
+    def test_similar_to_goes_to_the_scan_with_its_column_and_metric(self):
+        plan = self.plan(f"SELECT * FROM fotos WHERE {self.SIMILAR}")
+        search = self.scan(plan).get("vector_search")
+        self.assertEqual((search.column.name, search.method, search.metric, search.k), ("foto", "hnsw", "cosine", 3))
+        self.assertNotIn("Filter", self.operations(plan))
+
+    def test_explicit_column_and_audio_index(self):
+        search = self.scan(self.plan("SELECT * FROM fotos AS f WHERE SIMILAR_TO(f.sonido, 'aud/a.wav', k=2) "
+                                     "USING IVF WITH METRIC=euclidean")).get("vector_search")
+        self.assertEqual((search.column.name, search.column.table, search.metric), ("sonido", "f", "euclidean"))
+
+    def test_other_conditions_stay_in_the_where(self):
+        plan = self.plan(f"SELECT * FROM fotos WHERE anio > 2000 AND {self.SIMILAR}")
+        self.assertIn("Filter", self.operations(plan))
+        self.assertIsNotNone(self.scan(plan).get("vector_search"))
+
+    def test_order_by_similarity_needs_no_sort(self):
+        for tail in ("ORDER BY SIMILARITY_SCORE() DESC", "ORDER BY score DESC"):
+            with self.subTest(tail=tail):
+                plan = self.plan(f"SELECT id, SIMILARITY_SCORE() AS score FROM fotos WHERE {self.SIMILAR} {tail}")
+                self.assertNotIn("Sort", self.operations(plan))
+        plan = self.plan(f"SELECT * FROM fotos WHERE {self.SIMILAR} ORDER BY SIMILARITY_SCORE() ASC")
+        self.assertIn("Sort", self.operations(plan))
+
+    def test_limit_reduces_k_only_when_it_cannot_lose_rows(self):
+        self.assertEqual(self.vector_k(""), 3)
+        self.assertEqual(self.vector_k("LIMIT 2"), 2)
+        self.assertEqual(self.vector_k("LIMIT 5"), 3)
+        self.assertEqual(self.vector_k("LIMIT 1 OFFSET 1"), 2)
+        self.assertEqual(self.vector_k("ORDER BY SIMILARITY_SCORE() DESC LIMIT 1"), 1)
+        self.assertEqual(self.vector_k("ORDER BY id LIMIT 1"), 3)
+        self.assertEqual(self.vector_k("LIMIT 1", where="AND anio > 1"), 3)
+        self.assertEqual(self.vector_k("LIMIT 1", columns="DISTINCT anio"), 3)
+
+    def test_rejected_queries(self):
+        for sql in (f"SELECT * FROM fotos WHERE {self.SIMILAR} OR anio = 1",
+                    f"SELECT * FROM fotos WHERE NOT {self.SIMILAR}",
+                    f"SELECT * FROM fotos WHERE {self.SIMILAR} AND {self.SIMILAR}",
+                    f"SELECT * FROM fotos f JOIN fotos g ON f.id = g.id WHERE {self.SIMILAR}",
+                    "SELECT * FROM fotos WHERE SIMILAR_TO('q', k=3) USING IVF WITH METRIC=cosine",
+                    "SELECT * FROM fotos WHERE SIMILAR_TO('q', k=3) USING HNSW WITH METRIC=dot",
+                    "SELECT * FROM fotos WHERE SIMILAR_TO(otra, 'q', k=3) USING HNSW",
+                    "SELECT * FROM fotos WHERE SIMILAR_TO(sonido, 'q', k=3) USING HNSW",
+                    "SELECT * FROM fotos WHERE SIMILAR_TO(anio, 'q', k=3) USING HNSW",
+                    "SELECT * FROM fotos WHERE SIMILAR_TO(nada, 'q', k=3) USING HNSW",
+                    "SELECT SIMILARITY_SCORE() FROM fotos",
+                    "SELECT * FROM fotos ORDER BY SIMILARITY_SCORE() DESC",
+                    "DELETE FROM fotos WHERE SIMILARITY_SCORE() > 0.5",
+                    f"DELETE FROM fotos WHERE {self.SIMILAR}",
+                    f"SELECT COUNT(*), SIMILARITY_SCORE() FROM fotos WHERE {self.SIMILAR}",
+                    f"SELECT MAX(SIMILARITY_SCORE()) FROM fotos WHERE {self.SIMILAR}"):
+            with self.subTest(sql=sql), self.assertRaises(SQLSemanticError):
+                self.plan(sql)
+
+    def test_table_without_or_with_several_indexes_of_that_method(self):
+        self.execute("CREATE TABLE sin (id INT, foto IMAGE)")
+        with self.assertRaisesRegex(SQLSemanticError, "no tiene"):
+            self.plan("SELECT * FROM sin WHERE SIMILAR_TO('q', k=1) USING HNSW")
+        self.execute("CREATE INDEX fotos_otra ON fotos (otra) USING HNSW WITH (METRIC = cosine)")
+        with self.assertRaisesRegex(SQLSemanticError, "más de una"):
+            self.plan(f"SELECT * FROM fotos WHERE {self.SIMILAR}")
+        search = self.scan(self.plan("SELECT * FROM fotos WHERE SIMILAR_TO(otra, 'q', k=1) USING HNSW")).get("vector_search")
+        self.assertEqual(search.column.name, "otra")
+
+    def test_cannot_combine_with_match(self):
+        self.execute("CREATE TABLE mixta (id INT, texto TEXT, foto IMAGE)")
+        self.execute("CREATE INDEX mixta_texto ON mixta (texto) USING SPIMI")
+        self.execute("CREATE INDEX mixta_foto ON mixta (foto) USING HNSW")
+        with self.assertRaisesRegex(SQLSemanticError, "combinar"):
+            self.plan("SELECT * FROM mixta WHERE MATCH(texto, 'gato') USING BM25 "
+                      "AND SIMILAR_TO('q', k=1) USING HNSW")
 
 
 if __name__ == "__main__":
