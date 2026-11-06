@@ -743,7 +743,7 @@ En tablas cuyos RID se mueven (secuencial y B+ agrupado), el catálogo reconstru
 | 10.000 | 7,8 s | 3,2 MB | 0,26 ms |
 | 100.000 | 38,8 s | 28,1 MB | 0,30 ms |
 
-La memoria adicional de construir 20.000 documentos fue de 4,0 MB con bloques de 256 KB y de 16,5 MB con bloques de 2 MiB, porque durante la mezcla solo se retiene una entrada y un buffer de 64 KB por bloque. Estas cifras solo comprueban la escalabilidad del índice: la comparación con BM25 y GIN se hará con datos reales en la comparación experimental.
+La memoria adicional de construir 20.000 documentos fue de 4,0 MB con bloques de 256 KB y de 16,5 MB con bloques de 2 MiB, porque durante la mezcla solo se retiene una entrada y un buffer de 64 KB por bloque. Estas cifras son preliminares y corresponden a otro corpus: la comparación con BM25 y GIN de la sección 9 utiliza las noticias sintéticas de #49. Sus medidas de memoria también tienen otro alcance y no deben mezclarse con esta medición adicional.
 
 **Simplificaciones.**
 
@@ -778,3 +778,141 @@ Al índice solo se le piden `limit + offset` documentos si recortar no puede per
 **Plan de ejecución.** `EXPLAIN` muestra un nodo `Text Search` con el índice, la consulta, la técnica y el top-k. La estimación de filas y costo usa el `df` de cada término, sin leer las postings. `EXPLAIN ANALYZE` agrega las postings y páginas del índice leídas.
 
 **Simplificaciones.** Eliminar una fila no libera el espacio de su texto en `<tabla>.text`, y tras reabrir la tabla un mismo texto puede guardarse de nuevo. Ninguno de los dos casos afecta los datos.
+
+### 9. Comparación experimental de texto (Parte 3)
+
+Se ejecutaron 27 corridas: TF-IDF/coseno, BM25 y PostgreSQL GIN + ts_rank,
+en 1K, 10K y 100K documentos, con tres repeticiones. Cada corrida evaluó
+las 30 consultas de #49, agrupadas en 1, 3 y 6 palabras: 810 consultas
+medidas y 8.100 resultados top-10 auditados. Los documentos son noticias
+sintéticas españolas con juicios por tema principal, no juicios humanos.
+
+El [protocolo reproducible](../benchmarks/TEXT_BENCHMARK.md) describe
+semillas, calentamiento, aislamiento y alcance de cada medida. Los
+[resultados completos](../benchmarks/results/text/tables.md), CSV, rankings,
+metadatos y planes están versionados en `benchmarks/results/text/`.
+Las gráficas muestran medias y rango mínimo–máximo entre repeticiones;
+los CSV incluyen desviación estándar. Se siguieron los laboratorios 09/10
+y los tamaños del checklist #51.
+
+#### 9.1 Construcción y preparación
+
+| Técnica (100K) | Carga (s) | Índice (s) | Carga + índice (s) |
+|---|---:|---:|---:|
+| TF-IDF/coseno | 5,252 | 33,568 | 38,820 |
+| BM25 | 5,246 | 33,710 | 38,956 |
+| GIN + ts_rank | 20,415 | 2,055 | 22,470 |
+
+![Construcción y preparación](../benchmarks/results/text/construction.png)
+
+TF-IDF y BM25 construyen el mismo SPIMI; sus diferencias de tiempo son
+variación experimental. PostgreSQL calcula el tsvector durante COPY, mientras
+SPIMI procesa el texto durante la construcción. Por eso, aunque CREATE INDEX
+GIN tarda aproximadamente 16 veces menos que construir SPIMI en 100K, la
+preparación completa resulta aproximadamente 1,73 veces más rápida. Confundir
+ambas fronteras de medición exageraría la ventaja de GIN. La construcción de
+SPIMI pasa de unos 0,33 s a 3,31 s y 33,6 s: el crecimiento observado es
+aproximadamente proporcional al volumen en este rango, compatible con el
+procesamiento de postings y la mezcla externa. Tres tamaños no demuestran
+una complejidad asintótica por sí solos.
+
+#### 9.2 Tiempo de consulta
+
+| Técnica (100K) | 1 palabra (ms) | 3 palabras (ms) | 6 palabras (ms) |
+|---|---:|---:|---:|
+| TF-IDF/coseno | 42,742 | 51,861 | 69,896 |
+| BM25 | 49,338 | 53,797 | 73,346 |
+| GIN + ts_rank | 45,201 | 48,822 | 79,194 |
+
+![Latencia por longitud](../benchmarks/results/text/query_latency.png)
+
+No hay una técnica con la menor media en todos los grupos: TF-IDF gana
+en una y seis palabras a 100K, mientras GIN tiene la menor media en tres.
+Las diferencias son descriptivas, no una prueba de significancia con solo
+tres repeticiones. Las consultas largas tienden a leer más postings y
+acumular más candidatos bajo semántica OR. GIN acelera la selección con
+`@@`, pero PostgreSQL todavía calcula ts_rank y ordena candidatos. El motor
+normaliza o satura pesos y mantiene top-k con heap. Por eso un índice pequeño
+o barato de construir no garantiza la menor latencia de ranking.
+
+Las consultas se midieron después de un calentamiento y devuelven IDs y
+scores; PostgreSQL incluye el viaje local del cliente al servidor. Los planes
+naturales se conservan: en tablas pequeñas PostgreSQL puede preferir Seq Scan.
+No se forzó GIN durante las mediciones.
+
+#### 9.3 Relevancia
+
+![Precisión](../benchmarks/results/text/precision.png)
+![Recall](../benchmarks/results/text/recall.png)
+
+Las consultas de una y tres palabras alcanzaron Precision@10 = 1 en las
+tres técnicas y tamaños. Para seis palabras, en 1K TF-IDF obtuvo 0,975,
+BM25 0,9583 y GIN 1. En 10K y 100K, TF-IDF y GIN obtuvieron 1, mientras
+BM25 obtuvo 0,9167. Estos valores altos reflejan también la sencillez de
+las plantillas sintéticas y no equivalen a calidad demostrada en noticias reales.
+
+El caso q16, «energía solar renovable desarrollo proyectos regionales»,
+explica la caída de BM25 en 100K: sus diez resultados fueron no relevantes
+según el tema principal. Por ejemplo, el documento 14306 trata de banca y
+menciona energía solar como noticia secundaria. La consulta añade «desarrollo»,
+que también coincide con «desarrolla» en textos de banca tras stemming.
+La combinación de frecuencia, longitud y coincidencias permite que esos
+documentos superen a noticias solares. Es una explicación compatible con los
+textos y la fórmula, no un defecto probado de BM25 ni un ajuste de parámetros
+realizado sobre los juicios. Los IDs y scores se pueden auditar en rankings.csv.
+
+Con 100K, Recall@10 fue 0,0006 para consultas generales y 0,0012 para
+específicas con diez aciertos. En BM25 de seis palabras fue 0,0011. El recall
+baja al aumentar el corpus porque su denominador contiene todos los
+documentos relevantes del tamaño correspondiente, mientras el límite sigue
+siendo diez. No debe interpretarse esa caída como pérdida automática de
+precisión. Los juicios se establecieron por etiquetas editoriales, independientemente
+de los resultados de cualquiera de los tres rankings.
+
+#### 9.4 Disco y memoria
+
+![Disco](../benchmarks/results/text/disk.png)
+![Memoria](../benchmarks/results/text/memory.png)
+
+En 100K, SPIMI ocupa 28,500 MiB y GIN 11,570 MiB como índices de búsqueda.
+El almacenamiento total es mucho más cercano: 157,913 MiB en el motor y
+153,672 MiB en PostgreSQL. El total incluye los textos; PostgreSQL también
+conserva el tsvector y la clave primaria. No incluye CSV, WAL ni temporales
+de construcción. El menor tamaño de GIN no permite inferir el mismo ahorro
+porcentual para toda la base.
+
+El pico RSS observado fue 209,757 MiB para el proceso TF-IDF, 210,424 MiB
+para BM25 y 78,556 MiB para el backend PostgreSQL. Son ámbitos distintos:
+Python incluye intérprete, qrels y cachés; el backend incluye mappings
+compartidos y buffers. El cliente PostgreSQL se mide separadamente en CSV.
+Estos números describen residencia del proceso durante la corrida y no
+demuestran que el índice GIN necesite solo una fracción de la memoria de SPIMI.
+
+#### 9.5 Ventajas, desventajas y conclusiones
+
+| Técnica | Ventajas en esta implementación | Desventajas y límites |
+|---|---|---|
+| TF-IDF + coseno | Pesos interpretables, normas precalculadas, buena precisión; menor media en varios grupos | Requiere normalización y acumulación de candidatos; términos con IDF cero no aportan; SPIMI sin compresión |
+| BM25 | Saturación de frecuencia y ajuste por longitud; k1 y b configurables; reutiliza SPIMI | Parámetros y corpus afectan el orden; menciones secundarias desplazaron resultados en q16; no ganó en todas las consultas |
+| GIN + ts_rank | Índice compacto en esta corrida, mantenimiento integrado y planes inspeccionables; menor preparación completa | GIN no resuelve solo el orden por relevancia; coste previo del tsvector; diccionarios y ranking diferentes al motor |
+
+La evidencia respalda que las tres implementaciones procesan los tamaños
+exigidos y permiten auditar tanto eficiencia como calidad. GIN fue ventajoso
+en preparación total y espacio del índice en este corpus. TF-IDF mantuvo
+latencias competitivas y la mejor media en dos grupos de 100K. BM25 mostró
+que normalizar por longitud y saturar frecuencia no garantiza superar al
+coseno para toda intención: los distractores del corpus importan.
+
+No se identifica un ganador universal. La decisión depende de si se prioriza
+construcción, almacenamiento, latencia de una familia de consultas o relevancia
+para una intención concreta. El resultado de q16 también muestra por qué
+deben conservarse juicios e IDs, en lugar de comparar únicamente scores.
+La exactitud de las fórmulas propias tiene sus pruebas por fuerza bruta;
+en este experimento se evalúa calidad temática, que es una pregunta diferente.
+
+Las conclusiones quedan limitadas a noticias sintéticas, caché caliente,
+ejecución serial y tres repeticiones en una estación de trabajo. PostgreSQL
+usa tablas temporales de sesión y no se está midiendo durabilidad con WAL,
+concurrencia ni rendimiento de producción. Un siguiente experimento debería
+usar un corpus real con juicios humanos, más repeticiones y consultas de
+selectividad variada antes de extrapolar estos resultados.

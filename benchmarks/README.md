@@ -1,5 +1,10 @@
 # Comparación experimental — issue #10
 
+La comparación textual de la Parte 3 (#51) se ejecuta con
+`python -m benchmarks.bench_text`. Ver el [protocolo completo](TEXT_BENCHMARK.md)
+para Docker, datasets, auditoría y generación de gráficas. Los resultados se
+guardan por defecto en `benchmarks/results/text/` y no sobrescriben corridas.
+
 Scripts de consola independientes del frontend. Ejecutar desde la raíz del repo:
 
 ```bash
