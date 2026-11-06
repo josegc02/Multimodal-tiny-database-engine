@@ -113,7 +113,7 @@ ORDER BY relevancia DESC LIMIT 10;
 ```sql
 CREATE TABLE imagenes (id INT PRIMARY KEY, nombre VARCHAR(30), foto IMAGE);
 CREATE INDEX imagenes_foto ON imagenes (foto) USING HNSW WITH (METRIC = cosine);
--- Al insertar se guarda la ruta y se extrae el vector (SIFT para IMAGE, MFCC para AUDIO)
+-- Al insertar se guarda la ruta y se extrae el vector Bag of Words (SIFT para IMAGE, MFCC para AUDIO)
 INSERT INTO imagenes VALUES (1, 'gato', 'fotos/gato.jpg'), (2, 'perro', 'fotos/perro.jpg');
 SELECT nombre, SIMILARITY_SCORE() AS score FROM imagenes
 WHERE SIMILAR_TO('fotos/consulta.jpg', k=10) USING HNSW WITH METRIC=cosine
@@ -123,6 +123,16 @@ CREATE TABLE canciones (id INT, nombre VARCHAR(30), audio AUDIO);
 CREATE INDEX canciones_audio ON canciones (audio) USING IVF;                 -- METRIC euclidean por defecto
 SELECT * FROM canciones WHERE SIMILAR_TO('audio_query.wav', k=5) USING IVF;
 ```
+
+El vector de cada archivo es su histograma Bag of Visual/Audio Words (K = 256, TF-IDF), calculado con los vocabularios de `models/`. Para volver a entrenarlos:
+
+```bash
+python scripts/download_bow_training_data.py            # 500 imágenes de coco1k y 200 clips de ESC-50 (~160 MB)
+python scripts/train_codebook.py --kind image --input datasets/bow_training/coco
+python scripts/train_codebook.py --kind audio --input datasets/bow_training/esc50
+```
+
+Los clips de audio son de ESC-50 (K. J. Piczak, *ESC: Dataset for Environmental Sound Classification*, 2015), con licencia CC BY-NC 3.0.
 
 ### Ejemplo espacial
 

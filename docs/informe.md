@@ -921,7 +921,15 @@ selectividad variada antes de extrapolar estos resultados.
 
 ### 10. Extensión SQL multimedia
 
-**Tipos `IMAGE` y `AUDIO`.** Una columna multimedia guarda la ruta del archivo y su vector. Igual que `TEXT`, el valor vive en un archivo aparte, `<tabla>.media`, y el registro solo conserva la posición y el largo de su entrada en 12 bytes. Cada entrada tiene el tipo, la ruta en UTF-8 y el vector en `float32`. El vector se extrae una sola vez, al insertar, con `ExtractFeatures` (`engine/features/registry.py`): el promedio de los descriptores SIFT (128 dimensiones) para `IMAGE` y el de los coeficientes MFCC (13 dimensiones) para `AUDIO`, los mismos vectores de la comparación experimental. Si el archivo no existe o no se puede procesar, el `INSERT` falla sin escribir nada. Para usar otro pipeline, como Bag of Visual Words, basta con registrar otra función en ese módulo. `IMAGE` y `AUDIO` no pueden ser clave primaria, clave de orden físico ni llave foránea, y solo admiten índices HNSW o IVF.
+**Tipos `IMAGE` y `AUDIO`.** Una columna multimedia guarda la ruta del archivo y su vector. Igual que `TEXT`, el valor vive en un archivo aparte, `<tabla>.media`, y el registro solo conserva la posición y el largo de su entrada en 12 bytes. Cada entrada tiene el tipo, la ruta en UTF-8 y el vector en `float32`. El vector se extrae una sola vez, al insertar, con `ExtractFeatures` (`engine/features/registry.py`), que se describe a continuación. Si el archivo no existe o no se puede procesar, el `INSERT` falla sin escribir nada. `IMAGE` y `AUDIO` no pueden ser clave primaria, clave de orden físico ni llave foránea, y solo admiten índices HNSW o IVF.
+
+**ExtractFeatures: Bag of Visual/Audio Words.** Sigue el pipeline del enunciado (2.4.1) y de la clase 11:
+
+1. *Patrones locales.* Para una imagen se toman todos sus puntos SIFT (`SIFTExtractor.extract_descriptors`, matriz N × 128, con la imagen en 512 × 512); si no aparece ninguno, se reintenta con umbrales de contraste más bajos. Para un audio, un vector MFCC de 13 coeficientes por ventana deslizante (`MFCCExtractor.extract_frames`, hasta 30 s).
+2. *Cuantización.* Un vocabulario de K = 256 palabras, entrenado con K-Means (`engine/features/kmeans.py`) sobre 100 000 descriptores muestreados en proporción a cada archivo de entrenamiento. Cada descriptor se asigna a la palabra más cercana. K-Means asigna los centroides por bloques (memoria O(bloque × K) en vez de N × K × D) y se inicializa con k-means++.
+3. *Histograma TF-IDF.* Se cuenta cuántos descriptores caen en cada palabra y se pesa con `(1 + log10 tf) · log10(N / df)`, donde N y df vienen de los archivos de entrenamiento; el vector de 256 dimensiones se normaliza con L2 (`engine/features/bow.py`).
+
+Los vocabularios están en `models/bow_image_k256.npz` y `models/bow_audio_k256.npz` (centroides e IDF) y se regeneran con `scripts/download_bow_training_data.py` y `scripts/train_codebook.py`. El visual se entrenó con 500 imágenes del subconjunto `coco1k` (239 659 descriptores SIFT): ninguna palabra quedó con IDF 0 y cada imagen usa unas 193 palabras distintas. El de audio, con 200 clips de ESC-50, 4 por cada una de sus 50 clases (K. J. Piczak, 2015, licencia CC BY-NC 3.0). Con esos clips, entre los 3 vecinos por coseno el 25 % es de la misma clase con Bag of Audio Words, frente al 20,5 % del promedio MFCC y al 1,5 % del azar. Una imagen sin ningún punto SIFT no tiene palabras visuales: su vector es nulo y, con el coseno, no se indexa.
 
 **Índices.** `CREATE INDEX i ON t (col) USING HNSW | IVF [WITH (METRIC = euclidean | cosine | dot)]` crea el índice; la métrica por defecto es la euclidiana. `VectorIndex` adapta `HNSWIndex` e `IVFIndex` al contrato del catálogo: asigna un identificador entero a cada RID, toma los vectores del `<tabla>.media` y se mantiene con cada inserción, eliminación y `ROLLBACK`. HNSW usa `M = 8`, `ef_construction = 50` y `ef_search = 50`. Como HNSW no permite borrar nodos, un borrado deja una marca, la búsqueda pide más vecinos para compensarla y el grafo se reconstruye cuando las marcas superan a los nodos vivos. IVF busca de forma exacta hasta tener 16 vectores; después entrena con `nlist ≈ √N` y `nprobe ≈ √nlist`, y vuelve a entrenar cada vez que la tabla duplica el tamaño del último entrenamiento. Si las listas revisadas no reúnen `k` vectores, revisa más listas, de modo que `k=N` siempre devuelve `min(N, filas)` resultados. Con el coseno, una fila cuyo vector es nulo no se indexa, porque la similitud no está definida. Ambos índices viven en memoria y se reconstruyen desde la tabla al registrarse; al cerrar se guardan en disco.
 
@@ -966,6 +974,14 @@ diez vecinos exactos de los mismos vectores, **no** juicios humanos de relevanci
 semántica. Se usó el promedio de descriptores SIFT (128 dimensiones); una
 imagen de 10K y otra de 100K sin puntos SIFT usaron un histograma gris de la
 misma dimensión, registrado en los metadatos.
+
+> **Pendiente:** estas mediciones son anteriores a ExtractFeatures con Bag of
+> Visual Words (sección 10). `benchmarks/multimedia_compare.py` ya usa los
+> histogramas BoVW de 256 dimensiones por defecto (`--features sift-mean`
+> reproduce esta tabla), y la corrida completa sobre 1K, 10K y 100K se repetirá.
+> En una prueba con 500 imágenes de `coco1k`, el Recall@10 bajó de 0,99 a 0,87
+> en IVF y de 0,998 a 0,97 en HNSW: los histogramas de 256 dimensiones son más
+> difíciles de aproximar que el promedio SIFT de 128.
 
 | Tamaño | Métrica | IVF: construcción | HNSW: construcción | IVF: consulta media | HNSW: consulta media | Recall@10 IVF / HNSW |
 |---:|---|---:|---:|---:|---:|---:|
