@@ -1,9 +1,15 @@
-"""Extractor que usa el motor para cada tipo de columna multimedia.
+"""ExtractFeatures: el vector que guarda el motor para cada valor IMAGE o AUDIO.
 
-IMAGE usa el promedio de los descriptores SIFT (128 dimensiones) y AUDIO el
-promedio de los coeficientes MFCC (13 dimensiones), igual que la comparación
-experimental de #59. Para cambiar el pipeline (por ejemplo, a Bag of Visual
-Words) basta con registrar otra función con `register_extractor`.
+Sigue el pipeline del enunciado (2.4.1) y de la clase 11:
+
+1. Descriptores locales: todos los puntos SIFT de la imagen, o un MFCC por
+   ventana del audio.
+2. Cuantización con el vocabulario Bag of Visual/Audio Words entrenado con
+   K-Means (models/bow_<tipo>_k256.npz, scripts/train_codebook.py).
+3. Histograma con TF-IDF y normalización L2: un vector de dimensión K = 256.
+
+Un archivo sin descriptores (una imagen de un solo color) da el vector nulo.
+`register_extractor` permite usar otro pipeline (por ejemplo, en los tests).
 
 OpenCV y librosa se importan recién al extraer el primer vector: una tabla sin
 columnas multimedia no los necesita.
@@ -26,12 +32,25 @@ _extractors: Dict[str, Extractor] = {}
 _latch = threading.Lock()
 
 
+VOCABULARY_K = 256
+
+
 def _default(kind: str) -> Extractor:
+    from engine.features.bow import BagOfWords
+
+    path = vocabulary_path(kind, VOCABULARY_K)
+    if not path.exists():
+        source = "--input datasets/bow_training/coco" if kind == "image" else "--input datasets/bow_training/esc50"
+        raise FileNotFoundError(f"Falta el vocabulario {path}; entrénalo con "
+                                f"python scripts/train_codebook.py --kind {kind} {source}")
+    vocabulary = BagOfWords.load(path)
     if kind == "image":
         from engine.features.image.sift import SIFTExtractor
-        return SIFTExtractor().extract
-    from engine.features.audio.mfcc import MFCCExtractor
-    return MFCCExtractor().extract
+        describe = SIFTExtractor().extract_descriptors
+    else:
+        from engine.features.audio.mfcc import MFCCExtractor
+        describe = MFCCExtractor().extract_frames
+    return lambda file: vocabulary.transform(describe(file))
 
 
 def vocabulary_path(kind: str, k: int) -> Path:
