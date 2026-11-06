@@ -35,6 +35,7 @@ class SIFTExtractor(BaseFeatureExtractor):
 
         # Cargar imagen
         if isinstance(image, (str, Path)):
+            
             image_path = Path(image)
             if not image_path.exists():
                 raise FileNotFoundError(f"Imagen no encontrada: {image_path}")
