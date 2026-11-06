@@ -3,23 +3,26 @@
 import tkinter as tk
 import ttkbootstrap as ttk
 from tkinter import ttk as ttk_classic
+from frontend import tema
 
-class PanelArchivos(ttk.LabelFrame):
+class PanelArchivos(ttk.Frame):
     """Panel que lista las tablas y sus esquemas."""
 
     def __init__(self, master, catalog=None):
-        super().__init__(master, text="Explorador de Objetos")
+        super().__init__(master, style="Sidebar.TFrame")
         self.catalog = catalog
         self._construir()
         self.refresh()
 
     def _construir(self):
+        tk.Label(self, text="EXPLORADOR", anchor="w", bg=tema.LATERAL,
+                 fg=tema.LATERAL_SECUNDARIO, padx=10, pady=8).pack(fill="x")
         # 1. Usamos ttk_classic aquí para evitar el bug de ttkbootstrap
         paned = ttk_classic.PanedWindow(self, orient=tk.VERTICAL)
         paned.pack(fill="both", expand=True, padx=2, pady=2)
 
         # --- Parte Superior: Lista de tablas ---
-        frame_arriba = ttk.Frame(paned)
+        frame_arriba = ttk.Frame(paned, style="Sidebar.TFrame")
         paned.add(frame_arriba, weight=1)
 
         self.lista = tk.Listbox(frame_arriba, exportselection=False)
@@ -32,12 +35,13 @@ class PanelArchivos(ttk.LabelFrame):
         self.lista.bind("<<ListboxSelect>>", self._on_seleccion)
 
         # --- Parte Inferior: Esquema de la tabla ---
-        frame_abajo = ttk.Frame(paned)
+        frame_abajo = ttk.Frame(paned, style="Sidebar.TFrame")
         paned.add(frame_abajo, weight=2)
 
-        ttk.Label(frame_abajo, text="Propiedades / Esquema:").pack(anchor="w", padx=2, pady=(2,0))
+        tk.Label(frame_abajo, text="PROPIEDADES / ESQUEMA", anchor="w", bg=tema.LATERAL,
+                 fg=tema.LATERAL_SECUNDARIO, padx=8, pady=8).pack(fill="x")
 
-        frame_texto = ttk.Frame(frame_abajo)
+        frame_texto = ttk.Frame(frame_abajo, style="Sidebar.TFrame")
         frame_texto.pack(fill="both", expand=True, pady=2)
 
         self.texto_esquema = tk.Text(frame_texto, height=10, width=30,

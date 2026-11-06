@@ -41,6 +41,11 @@ class PanelResultados(ttk.Frame):
         scroll_y.pack(side="right", fill="y")
         self.tree.configure(yscrollcommand=scroll_y.set)
 
+        self.vacio = tk.Label(self.tree, text="Ejecuta una consulta para ver los resultados",
+                              bg=tema.SUPERFICIE, fg=tema.SECUNDARIO,
+                              font=("TkDefaultFont", 11), borderwidth=0)
+        self.vacio.place(relx=0.5, rely=0.5, anchor="center")
+
         scroll_x = ttk.Scrollbar(self, orient="horizontal", command=self.tree.xview)
         scroll_x.pack(fill="x", padx=4, pady=(0, 4))
         self.tree.configure(xscrollcommand=scroll_x.set)
@@ -59,6 +64,8 @@ class PanelResultados(ttk.Frame):
         for item in self.tree.get_children():
             self.tree.delete(item)
         self.mensaje.config(text="Sin resultados")
+        self.vacio.configure(text="Ejecuta una consulta para ver los resultados")
+        self.vacio.place(relx=0.5, rely=0.5, anchor="center")
 
     def mostrar_resultados(self, columnas, filas):
         """Muestra los resultados en la tabla.
@@ -71,6 +78,8 @@ class PanelResultados(ttk.Frame):
 
         if not columnas:
             return
+
+        self.vacio.place_forget()
 
         self.tree["columns"] = list(columnas)
         es_plan = list(columnas) == ["QUERY PLAN"]
@@ -99,8 +108,10 @@ class PanelResultados(ttk.Frame):
         """
         self.limpiar()
         self.mensaje.config(text=texto)
+        self.vacio.configure(text=texto)
 
     def mostrar_error(self, texto):
         """Muestra un mensaje de error."""
         self.limpiar()
         self.mensaje.config(text=f"Error: {texto}")
+        self.vacio.configure(text="No se pudo ejecutar la consulta")

@@ -36,7 +36,7 @@ class Aplicacion(ttk.Window):
         self.main_paned.pack(fill=tk.BOTH, expand=True)
 
         # 2. Panel Izquierdo (Barra lateral)
-        self.sidebar_frame = ttk.Frame(self.main_paned, width=250)
+        self.sidebar_frame = ttk.Frame(self.main_paned, width=280, style="Sidebar.TFrame")
         self.main_paned.add(self.sidebar_frame, weight=1)
 
         # 3. Panel Derecho (Área de trabajo)
@@ -79,6 +79,7 @@ class Aplicacion(ttk.Window):
         self.bottom_notebook.add(self.panel_plan, text="Plan de Ejecución")
 
         self._aplicar_tema()
+        self.after(150, lambda: self.main_paned.sashpos(0, min(300, self.winfo_width() // 4)))
 
         # --- CONEXIÓN CON EL MOTOR ---
         self.panel_archivos.set_catalog(self.motor.catalog)
@@ -93,29 +94,36 @@ class Aplicacion(ttk.Window):
         alto_fila = tkfont.nametofont("TkDefaultFont").metrics("linespace") + 4
         self.configure(background=tema.FONDO)
         self.style.configure("TFrame", background=tema.FONDO)
-        self.style.configure("TLabelframe", background=tema.LATERAL)
-        self.style.configure("TLabelframe.Label", background=tema.LATERAL, foreground=tema.TEXTO)
+        self.style.configure("Sidebar.TFrame", background=tema.LATERAL)
+        self.style.configure("Sidebar.TLabelframe", background=tema.LATERAL, borderwidth=0)
+        self.style.configure("Sidebar.TLabelframe.Label", background=tema.LATERAL,
+                             foreground=tema.LATERAL_SECUNDARIO, padding=(10, 8))
+        self.style.configure("Sidebar.TLabel", background=tema.LATERAL, foreground=tema.LATERAL_SECUNDARIO)
         self.style.configure("TLabel", background=tema.FONDO, foreground=tema.TEXTO)
         self.style.configure("TNotebook", background=tema.FONDO, borderwidth=0)
-        self.style.configure("TNotebook.Tab", padding=(16, 8), background=tema.LATERAL,
-                             foreground=tema.SECUNDARIO)
+        self.style.configure("TNotebook.Tab", padding=(16, 8), background=tema.FONDO,
+                             foreground=tema.SECUNDARIO, borderwidth=0)
         self.style.map("TNotebook.Tab", background=[("selected", tema.SUPERFICIE)],
                        foreground=[("selected", tema.ACENTO)])
+        self.style.configure("primary.TButton", background=tema.ACENTO, foreground="#ffffff", padding=(12, 6))
         self.style.configure("Treeview", background=tema.SUPERFICIE,
                              fieldbackground=tema.SUPERFICIE, foreground=tema.TEXTO, rowheight=alto_fila)
         self.style.map("Treeview", background=[("selected", tema.SELECCION)],
                        foreground=[("selected", tema.TEXTO)])
         self.style.configure("Treeview.Heading", background=tema.ENCABEZADO,
                              foreground=tema.TEXTO, padding=(6, 5))
-        self.panel_archivos.lista.configure(bg=tema.LATERAL, fg=tema.TEXTO,
-                                           selectbackground=tema.SELECCION, selectforeground=tema.TEXTO,
-                                           relief="flat", highlightthickness=0)
-        self.panel_archivos.texto_esquema.configure(bg=tema.LATERAL, fg=tema.TEXTO,
-                                                    selectbackground=tema.SELECCION,
-                                                    selectforeground=tema.TEXTO, relief="flat")
+        self.panel_archivos.lista.configure(bg=tema.LATERAL, fg=tema.LATERAL_TEXTO,
+                                           selectbackground=tema.LATERAL_SELECCION,
+                                           selectforeground=tema.LATERAL_TEXTO,
+                                           relief="flat", highlightthickness=0, borderwidth=0)
+        self.panel_archivos.texto_esquema.configure(bg=tema.LATERAL, fg=tema.LATERAL_TEXTO,
+                                                    selectbackground=tema.LATERAL_SELECCION,
+                                                    selectforeground=tema.LATERAL_TEXTO,
+                                                    relief="flat", borderwidth=0, highlightthickness=0, padx=8)
         self.panel_consultas.editor.configure(bg=tema.SUPERFICIE, fg=tema.TEXTO,
                                               insertbackground=tema.TEXTO, selectbackground=tema.SELECCION,
-                                              selectforeground=tema.TEXTO, relief="flat", padx=10, pady=8)
+                                              selectforeground=tema.TEXTO, relief="flat", borderwidth=0,
+                                              highlightthickness=0, padx=10, pady=8)
 
     def _on_cerrar(self):
         """Cierra los storages antes de salir."""

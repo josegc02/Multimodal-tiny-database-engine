@@ -27,7 +27,7 @@ class PanelConsultas(ttk.Frame):
         frame_editor = ttk.Frame(self)
         frame_editor.pack(fill="both", expand=True, padx=4, pady=4)
 
-        self.margen_lineas = tk.Canvas(frame_editor, width=42, bg=tema.LATERAL,
+        self.margen_lineas = tk.Canvas(frame_editor, width=42, bg=tema.MARGEN,
                                        highlightthickness=0)
         self.margen_lineas.pack(side="left", fill="y")
         self.editor = tk.Text(frame_editor, height=10, width=50, wrap="word",
@@ -61,7 +61,7 @@ class PanelConsultas(ttk.Frame):
         self.editor.edit_reset()
 
         frame_botones = ttk.Frame(self)
-        frame_botones.pack(fill="x", padx=8, pady=(2, 8))
+        frame_botones.pack(fill="x", padx=8, pady=(6, 2), before=frame_editor)
 
         self.boton_limpiar = ttk.Button(frame_botones, text="Limpiar",
                                         command=self.limpiar)
@@ -69,11 +69,12 @@ class PanelConsultas(ttk.Frame):
 
         self.boton_ejecutar = ttk.Button(frame_botones, text="Ejecutar", bootstyle="primary",
                                          command=self.ejecutar)
-        self.boton_ejecutar.pack(side="right")
+        self.boton_ejecutar.pack(side="left", padx=(0, 6))
 
         self.boton_csv = ttk.Button(frame_botones, text="Cargar CSV...",
                                     command=self.cargar_csv)
         self.boton_csv.pack(side="left")
+        ttk.Label(frame_botones, text="Ctrl + Enter", foreground=tema.SECUNDARIO).pack(side="left", padx=10)
 
         # --- ATAJOS DE TECLADO ---
         self.editor.bind("<Control-Return>", self._atajo_ejecutar)
