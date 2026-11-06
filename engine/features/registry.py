@@ -12,11 +12,13 @@ columnas multimedia no los necesita.
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from typing import Callable, Dict
 
 import numpy as np
 
 MEDIA_TYPES = ("image", "audio")
+MODELS_DIR = Path(__file__).resolve().parents[2] / "models"
 
 Extractor = Callable[[str], np.ndarray]
 
@@ -30,6 +32,11 @@ def _default(kind: str) -> Extractor:
         return SIFTExtractor().extract
     from engine.features.audio.mfcc import MFCCExtractor
     return MFCCExtractor().extract
+
+
+def vocabulary_path(kind: str, k: int) -> Path:
+    """Archivo del vocabulario Bag of Words de un tipo multimedia."""
+    return MODELS_DIR / f"bow_{kind}_k{k}.npz"
 
 
 def register_extractor(kind: str, extractor: Extractor) -> None:
