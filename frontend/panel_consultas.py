@@ -20,6 +20,7 @@ class PanelConsultas(ttk.Frame):
         self.on_error = None
         self.archivo_consulta = None
         self._construir()
+        self.bind("<Destroy>", self._al_destruir, add=True)
         self._actualizar_botones()
 
     def _construir(self):
@@ -50,7 +51,7 @@ class PanelConsultas(ttk.Frame):
         tema.configurar_sintaxis(self.editor)
         self._resaltado_pendiente = None
         self.editor.bind("<KeyRelease>", self._programar_resaltado, add=True)
-        self.editor.bind("<<Paste>>", self._programar_resaltado, add=True)
+        self.editor.bind("<<Paste>>", self._pegar)
         self.editor.bind("<<Cut>>", self._programar_resaltado, add=True)
 
         self.editor.insert("1.0", SQL_EJEMPLO)
@@ -131,6 +132,8 @@ class PanelConsultas(ttk.Frame):
         self._resaltado_pendiente = self.after(35, self._resaltar_sql)
 
     def _resaltar_sql(self):
+        if self._resaltado_pendiente is not None:
+            self.after_cancel(self._resaltado_pendiente)
         self._resaltado_pendiente = None
         for tag in ("sql_keyword", "sql_string", "sql_comment", "sql_type", "sql_number"):
             self.editor.tag_remove(tag, "1.0", tk.END)
@@ -139,6 +142,11 @@ class PanelConsultas(ttk.Frame):
             self.editor.tag_add("sql_" + kind, f"1.0+{start}c", f"1.0+{end}c")
         self.editor.tag_raise("sel")
         self.after_idle(self._dibujar_lineas)
+
+    def _al_destruir(self, event):
+        if event.widget is self and self._resaltado_pendiente is not None:
+            self.after_cancel(self._resaltado_pendiente)
+            self._resaltado_pendiente = None
 
     def _dibujar_lineas(self):
         if not self.editor.winfo_exists():
@@ -223,6 +231,7 @@ class PanelConsultas(ttk.Frame):
             self.editor.edit_undo()
         except tk.TclError:
             pass
+        self._programar_resaltado()
         return "break"
 
     def _rehacer(self, event):
@@ -230,7 +239,30 @@ class PanelConsultas(ttk.Frame):
             self.editor.edit_redo()
         except tk.TclError:
             pass
+        self._programar_resaltado()
         return "break"
+
+    def _pegar(self, _event=None):
+        """Reemplaza la selección o inserta en el cursor como una sola edición."""
+        try:
+            texto = self.editor.clipboard_get()
+        except tk.TclError:
+            return "break"  # No borrar la selección si el portapapeles no contiene texto.
+        self.editor.edit_separator()
+        automatico = self.editor.cget("autoseparators")
+        self.editor.configure(autoseparators=False)
+        try:
+            if self.editor.tag_ranges("sel"):
+                inicio = self.editor.index("sel.first")
+                self.editor.delete("sel.first", "sel.last")
+                self.editor.mark_set("insert", inicio)
+            self.editor.insert("insert", texto)
+            self.editor.see("insert")
+        finally:
+            self.editor.configure(autoseparators=automatico)
+            self.editor.edit_separator()
+        self._programar_resaltado()
+        return "break"  # Evita que Tk pegue el mismo contenido por segunda vez.
 
     def _atajo_ejecutar(self, event):
         self.ejecutar()
