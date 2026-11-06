@@ -956,3 +956,46 @@ Vector Search using imagenes_foto on imagenes  (cost=4.00..4.00 rows=2) (actual 
 ```
 
 **Simplificaciones.** Una misma ruta reutiliza su vector, también tras reabrir la tabla, porque se asume que los archivos no cambian después de insertarse. Eliminar una fila no libera su entrada en `<tabla>.media`. Las rutas relativas se resuelven desde el directorio en que se ejecuta el motor.
+
+### 11. Comparación experimental de índices multimedia (#59)
+
+Se ejecutaron 12 configuraciones sobre imágenes de MS-COCO 2017: 1K, 10K y
+100K, con IVF y HNSW bajo distancias euclidiana y coseno. Cada búsqueda pide
+diez vecinos y excluye la propia imagen. La referencia de `Recall@10` son los
+diez vecinos exactos de los mismos vectores, **no** juicios humanos de relevancia
+semántica. Se usó el promedio de descriptores SIFT (128 dimensiones); una
+imagen de 10K y otra de 100K sin puntos SIFT usaron un histograma gris de la
+misma dimensión, registrado en los metadatos.
+
+| Tamaño | Métrica | IVF: construcción | HNSW: construcción | IVF: consulta media | HNSW: consulta media | Recall@10 IVF / HNSW |
+|---:|---|---:|---:|---:|---:|---:|
+| 1K | Euclidiana | 0,029 s | 0,415 s | 0,459 ms | 0,421 ms | 0,992 / 0,999 |
+| 1K | Coseno | 0,023 s | 0,724 s | 0,830 ms | 0,643 ms | 0,990 / 0,993 |
+| 10K | Euclidiana | 2,220 s | 34,258 s | 26,973 ms | 3,851 ms | 1,000 / 0,953 |
+| 10K | Coseno | 0,472 s | 57,808 s | 4,389 ms | 3,820 ms | 0,995 / 0,952 |
+| 100K | Euclidiana | 85,956 s | 363,576 s | 130,637 ms | 2,577 ms | 1,000 / 0,928 |
+| 100K | Coseno | 63,695 s | 774,351 s | 113,972 ms | 8,209 ms | 1,000 / 0,911 |
+
+![Construcción por tamaño](../benchmarks/results/multimedia/construction.png)
+![Consultas por tamaño](../benchmarks/results/multimedia/query.png)
+![Recall@10 por tamaño](../benchmarks/results/multimedia/recall.png)
+![Pico RSS por tamaño](../benchmarks/results/multimedia/memory.png)
+
+En esta corrida, IVF construyó más rápido y obtuvo mayor Recall@10 en 10K y
+100K. HNSW respondió más rápido, especialmente en 100K, a cambio de una
+construcción más larga y una pérdida de vecinos exactos con los parámetros
+fijados (`M=8`, `ef_construction=50`, `ef_search=50`). Para un corpus que se
+reconstruye con frecuencia y tolera consultas más lentas, IVF resultó
+conveniente; para consultas frecuentes con tolerancia a aproximación, HNSW
+ofreció menor latencia. La elección depende de cuánta pérdida de vecinos se
+acepte. El pico de memoria del proceso rondó 2,5 GiB en 100K para ambas
+técnicas; incluye vectores, intérprete y páginas compartidas, por lo que no
+permite atribuir una diferencia fiable de memoria exclusivamente al índice.
+
+El [informe detallado](../benchmarks/results/multimedia/report.md), los CSV,
+las cuatro gráficas y la [galería de casos](../benchmarks/results/multimedia/gallery.html)
+permiten auditar cada configuración. La galería compartida carga las fotos
+desde el servidor de COCO y requiere internet. Estos números proceden de una
+sola corrida por configuración en Windows con Python 3.14; no tienen intervalos
+de confianza ni justifican extrapolaciones a otros equipos o a relevancia
+semántica de las categorías COCO.
