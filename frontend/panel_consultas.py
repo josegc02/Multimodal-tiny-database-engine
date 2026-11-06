@@ -40,7 +40,7 @@ class PanelConsultas(ttk.Frame):
         scroll_y.pack(side="right", fill="y")
         self.editor.configure(yscrollcommand=scroll_y.set)
 
-        self.editor.tag_configure("sql_keyword", foreground="#268bd2")
+        self.editor.tag_configure("sql_keyword", foreground="#005cc5")
         self._resaltado_pendiente = None
         self.editor.bind("<KeyRelease>", self._programar_resaltado, add=True)
         self.editor.bind("<<Paste>>", self._programar_resaltado, add=True)
