@@ -55,6 +55,14 @@ Detalles en [`postgis/README.md`](postgis/README.md).
 python -m frontend.main
 ```
 
+El panel permite elegir un archivo multimedia para insertar una consulta
+`SIMILAR_TO` de ejemplo. Los resultados que proyectan una ruta de imagen o
+audio se muestran en galería; para incluir su puntuación, selecciona también
+`SIMILARITY_SCORE() AS score`. El botón de audio abre el archivo con el
+reproductor predeterminado del sistema. En consultas `MATCH`, se agrega un
+fragmento visual si la columna de texto buscada está en la selección; usa
+`SCORE() AS relevancia` para mostrar su puntuación.
+
 La barra del editor incluye **Tema claro / Tema oscuro** para alternar la
 apariencia sin perder la consulta ni los resultados. La aplicación inicia en
 tema oscuro; la elección dura hasta cerrar la ventana.
