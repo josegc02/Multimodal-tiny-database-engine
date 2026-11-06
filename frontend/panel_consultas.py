@@ -1,9 +1,8 @@
 """Panel de consultas: editor donde el usuario escribe SQL."""
 
 import tkinter as tk
-from tkinter import font as tkfont
 from tkinter import filedialog
-import ttkbootstrap as ttk
+from tkinter import ttk
 from frontend.csv_sql import sql_para_csv
 from frontend.sql_highlight import syntax_spans
 from frontend import tema
@@ -31,8 +30,7 @@ class PanelConsultas(ttk.Frame):
         self.margen_lineas = tk.Canvas(frame_editor, width=42, bg=tema.MARGEN,
                                        highlightthickness=0)
         self.margen_lineas.pack(side="left", fill="y")
-        self._fuente_codigo = tkfont.nametofont("TkFixedFont").copy()
-        self._fuente_codigo.configure(size=12)
+        self._fuente_codigo = tema.fuentes(self)[1]
         self.editor = tk.Text(frame_editor, height=10, width=50, wrap="word",
                               font=self._fuente_codigo, spacing1=2, spacing3=2)
         self.editor.pack(side="left", fill="both", expand=True)
@@ -51,9 +49,7 @@ class PanelConsultas(ttk.Frame):
         self.editor.configure(yscrollcommand=actualizar_scroll)
         self.editor.bind("<Configure>", lambda _event: self.after_idle(self._dibujar_lineas), add=True)
 
-        self.editor.tag_configure("sql_keyword", foreground=tema.ACENTO)
-        self.editor.tag_configure("sql_string", foreground="#23714e")
-        self.editor.tag_configure("sql_comment", foreground=tema.SECUNDARIO)
+        tema.configurar_sintaxis(self.editor)
         self._resaltado_pendiente = None
         self.editor.bind("<KeyRelease>", self._programar_resaltado, add=True)
         self.editor.bind("<<Paste>>", self._programar_resaltado, add=True)
@@ -70,7 +66,7 @@ class PanelConsultas(ttk.Frame):
                                         command=self.limpiar)
         self.boton_limpiar.pack(side="right", padx=(4, 0))
 
-        self.boton_ejecutar = ttk.Button(frame_botones, text="Ejecutar", bootstyle="primary",
+        self.boton_ejecutar = ttk.Button(frame_botones, text="Ejecutar", style="Accent.TButton",
                                          command=self.ejecutar)
         self.boton_ejecutar.pack(side="left", padx=(0, 6))
 
@@ -123,7 +119,7 @@ class PanelConsultas(ttk.Frame):
 
     def _resaltar_sql(self):
         self._resaltado_pendiente = None
-        for tag in ("sql_keyword", "sql_string", "sql_comment"):
+        for tag in ("sql_keyword", "sql_string", "sql_comment", "sql_type", "sql_number"):
             self.editor.tag_remove(tag, "1.0", tk.END)
         text = self.editor.get("1.0", "end-1c")
         for kind, start, end in syntax_spans(text):

@@ -1,9 +1,7 @@
 """Ventana principal del frontend con los 4 paneles requeridos."""
 
 import tkinter as tk
-from tkinter import font as tkfont
-import ttkbootstrap as ttk
-from tkinter import ttk as ttk_classic # Importamos el ttk clásico para solucionar el error del PanedWindow
+from tkinter import ttk
 
 from frontend.motor import PROJECT_DIR, Motor
 from frontend.panel_archivos import PanelArchivos
@@ -14,12 +12,12 @@ from frontend.panel_mapa import PanelMapa
 from frontend import tema
 
 
-class Aplicacion(ttk.Window):
+class Aplicacion(tk.Tk):
     """Ventana principal del minigestor."""
 
     def __init__(self):
-        # Aquí defines el tema (puedes probar "darkly", "cosmo", "flatly", "cyborg", etc.)
-        super().__init__(themename="pydata-light")
+        super().__init__()
+        self.style, self.fuente_ui, self.fuente_codigo = tema.inicializar_estilos(self)
 
         self.title("MiniGestor de Base de Datos Multimodal")
         # Relativo a la pantalla: en píxeles fijos queda pequeña si el sistema escala la letra.
@@ -32,7 +30,7 @@ class Aplicacion(ttk.Window):
         # --- CREACIÓN DEL LAYOUT TIPO PGADMIN ---
 
         # 1. Contenedor principal horizontal (Usamos ttk_classic porque ttkbootstrap tiene un bug aquí)
-        self.main_paned = ttk_classic.PanedWindow(self, orient=tk.HORIZONTAL)
+        self.main_paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         self.main_paned.pack(fill=tk.BOTH, expand=True)
 
         # 2. Panel Izquierdo (Barra lateral)
@@ -44,7 +42,7 @@ class Aplicacion(ttk.Window):
         self.main_paned.add(self.workspace_frame, weight=4)
 
         # 4. Contenedor vertical para el área de trabajo (Usamos ttk_classic aquí también)
-        self.workspace_paned = ttk_classic.PanedWindow(self.workspace_frame, orient=tk.VERTICAL)
+        self.workspace_paned = ttk.PanedWindow(self.workspace_frame, orient=tk.VERTICAL)
         self.workspace_paned.pack(fill=tk.BOTH, expand=True)
 
         # 5. Zona Superior del área de trabajo (Pestañas modernas)
@@ -91,33 +89,9 @@ class Aplicacion(ttk.Window):
 
     def _aplicar_tema(self):
         """Colores del tema en lo que ttkbootstrap no estiliza: widgets tk y fondo de Treeview."""
-        fuente = tkfont.nametofont("TkDefaultFont").copy()
-        fuente.configure(size=max(11, abs(fuente.cget("size"))))
-        self._fuente_interfaz = fuente
-        alto_fila = fuente.metrics("linespace") + 8
         self.configure(background=tema.FONDO)
-        self.style.configure("TFrame", background=tema.FONDO)
-        self.style.configure("Sidebar.TFrame", background=tema.LATERAL)
-        self.style.configure("Sidebar.TLabelframe", background=tema.LATERAL, borderwidth=0)
-        self.style.configure("Sidebar.TLabelframe.Label", background=tema.LATERAL,
-                             foreground=tema.LATERAL_SECUNDARIO, padding=(10, 8))
-        self.style.configure("Sidebar.TLabel", background=tema.LATERAL, foreground=tema.LATERAL_SECUNDARIO)
-        self.style.configure("TLabel", background=tema.FONDO, foreground=tema.TEXTO)
-        self.style.configure("TNotebook", background=tema.FONDO, borderwidth=0)
-        self.style.configure("TNotebook.Tab", padding=(16, 8), background=tema.FONDO,
-                             foreground=tema.SECUNDARIO, borderwidth=0, font=fuente)
-        self.style.map("TNotebook.Tab", background=[("selected", tema.SUPERFICIE)],
-                       foreground=[("selected", tema.ACENTO)])
-        self.style.configure("primary.TButton", background=tema.ACENTO, foreground="#ffffff", padding=(12, 6))
-        self.style.configure("Treeview", background=tema.SUPERFICIE,
-                             fieldbackground=tema.SUPERFICIE, foreground=tema.TEXTO, rowheight=alto_fila,
-                             font=fuente)
-        self.style.map("Treeview", background=[("selected", tema.SELECCION)],
-                       foreground=[("selected", tema.TEXTO)])
-        self.style.configure("Treeview.Heading", background=tema.ENCABEZADO,
-                             foreground=tema.TEXTO, padding=(6, 5))
         self.panel_archivos.lista.configure(bg=tema.LATERAL, fg=tema.LATERAL_TEXTO,
-                                           font=fuente,
+                                           font=self.fuente_ui,
                                            selectbackground=tema.LATERAL_SELECCION,
                                            selectforeground=tema.LATERAL_TEXTO,
                                            relief="flat", highlightthickness=0, borderwidth=0)
@@ -140,6 +114,8 @@ class Aplicacion(ttk.Window):
 
     def _on_ejecutar(self, sql):
         """Callback cuando el usuario presiona Ejecutar."""
+        self.panel_resultados.mensaje.configure(text="Ejecutando consulta…", style="TLabel")
+        self.update_idletasks()
         resultado = self.motor.ejecutar(sql)
 
         if resultado.tiene_error:

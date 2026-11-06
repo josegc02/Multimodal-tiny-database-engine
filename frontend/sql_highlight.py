@@ -3,7 +3,8 @@
 import re
 
 
-_TOKEN = re.compile(r"--[^\n]*|/\*[\s\S]*?\*/|'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|[A-Za-z_][A-Za-z_0-9$]*")
+_TOKEN = re.compile(r"--[^\n]*|/\*[\s\S]*?(?:\*/|\Z)|'(?:''|[^'])*(?:'|\Z)|\"(?:\"\"|[^\"])*(?:\"|\Z)|[A-Za-z_][A-Za-z_0-9$]*|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b")
+_TYPES = frozenset("INT INTEGER BIGINT FLOAT DOUBLE REAL VARCHAR CHAR TEXT BOOLEAN DATE TIMESTAMP POINT IMAGE AUDIO".split())
 _KEYWORDS = frozenset("""
 SELECT FROM WHERE AND OR NOT IN IS NULL LIKE BETWEEN EXISTS AS DISTINCT ALL
 INSERT INTO VALUES UPDATE SET DELETE CREATE TABLE INDEX ON USING DROP ALTER
@@ -32,6 +33,10 @@ def syntax_spans(text):
             kind = "comment"
         elif token.startswith("'"):
             kind = "string"
+        elif token[0].isdigit():
+            kind = "number"
+        elif token.upper() in _TYPES:
+            kind = "type"
         elif token.upper() in _KEYWORDS:
             kind = "keyword"
         else:

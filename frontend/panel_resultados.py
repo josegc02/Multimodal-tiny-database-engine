@@ -27,7 +27,7 @@ class PanelResultados(ttk.Frame):
     def _construir(self):
         # Estilo monoespaciado para el QUERY PLAN: conserva la sangría del árbol.
         style = ttk.Style(self)
-        style.configure("Plan.Treeview", font=("Consolas", 10))
+        style.configure("Plan.Treeview", font=tema.fuentes(self)[1])
 
         # Treeview con scroll vertical y horizontal
         frame = ttk.Frame(self)
@@ -64,6 +64,7 @@ class PanelResultados(ttk.Frame):
         for item in self.tree.get_children():
             self.tree.delete(item)
         self.mensaje.config(text="Sin resultados")
+        self.mensaje.configure(style="TLabel")
         self.vacio.configure(text="Ejecuta una consulta para ver los resultados")
         self.vacio.place(relx=0.5, rely=0.5, anchor="center")
 
@@ -86,20 +87,23 @@ class PanelResultados(ttk.Frame):
         self.tree.configure(style="Plan.Treeview" if es_plan else "Treeview")
         for i, col in enumerate(columnas):
             # Números a la derecha para comparar magnitudes, texto a la izquierda.
-            alineacion = "e" if es_numerica(fila[i] for fila in filas) else "w"
+            numerica = es_numerica(fila[i] for fila in filas)
+            alineacion = "e" if numerica else "w"
             self.tree.heading(col, text=col, anchor=alineacion)
             if es_plan:
                 # Ancho según la línea más larga para que no se corte el plan.
                 largo = max((len(str(fila[0])) for fila in filas), default=40)
                 self.tree.column(col, width=max(400, largo * 8), stretch=True, anchor="w")
             else:
-                self.tree.column(col, width=100, anchor=alineacion)
+                self.tree.column(col, width=120 if numerica else 220, minwidth=90,
+                                 stretch=not numerica, anchor=alineacion)
 
         for i, fila in enumerate(filas):
             self.tree.insert("", tk.END, values=tuple(fila), tags=("alterna",) if i % 2 else ())
 
         n = len(filas)
         self.mensaje.config(text=f"{n} fila(s)")
+        self.mensaje.configure(style="StatusOk.TLabel")
 
     def mostrar_mensaje(self, texto):
         """Muestra un mensaje en lugar de una tabla.
@@ -108,10 +112,12 @@ class PanelResultados(ttk.Frame):
         """
         self.limpiar()
         self.mensaje.config(text=texto)
+        self.mensaje.configure(style="StatusOk.TLabel")
         self.vacio.configure(text=texto)
 
     def mostrar_error(self, texto):
         """Muestra un mensaje de error."""
         self.limpiar()
         self.mensaje.config(text=f"Error: {texto}")
+        self.mensaje.configure(style="StatusError.TLabel")
         self.vacio.configure(text="No se pudo ejecutar la consulta")
