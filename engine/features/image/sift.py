@@ -31,10 +31,47 @@ class SIFTExtractor(BaseFeatureExtractor):
             contrastThreshold=contrast_threshold
         )
         self.image_size = image_size
+        self.n_features = n_features
     
     def get_descriptor_dim(self) -> int:
         return self.DESCRIPTOR_DIM
     
+    # Umbrales de contraste que se prueban, en orden, para imágenes con pocos puntos clave.
+    RETRY_CONTRAST = (0.01, 0.0)
+
+    def _load(self, image: Union[str, Path, np.ndarray]) -> np.ndarray:
+        """Imagen en escala de grises con el tamaño normalizado."""
+        if isinstance(image, (str, Path)):
+            img_path = Path(image)
+            if not img_path.exists():
+                raise FileNotFoundError(f"Imagen no encontrada: {img_path}")
+            img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
+        else:
+            img = image
+            if img is not None and len(img.shape) == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        if img is None:
+            raise ValueError("No se pudo cargar la imagen")
+        return cv2.resize(img, self.image_size, interpolation=cv2.INTER_AREA)
+
+    def extract_descriptors(self, image: Union[str, Path, np.ndarray]) -> np.ndarray:
+        """
+        Descriptores locales SIFT de la imagen: matriz (N, 128), uno por punto clave.
+
+        Si no hay puntos clave, se reintenta con umbrales de contraste más bajos.
+        Una imagen sin ningún punto (por ejemplo, de un solo color) devuelve (0, 128).
+        """
+        img = self._load(image)
+        _, descriptors = self.sift.detectAndCompute(img, None)
+        for threshold in self.RETRY_CONTRAST:
+            if descriptors is not None and len(descriptors):
+                break
+            retry = cv2.SIFT_create(nfeatures=self.n_features, contrastThreshold=threshold)
+            _, descriptors = retry.detectAndCompute(img, None)
+        if descriptors is None:
+            return np.empty((0, self.DESCRIPTOR_DIM), dtype=np.float32)
+        return descriptors.astype(np.float32)
+
     def extract(self, image: Union[str, Path, np.ndarray]) -> np.ndarray:
         """
         Extrae descriptores SIFT y retorna el vector promedio (128D).

@@ -48,3 +48,36 @@ class TestKMeans:
             
             km_loaded = KMeans.load(str(path), k=3)
             np.testing.assert_array_almost_equal(km.centroids, km_loaded.centroids)
+
+class TestScalableKMeans:
+    def test_blocks_give_the_same_labels_as_the_exact_assignment(self):
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(1000, 16))
+        km = KMeans(k=12, random_state=1, batch_size=37).fit(X)
+        exact = np.argmin(np.linalg.norm(X[:, None] - km.centroids[None], axis=2), axis=1)
+        np.testing.assert_array_equal(km.predict(X), exact)
+
+    def test_centroids_are_the_mean_of_their_cluster(self):
+        X = np.random.default_rng(3).normal(size=(500, 4))
+        km = KMeans(k=5, random_state=0, max_iter=300, tol=0).fit(X)
+        labels = km.predict(X)
+        for i in range(5):
+            np.testing.assert_allclose(km.centroids[i], X[labels == i].mean(axis=0), atol=1e-9)
+
+    def test_same_seed_same_vocabulary(self):
+        X = np.random.default_rng(4).normal(size=(300, 8))
+        np.testing.assert_array_equal(KMeans(k=6, random_state=9).fit(X).centroids,
+                                      KMeans(k=6, random_state=9).fit(X).centroids)
+
+    def test_trains_many_sift_like_descriptors(self):
+        X = np.random.default_rng(5).random((20_000, 128)).astype(np.float32)
+        km = KMeans(k=64, max_iter=3, random_state=0).fit(X)
+        assert km.centroids.shape == (64, 128)
+
+    def test_invalid_input(self):
+        with pytest.raises(ValueError):
+            KMeans(k=5).fit(np.zeros((3, 2)))
+        with pytest.raises(ValueError):
+            KMeans(k=0)
+        with pytest.raises(ValueError):
+            KMeans(k=2).predict(np.zeros((1, 2)))

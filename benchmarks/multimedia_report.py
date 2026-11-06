@@ -10,8 +10,13 @@ def write_report(output: Path):
         rows = list(csv.DictReader(stream))
     if not rows:
         raise ValueError("No hay mediciones")
+    features_path = output / "features.json"
+    features = (json.loads(features_path.read_text(encoding="utf-8"))["features"]
+                if features_path.is_file() else "sift-mean")
+    description = ("Los vectores son histogramas Bag of Visual Words (K=256, TF-IDF) de los puntos SIFT "
+                   "de imágenes COCO." if features == "bovw" else "Los vectores son promedios SIFT de imágenes COCO.")
     lines = ["# Comparación experimental multimedia (#59)", "",
-             "Los vectores son promedios SIFT de imágenes COCO. Cada configuración usa el mismo corpus y "
+             description + " Cada configuración usa el mismo corpus y "
              "las mismas consultas; el vector de la consulta se excluye de los resultados. "
              "Recall@10 compara los diez IDs recuperados con los diez vecinos exactos bajo la misma métrica. "
              "No mide relevancia semántica por categoría.", "",
@@ -21,8 +26,12 @@ def write_report(output: Path):
     if counts_path.is_file():
         counts = json.loads(counts_path.read_text(encoding="utf-8"))
         details = ", ".join(f"{size}: {count}" for size, count in counts.items())
-        lines[2] += (" Las imágenes sin puntos SIFT usan un histograma gris de 128 dimensiones "
-                     f"escalado al tamaño mediano de los vectores SIFT; casos por tamaño: {details}.")
+        if features == "bovw":
+            lines[2] += (" Las imágenes sin puntos SIFT tienen el vector nulo: se excluyen de las corridas "
+                         f"con coseno; casos por tamaño: {details}.")
+        else:
+            lines[2] += (" Las imágenes sin puntos SIFT usan un histograma gris de 128 dimensiones "
+                         f"escalado al tamaño mediano de los vectores SIFT; casos por tamaño: {details}.")
     for row in sorted(rows, key=lambda r: (int(r["size"]), r["metric"], r["technique"])):
         lines.append(f'| {row["size"]} | {row["metric"]} | {row["technique"]} | '
                      f'{float(row["build_seconds"]):.3f} | '

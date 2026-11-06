@@ -37,9 +37,10 @@ class TestBoVWExtractor:
         idf = self.bovw.compute_idf(histograms)
         
         # Palabra 0 aparece en 2 docs, Palabra 1 en 2 docs, Palabra 2 en 0 docs
-        # IDF = log((N+1)/df) = log(4/df)
-        assert idf[0] == pytest.approx(np.log(4/2))
-        assert idf[2] == pytest.approx(np.log(4/1)) # df se ajusta a 1 mínimo
+        # IDF = log10(N/df) (clase 11); una palabra que no aparece pesa 0
+        assert idf[0] == pytest.approx(np.log10(3/2))
+        assert idf[1] == pytest.approx(np.log10(3/2))
+        assert idf[2] == 0
 
     def test_apply_tfidf_normalization(self):
         """Prueba que TF-IDF normaliza el vector a norma 1."""

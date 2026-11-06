@@ -37,6 +37,31 @@ class MFCCExtractor(BaseFeatureExtractor):
 
         return y
 
+    def _load(self, audio: Union[str, Path, np.ndarray]) -> np.ndarray:
+        if isinstance(audio, (str, Path)):
+            audio_path = Path(audio)
+            if not audio_path.exists():
+                raise FileNotFoundError(f"Audio no encontrado: {audio_path}")
+            y, _ = librosa.load(str(audio_path), sr=self.sample_rate)
+        else:
+            y = np.asarray(audio, dtype=np.float32)
+        if len(y) == 0:
+            raise ValueError("El audio está vacío, no se pueden extraer MFCCs")
+        return y
+
+    def extract_frames(self, audio: Union[str, Path, np.ndarray],
+                       max_duration: float = 30.0) -> np.ndarray:
+        """
+        Descriptores locales de audio: matriz (T, n_mfcc), un vector MFCC por ventana.
+
+        A diferencia de extract(), no rellena ni promedia: cada ventana deslizante
+        es un descriptor, como los puntos clave de SIFT. Se analizan como máximo
+        `max_duration` segundos para acotar el costo con audios largos.
+        """
+        y = self._load(audio)[:int(self.sample_rate * max_duration)]
+        mfccs = librosa.feature.mfcc(y=y, sr=self.sample_rate, n_mfcc=self.n_mfcc)
+        return mfccs.T.astype(np.float32)
+
     def extract(self, audio: Union[str, Path, np.ndarray]) -> np.ndarray:
 
         # Cargar audio

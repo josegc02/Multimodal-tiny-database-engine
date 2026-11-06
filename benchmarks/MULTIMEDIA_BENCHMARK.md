@@ -1,5 +1,13 @@
 # Comparación experimental multimedia (#59)
 
+**Vectores.** Por defecto (`--features bovw`) cada imagen se representa con
+ExtractFeatures del enunciado: sus puntos SIFT se cuantizan con el vocabulario
+Bag of Visual Words de `models/bow_image_k256.npz` y el histograma se pesa con
+TF-IDF (256 dimensiones). Una imagen sin puntos SIFT queda en el vector nulo y
+se excluye de las corridas con coseno. `--features sift-mean` reproduce los
+resultados publicados en #83, que usaban el promedio SIFT (128 dimensiones);
+el resto de esta página describe esa versión.
+
 El script usa los subconjuntos de imágenes COCO de #58 y el promedio de
 descriptores SIFT de #52. La comparación cubre IVF y HNSW, distancia euclidiana
 y coseno, y los tamaños 1K, 10K y 100K. Las consultas vienen de `queries.json`
