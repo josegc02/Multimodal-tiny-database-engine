@@ -45,6 +45,32 @@ class TestMultimediaCompare(unittest.TestCase):
                             self.assertGreaterEqual(row["recall_at_10"], 0)
                             self.assertLessEqual(row["recall_at_10"], 1)
 
+    def test_cosine_skips_null_vectors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "images").mkdir()
+            names = [f"image_{i}.jpg" for i in range(24)]
+            for name in names:
+                (root / "images" / name).touch()
+            (root / "instances_subset.json").write_text(json.dumps({
+                "images": [{"id": i, "file_name": name} for i, name in enumerate(names)]
+            }), encoding="utf-8")
+            (root / "queries.json").write_text(json.dumps({"queries": [
+                {"query_file": names[i], "category_name": "test"} for i in (0, 1, 2)
+            ]}), encoding="utf-8")
+            vectors = np.random.default_rng(1).random((24, 8)).astype(np.float32)
+            vectors[[1, 5]] = 0
+            cache = root / "vectors.npz"
+            np.savez(cache, vectors=vectors, filenames=np.asarray(names), features="bovw")
+            for technique in ("IVF", "HNSW"):
+                summary, rows = run_trial(root, 24, "cosine", technique, cache, "bovw")
+                self.assertEqual((summary["excluded_vectors"], summary["skipped_queries"]), (2, 1))
+                self.assertEqual(len(rows), 2)
+                for row in rows:
+                    self.assertNotIn(names[5], row["exact_files"] + row["found_files"])
+            summary, rows = run_trial(root, 24, "euclidean", "HNSW", cache, "bovw")
+            self.assertEqual((summary["excluded_vectors"], len(rows)), (0, 3))
+
     def test_reports_use_measured_data_and_existing_images(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -22,7 +22,7 @@ class TestMultimediaPreparation(unittest.TestCase):
             cv2.imwrite(str(root / "images/blank.jpg"), blank)
             cv2.imwrite(str(root / "images/textured.jpg"), textured)
             cache = root / "vectors.npz"
-            vectors = extract_vectors(root, ["blank.jpg", "textured.jpg"], cache)
+            vectors = extract_vectors(root, ["blank.jpg", "textured.jpg"], cache, "sift-mean")
             self.assertEqual(vectors.shape, (2, 128))
             self.assertGreater(np.linalg.norm(vectors[0]), 0)
             np.testing.assert_allclose(np.linalg.norm(vectors[0]), np.linalg.norm(vectors[1]), rtol=1e-5)
@@ -39,11 +39,32 @@ class TestMultimediaPreparation(unittest.TestCase):
                 image = rng.integers(0, 256, (128, 128), dtype=np.uint8)
                 self.assertTrue(cv2.imwrite(str(root / "images" / name), image))
             cache = root / "vectors.npz"
-            vectors = extract_vectors(root, names, cache)
+            vectors = extract_vectors(root, names, cache, "sift-mean")
             direct = SIFTExtractor(n_features=500)
             for name, vector in zip(names, vectors):
                 np.testing.assert_allclose(vector, direct.extract(root / "images" / name))
             np.testing.assert_array_equal(extract_vectors(root, names, cache), vectors)
+
+    def test_bovw_vectors_follow_extract_features(self):
+        from engine.features.registry import extract_features
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "images").mkdir()
+            rng = np.random.default_rng(3)
+            cv2.imwrite(str(root / "images/textured.jpg"), rng.integers(0, 256, (128, 128), dtype=np.uint8))
+            cv2.imwrite(str(root / "images/blank.jpg"), np.zeros((128, 128), dtype=np.uint8))
+            cache = root / "vectors.npz"
+            vectors = extract_vectors(root, ["textured.jpg", "blank.jpg"], cache, "bovw")
+            self.assertEqual(vectors.shape, (2, 256))
+            np.testing.assert_allclose(vectors[0], extract_features("image", str(root / "images/textured.jpg")),
+                                       rtol=1e-5)
+            self.assertFalse(vectors[1].any())
+            with np.load(cache, allow_pickle=False) as saved:
+                self.assertEqual(str(saved["features"]), "bovw")
+                self.assertEqual(saved["empty_files"].tolist(), ["blank.jpg"])
+            with self.assertRaisesRegex(ValueError, "bovw"):
+                extract_vectors(root, ["textured.jpg", "blank.jpg"], cache, "sift-mean")
 
     def test_subset_falls_back_to_copy_if_hardlink_is_unavailable(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -1,4 +1,13 @@
-"""Carga reproducible de vectores SIFT de los subconjuntos COCO."""
+"""Carga reproducible de los vectores de los subconjuntos COCO.
+
+Dos representaciones (--features):
+- bovw (por defecto): ExtractFeatures del enunciado 2.4.1. Todos los puntos
+  SIFT de la imagen se cuantizan con el vocabulario de models/bow_image_k256.npz
+  y se pesan con TF-IDF: 256 dimensiones. Una imagen sin puntos SIFT queda en
+  el vector nulo y se registra en empty_files.
+- sift-mean: promedio de los descriptores SIFT (128 dimensiones), la versión de
+  los resultados publicados en #83; las imágenes sin puntos usan un histograma gris.
+"""
 
 import json
 import os
@@ -28,17 +37,63 @@ def load_subset(directory: Path, expected_size: int):
     return filenames, queries
 
 
-def extract_vectors(directory: Path, filenames: list[str], cache: Path) -> np.ndarray:
-    """Se extrae una vez; el mismo arreglo alimenta todas las configuraciones."""
+FEATURES = ("bovw", "sift-mean")
+
+
+def extract_vectors(directory: Path, filenames: list[str], cache: Path, features: str | None = None) -> np.ndarray:
+    """Se extrae una vez; el mismo arreglo alimenta todas las configuraciones.
+
+    Con features=None se acepta la caché tal como esté (o se extrae con bovw).
+    """
+    if features is not None and features not in FEATURES:
+        raise ValueError(f"features debe ser uno de {FEATURES}")
     if cache.is_file():
         with np.load(cache, allow_pickle=False) as saved:
             vectors = saved["vectors"]
             cached_names = saved["filenames"].tolist()
+            cached_features = str(saved["features"]) if "features" in saved else "sift-mean"
         if cached_names != filenames:
             raise ValueError("La caché no corresponde al manifiesto")
+        if features is not None and cached_features != features:
+            raise ValueError(f"La caché tiene vectores {cached_features}, no {features}")
         if vectors.ndim != 2 or vectors.shape[0] != len(filenames) or not np.isfinite(vectors).all():
             raise ValueError("Caché de vectores inválida")
         return vectors
+    if (features or "bovw") == "bovw":
+        return _extract_bovw(directory, filenames, cache)
+    return _extract_sift_mean(directory, filenames, cache)
+
+
+def _extract_bovw(directory: Path, filenames: list[str], cache: Path) -> np.ndarray:
+    import cv2
+
+    from engine.features.bow import BagOfWords
+    from engine.features.image.sift import SIFTExtractor
+    from engine.features.registry import VOCABULARY_K, vocabulary_path
+
+    vocabulary = BagOfWords.load(vocabulary_path("image", VOCABULARY_K))
+    cv2.setNumThreads(1)
+    local = threading.local()
+
+    def extract(filename):
+        if not hasattr(local, "extractor"):
+            local.extractor = SIFTExtractor(n_features=500)
+        try:
+            descriptors = local.extractor.extract_descriptors(directory / "images" / filename)
+        except ValueError as error:
+            raise ValueError(f"{filename}: {error}") from error
+        return vocabulary.transform(descriptors)
+
+    with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
+        result = np.asarray(list(pool.map(extract, filenames)), dtype=np.float32)
+    empty_files = [name for name, vector in zip(filenames, result) if not vector.any()]
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(cache, vectors=result, filenames=np.asarray(filenames), features="bovw",
+             empty_files=np.asarray(empty_files, dtype=str))
+    return result
+
+
+def _extract_sift_mean(directory: Path, filenames: list[str], cache: Path) -> np.ndarray:
     from engine.features.image.sift import SIFTExtractor
 
     import cv2
@@ -86,6 +141,6 @@ def extract_vectors(directory: Path, filenames: list[str], cache: Path) -> np.nd
                 vectors[i] = vectors[i] * scale
     result = np.asarray(vectors, dtype=np.float32)
     cache.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(cache, vectors=result, filenames=np.asarray(filenames),
+    np.savez(cache, vectors=result, filenames=np.asarray(filenames), features="sift-mean",
              fallback_files=np.asarray(fallback_files))
     return result
