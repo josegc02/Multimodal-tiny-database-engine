@@ -14,10 +14,11 @@ SELECT * FROM cuentas;
 class PanelConsultas(ttk.Frame):
     """Panel con un editor de texto para escribir SQL."""
 
-    def __init__(self, master, on_ejecutar=None, base_dir=None):
+    def __init__(self, master, on_ejecutar=None, base_dir=None, on_cambiar_tema=None):
         super().__init__(master)
         self.on_ejecutar = on_ejecutar
         self.base_dir = base_dir
+        self.on_cambiar_tema = on_cambiar_tema
         self.obtener_tablas = set
         self.on_error = None
         self._construir()
@@ -64,6 +65,8 @@ class PanelConsultas(ttk.Frame):
 
         self.boton_limpiar = ttk.Button(frame_botones, text="Limpiar",
                                         command=self.limpiar)
+        self.boton_tema = ttk.Button(frame_botones, text="Tema claro", command=self._cambiar_tema)
+        self.boton_tema.pack(side="right", padx=(6, 0))
         self.boton_limpiar.pack(side="right", padx=(4, 0))
 
         self.boton_ejecutar = ttk.Button(frame_botones, text="Ejecutar", style="Accent.TButton",
@@ -73,7 +76,8 @@ class PanelConsultas(ttk.Frame):
         self.boton_csv = ttk.Button(frame_botones, text="Cargar CSV...",
                                     command=self.cargar_csv)
         self.boton_csv.pack(side="left")
-        ttk.Label(frame_botones, text="Ctrl + Enter", foreground=tema.SECUNDARIO).pack(side="left", padx=10)
+        self.ayuda_atajo = ttk.Label(frame_botones, text="Ctrl + Enter", foreground=tema.SECUNDARIO)
+        self.ayuda_atajo.pack(side="left", padx=10)
 
         # --- ATAJOS DE TECLADO ---
         self.editor.bind("<Control-Return>", self._atajo_ejecutar)
@@ -85,6 +89,10 @@ class PanelConsultas(ttk.Frame):
     def set_on_ejecutar(self, callback):
         self.on_ejecutar = callback
         self._actualizar_botones()
+
+    def _cambiar_tema(self):
+        if self.on_cambiar_tema is not None:
+            self.on_cambiar_tema()
 
     def _actualizar_botones(self):
         if self.on_ejecutar is None:

@@ -14,8 +14,9 @@ class PanelArchivos(ttk.Frame):
         self.refresh()
 
     def _construir(self):
-        tk.Label(self, text="EXPLORADOR", anchor="w", bg=tema.LATERAL,
-                 fg=tema.LATERAL_SECUNDARIO, padx=10, pady=8).pack(fill="x")
+        self.titulo = tk.Label(self, text="EXPLORADOR", anchor="w", bg=tema.LATERAL,
+                               fg=tema.LATERAL_SECUNDARIO, padx=10, pady=8)
+        self.titulo.pack(fill="x")
         # 1. Usamos ttk_classic aquí para evitar el bug de ttkbootstrap
         paned = ttk.PanedWindow(self, orient=tk.VERTICAL)
         paned.pack(fill="both", expand=True, padx=2, pady=2)
@@ -37,8 +38,9 @@ class PanelArchivos(ttk.Frame):
         frame_abajo = ttk.Frame(paned, style="Sidebar.TFrame")
         paned.add(frame_abajo, weight=2)
 
-        tk.Label(frame_abajo, text="PROPIEDADES / ESQUEMA", anchor="w", bg=tema.LATERAL,
-                 fg=tema.LATERAL_SECUNDARIO, padx=8, pady=8).pack(fill="x")
+        self.titulo_esquema = tk.Label(frame_abajo, text="PROPIEDADES / ESQUEMA", anchor="w", bg=tema.LATERAL,
+                                       fg=tema.LATERAL_SECUNDARIO, padx=8, pady=8)
+        self.titulo_esquema.pack(fill="x")
 
         frame_texto = ttk.Frame(frame_abajo, style="Sidebar.TFrame")
         frame_texto.pack(fill="both", expand=True, pady=2)

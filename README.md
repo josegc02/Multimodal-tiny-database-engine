@@ -55,6 +55,10 @@ Detalles en [`postgis/README.md`](postgis/README.md).
 python -m frontend.main
 ```
 
+La barra del editor incluye **Tema claro / Tema oscuro** para alternar la
+apariencia sin perder la consulta ni los resultados. La aplicación inicia en
+tema oscuro; la elección dura hasta cerrar la ventana.
+
 | Panel | Contenido |
 | :--- | :--- |
 | **Archivos** | Tablas, esquema, índices y estadísticas. |

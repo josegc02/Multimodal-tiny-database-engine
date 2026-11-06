@@ -17,6 +17,8 @@ class Aplicacion(tk.Tk):
 
     def __init__(self):
         super().__init__()
+        self.tema_actual = "oscuro"
+        tema.seleccionar_tema(self.tema_actual)
         self.style, self.fuente_ui, self.fuente_codigo = tema.inicializar_estilos(self)
 
         self.title("MiniGestor de Base de Datos Multimodal")
@@ -55,7 +57,8 @@ class Aplicacion(tk.Tk):
 
         # --- INSTANCIACIÓN DE LOS PANELES ---
         self.panel_archivos = PanelArchivos(self.sidebar_frame)
-        self.panel_consultas = PanelConsultas(self, on_ejecutar=self._on_ejecutar, base_dir=PROJECT_DIR)
+        self.panel_consultas = PanelConsultas(self, on_ejecutar=self._on_ejecutar, base_dir=PROJECT_DIR,
+                                              on_cambiar_tema=self._cambiar_tema)
         self.panel_resultados = PanelResultados(self)
         self.panel_plan = PanelPlanEjecucion(self)
 
@@ -103,6 +106,23 @@ class Aplicacion(tk.Tk):
                                               insertbackground=tema.TEXTO, selectbackground=tema.SELECCION,
                                               selectforeground=tema.TEXTO, relief="flat", borderwidth=0,
                                               highlightthickness=0, padx=10, pady=8)
+        for titulo in (self.panel_archivos.titulo, self.panel_archivos.titulo_esquema):
+            titulo.configure(bg=tema.LATERAL, fg=tema.LATERAL_SECUNDARIO)
+        self.panel_consultas.margen_lineas.configure(bg=tema.MARGEN)
+        self.panel_consultas.ayuda_atajo.configure(foreground=tema.SECUNDARIO)
+        tema.configurar_sintaxis(self.panel_consultas.editor)
+        self.panel_consultas._dibujar_lineas()
+        self.panel_resultados.tree.tag_configure("alterna", background=tema.FILA_ALTERNA)
+        self.panel_resultados.vacio.configure(bg=tema.SUPERFICIE, fg=tema.SECUNDARIO)
+        self.panel_mapa.btn_centrar.configure(bg=tema.SUPERFICIE, fg=tema.ACENTO,
+                                              activebackground=tema.SELECCION, activeforeground=tema.ACENTO)
+        self.panel_consultas.boton_tema.configure(text="Tema oscuro" if self.tema_actual == "claro" else "Tema claro")
+
+    def _cambiar_tema(self):
+        self.tema_actual = "claro" if self.tema_actual == "oscuro" else "oscuro"
+        tema.seleccionar_tema(self.tema_actual)
+        self.style, self.fuente_ui, self.fuente_codigo = tema.inicializar_estilos(self)
+        self._aplicar_tema()
 
     def _on_cerrar(self):
         """Cierra los storages antes de salir."""

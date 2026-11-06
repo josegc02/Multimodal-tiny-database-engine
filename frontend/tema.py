@@ -13,6 +13,17 @@ TOKENS = {
     "keyword": "#8bbdff", "string": "#a6d79d", "type": "#6fdbc9",
     "comment": "#a2b1c2", "number": "#e7bb87",
 }
+TOKENS_OSCURO = TOKENS.copy()
+TOKENS_CLARO = {
+    "canvas": "#e5ebf2", "sidebar": "#dce5ef", "panel": "#f5f8fc",
+    "editor": "#f6f8fb", "header": "#d2deeb", "border": "#b3c2d3",
+    "text": "#1c2d40", "muted": "#4b6178", "accent": "#145ba8",
+    "button": "#175fa6", "button_hover": "#124c86", "selection": "#bed7f1",
+    "alternate": "#edf3f9", "gutter": "#edf2f7", "success": "#176437",
+    "error": "#a62532", "warning": "#825700", "focus": "#145ba8",
+    "keyword": "#145ba8", "string": "#216c3b", "type": "#075f6d",
+    "comment": "#526a5d", "number": "#8d4d08",
+}
 FUENTES = {
     "ui": ("Segoe UI" if sys.platform == "win32" else "Helvetica Neue" if sys.platform == "darwin" else "Inter", 10),
     "codigo": ("Consolas" if sys.platform == "win32" else "JetBrains Mono", 11),
@@ -28,6 +39,21 @@ ENCABEZADO = TOKENS["header"]
 ACENTO = TOKENS["accent"]
 FILA_ALTERNA = TOKENS["alternate"]
 MARGEN = TOKENS["gutter"]
+
+
+def seleccionar_tema(nombre):
+    """Actualiza los tokens compartidos para la ventana activa."""
+    if nombre not in ("oscuro", "claro"):
+        raise ValueError(f"Tema desconocido: {nombre}")
+    TOKENS.clear()
+    TOKENS.update(TOKENS_CLARO if nombre == "claro" else TOKENS_OSCURO)
+    equivalencias = {
+        "FONDO": "canvas", "LATERAL": "sidebar", "LATERAL_TEXTO": "text", "TEXTO": "text",
+        "LATERAL_SECUNDARIO": "muted", "SECUNDARIO": "muted", "LATERAL_SELECCION": "selection",
+        "SELECCION": "selection", "SUPERFICIE": "editor", "ENCABEZADO": "header",
+        "ACENTO": "accent", "FILA_ALTERNA": "alternate", "MARGEN": "gutter",
+    }
+    globals().update({nombre: TOKENS[token] for nombre, token in equivalencias.items()})
 
 
 def fuentes(master):
