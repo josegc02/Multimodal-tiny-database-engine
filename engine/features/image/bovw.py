@@ -1,13 +1,17 @@
 """
 Bag of Visual Words (BoVW) extractor.
 Convierte imágenes en vectores de dimensión fija (K) usando un vocabulario visual
-(codebook) y ponderación TF-IDF.
+(codebook) y ponderación TF-IDF. Las fórmulas están en engine.features.bow, que
+también sirve para Bag of Audio Words.
 """
 
-import cv2
-import numpy as np
 from pathlib import Path
-from typing import Union, Optional, List
+from typing import List, Optional, Union
+
+import numpy as np
+
+from engine.features.bow import BagOfWords, idf_from, tf_idf
+from engine.features.image.sift import SIFTExtractor
 
 
 class BoVWExtractor:
@@ -19,20 +23,25 @@ class BoVWExtractor:
         """
         Args:
             k: Número de palabras visuales (centroides).
-            codebook_path: Ruta al archivo .npy con los centroides entrenados.
+            codebook_path: Ruta al archivo .npy con los centroides o al .npz de BagOfWords.
         """
         self.k = k
         self.centroids = None
         self.idf = None
-        
+        self._sift = None
+
         if codebook_path:
             self.load_codebook(codebook_path)
 
     # --- Persistencia del Codebook ---
 
     def load_codebook(self, path: Union[str, Path]) -> None:
-        """Carga los centroides (vocabulario visual) desde un archivo .npy."""
-        self.centroids = np.load(str(path))
+        """Carga los centroides (.npy) o el vocabulario completo con su IDF (.npz)."""
+        if str(path).endswith(".npz"):
+            bow = BagOfWords.load(path)
+            self.centroids, self.idf = bow.centroids, bow.idf
+        else:
+            self.centroids = np.load(str(path))
         if self.centroids.shape[0] != self.k:
             raise ValueError(f"El codebook tiene {self.centroids.shape[0]} centroides, se esperaban {self.k}")
 
@@ -45,22 +54,17 @@ class BoVWExtractor:
     # --- Extracción de SIFT crudo ---
 
     def _extract_sift_descriptors(self, image: Union[str, Path, np.ndarray]) -> np.ndarray:
-        """Extrae los descriptores SIFT crudos (sin promediar) de una imagen."""
-        if isinstance(image, (str, Path)):
-            img = cv2.imread(str(image), cv2.IMREAD_GRAYSCALE)
-        else:
-            img = image
-            if len(img.shape) == 3:
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        if img is None:
-            raise ValueError("No se pudo cargar la imagen")
-
-        sift = cv2.SIFT_create()
-        _, descriptors = sift.detectAndCompute(img, None)
-        return descriptors  # Retorna array de forma (N, 128)
+        """Extrae los descriptores SIFT crudos (sin promediar) de una imagen: (N, 128)."""
+        if self._sift is None:
+            self._sift = SIFTExtractor()
+        return self._sift.extract_descriptors(image)
 
     # --- Pipeline BoVW ---
+
+    def _bow(self) -> BagOfWords:
+        if self.centroids is None:
+            raise ValueError("No hay codebook cargado")
+        return BagOfWords(self.centroids, self.idf)
 
     def compute_histogram(self, descriptors: np.ndarray) -> np.ndarray:
         """
@@ -68,56 +72,22 @@ class BoVWExtractor:
         """
         if descriptors is None or len(descriptors) == 0:
             return np.zeros(self.k, dtype=float)
-        
-        # Calcular distancia euclidiana entre cada descriptor y cada centroide
-        # descriptors: (N, 128), centroids: (K, 128) -> distances: (N, K)
-        distances = np.linalg.norm(descriptors[:, np.newaxis] - self.centroids, axis=2)
-        labels = np.argmin(distances, axis=1)
-        
-        # Contar frecuencias
-        histogram, _ = np.histogram(labels, bins=np.arange(self.k + 1))
-        return histogram.astype(float)
+        return self._bow().histogram(descriptors)
 
     def compute_idf(self, histograms: List[np.ndarray]) -> np.ndarray:
         """
-        Calcula el Inverse Document Frequency (IDF) a partir de una lista de histogramas
-        (uno por imagen en el corpus de entrenamiento).
+        IDF = log10(N / df) a partir de los histogramas del corpus de entrenamiento.
         """
-        N = len(histograms)
-        if N == 0:
-            raise ValueError("Se necesita al menos un histograma para calcular IDF")
-        
-        # df: document frequency (número de documentos donde la palabra aparece al menos una vez)
-        df = np.sum(np.array(histograms) > 0, axis=0)
-        df = np.maximum(df, 1)  # Evitar división por cero
-        
-        # Fórmula IDF suavizada
-        self.idf = np.log((N + 1) / df)
+        self.idf = idf_from(histograms)
         return self.idf
 
     def apply_tfidf(self, histogram: np.ndarray) -> np.ndarray:
         """
-        Aplica la ponderación TF-IDF y normaliza el vector resultante (L2).
+        Aplica (1 + log10 tf) · idf y normaliza el vector resultante (L2).
         """
         if self.idf is None:
             raise ValueError("IDF no calculado. Ejecuta compute_idf primero.")
-        
-        total = np.sum(histogram)
-        if total == 0:
-            return np.zeros(self.k, dtype=float)
-        
-        # Term Frequency
-        tf = histogram / total
-        
-        # TF-IDF
-        tfidf = tf * self.idf
-        
-        # Normalización L2
-        norm = np.linalg.norm(tfidf)
-        if norm > 0:
-            tfidf = tfidf / norm
-            
-        return tfidf
+        return tf_idf(histogram, self.idf)
 
     def extract(self, image: Union[str, Path, np.ndarray]) -> np.ndarray:
         """
