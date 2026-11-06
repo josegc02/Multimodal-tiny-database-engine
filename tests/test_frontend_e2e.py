@@ -265,11 +265,14 @@ class TestVentanaTk(unittest.TestCase):
         self.assertEqual(app.bottom_notebook.select(), str(app.panel_plan))
 
     def test_widgets_tk_usan_los_colores_del_tema(self):
+        # Desde #86 el tema es ttk nativo con los tokens de frontend/tema.py:
+        # el explorador usa el color lateral y el editor y las tablas, el de superficie.
+        from frontend import tema
         app = self.app
-        fondo = app.style.colors.inputbg
-        for widget in (app.panel_archivos.lista, app.panel_archivos.texto_esquema, app.panel_consultas.editor):
-            self.assertEqual(str(widget.cget("bg")), fondo)
-        self.assertEqual(app.style.lookup("Treeview", "fieldbackground"), app.style.colors.bg)
+        for widget in (app.panel_archivos.lista, app.panel_archivos.texto_esquema):
+            self.assertEqual(str(widget.cget("bg")), tema.LATERAL)
+        self.assertEqual(str(app.panel_consultas.editor.cget("bg")), tema.SUPERFICIE)
+        self.assertEqual(app.style.lookup("Treeview", "fieldbackground"), tema.SUPERFICIE)
 
     def test_columnas_del_plan_no_cortan_sus_titulos(self):
         from tkinter import font as tkfont
@@ -279,12 +282,13 @@ class TestVentanaTk(unittest.TestCase):
         for clave in arbol["columns"]:
             self.assertGreater(arbol.column(clave, "width"), fuente.measure(arbol.heading(clave, "text")))
 
-    def test_numeros_a_la_derecha_y_texto_a_la_izquierda(self):
+    def test_numeros_centrados_y_texto_a_la_izquierda(self):
+        # Desde #88 los números se centran para separarlos del texto contiguo.
         tabla = self.ejecutar("CREATE TABLE alineada (id INT PRIMARY KEY, nombre VARCHAR(5)); "
                               "INSERT INTO alineada VALUES (1, 'a');").tree
         self.ejecutar("SELECT * FROM alineada;")
-        self.assertEqual(str(tabla.column("id", "anchor")), "e")
-        self.assertEqual(str(tabla.heading("id", "anchor")), "e")
+        self.assertEqual(str(tabla.column("id", "anchor")), "center")
+        self.assertEqual(str(tabla.heading("id", "anchor")), "center")
         self.assertEqual(str(tabla.column("nombre", "anchor")), "w")
 
     def test_deshacer_recupera_el_texto_reemplazado(self):
