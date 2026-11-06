@@ -38,6 +38,32 @@ def _computed(rows, expressions, prefix):
         yield {**row, **{f"{prefix}{i}": evaluate(expr, row) for i, expr in enumerate(expressions)}}
 
 
+def _generar_fragmento(record: dict, query: str, max_len: int = 150) -> str:
+    query_lower = query.lower()
+    for col, value in record.items():
+        if isinstance(value, str) and value:
+            value_lower = value.lower()
+            pos = value_lower.find(query_lower)
+            if pos == -1:
+                for palabra in query_lower.split():
+                    pos = value_lower.find(palabra)
+                    if pos != -1:
+                        break
+            if pos != -1:
+                inicio = max(0, pos - 50)
+                fin = min(len(value), pos + 100)
+                fragmento = value[inicio:fin]
+                if inicio > 0:
+                    fragmento = "..." + fragmento
+                if fin < len(value):
+                    fragmento = fragmento + "..."
+                return fragmento
+    for col, value in record.items():
+        if isinstance(value, str) and value:
+            return (value[:max_len] + "...") if len(value) > max_len else value
+    return ""
+
+
 class SQLExecutor:
     """SELECT es incremental; INSERT y DELETE se aplican al llamar execute().
 
@@ -174,7 +200,9 @@ class SQLExecutor:
             for rid, score in found:
                 record = binding.storage.get(rid)
                 if record is not None:
-                    rows.append({**_context(table, rid, record), SCORE_COLUMN: score})
+                    row = {**_context(table, rid, record), SCORE_COLUMN: score}
+                    row["fragmento"] = _generar_fragmento(record, query)
+                    rows.append(row)
             totals["results"] += len(rows)
         yield from rows
 

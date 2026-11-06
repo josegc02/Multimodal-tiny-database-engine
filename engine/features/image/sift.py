@@ -40,10 +40,11 @@ class SIFTExtractor(BaseFeatureExtractor):
         Extrae descriptores SIFT y retorna el vector promedio (128D).
         """
         if isinstance(image, (str, Path)):
-            img_path = Path(image)
-            if not img_path.exists():
-                raise FileNotFoundError(f"Imagen no encontrada: {img_path}")
-            img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
+            
+            image_path = Path(image)
+            if not image_path.exists():
+                raise FileNotFoundError(f"Imagen no encontrada: {image_path}")
+            img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
         else:
             img = image
             if len(img.shape) == 3:
