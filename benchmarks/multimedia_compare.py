@@ -99,11 +99,15 @@ def main(argv=None):
         parser.error("--sizes admite 1000, 10000 y 100000")
     args.output.mkdir(parents=True, exist_ok=False)
     summaries, rows = [], []
+    fallback_counts = {}
     for size in args.sizes:
         directory = args.dataset_dir / f"coco{size // 1000}k"
         filenames, _ = load_subset(directory, size)
         cache = args.output / f"vectors_{size}.npz"
         extract_vectors(directory, filenames, cache)
+        with np.load(cache, allow_pickle=False) as saved:
+            fallback_counts[str(size)] = len(saved["fallback_files"]) if "fallback_files" in saved else 0
+        (args.output / "fallback_counts.json").write_text(json.dumps(fallback_counts, indent=2), encoding="utf-8")
         for metric in METRICS:
             for technique in INDEXES:
                 request = {"directory": str(directory), "size": size, "metric": metric,

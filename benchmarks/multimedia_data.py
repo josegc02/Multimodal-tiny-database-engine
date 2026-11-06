@@ -52,14 +52,40 @@ def extract_vectors(directory: Path, filenames: list[str], cache: Path) -> np.nd
     def extract(filename):
         if not hasattr(local, "extractor"):
             local.extractor = SIFTExtractor(n_features=500)
-        vector = local.extractor.extract_to_fixed_vector(directory / "images" / filename)
+        path = directory / "images" / filename
+        try:
+            vector = local.extractor.extract_to_fixed_vector(path)
+            fallback = False
+        except ValueError as error:
+            if "No se detectaron features SIFT" not in str(error):
+                raise ValueError(f"{filename}: {error}") from error
+            # Algunas fotos COCO carecen de puntos SIFT. El histograma conserva
+            # la imagen en el corpus y proporciona un vector no nulo para coseno.
+            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                raise ValueError(f"No se pudo leer {filename}") from error
+            vector = cv2.calcHist([image], [0], None, [128], [0, 256]).ravel()
+            norm = np.linalg.norm(vector)
+            if norm == 0:
+                raise ValueError(f"Histograma vacío: {filename}") from error
+            vector = (vector / norm).astype(np.float32)
+            fallback = True
         if not np.isfinite(vector).all() or np.linalg.norm(vector) == 0:
             raise ValueError(f"Vector inválido: {filename}")
-        return vector
+        return vector, fallback
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        vectors = list(pool.map(extract, filenames))
+        extracted = list(pool.map(extract, filenames))
+    vectors = [vector for vector, _ in extracted]
+    fallback_files = [name for name, (_, fallback) in zip(filenames, extracted) if fallback]
+    if fallback_files:
+        sift_norms = [np.linalg.norm(vector) for vector, fallback in extracted if not fallback]
+        scale = float(np.median(sift_norms)) if sift_norms else 1.0
+        for i, (_, fallback) in enumerate(extracted):
+            if fallback:
+                vectors[i] = vectors[i] * scale
     result = np.asarray(vectors, dtype=np.float32)
     cache.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(cache, vectors=result, filenames=np.asarray(filenames))
+    np.savez(cache, vectors=result, filenames=np.asarray(filenames),
+             fallback_files=np.asarray(fallback_files))
     return result
