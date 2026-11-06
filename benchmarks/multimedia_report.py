@@ -1,6 +1,7 @@
 """Tabla y conclusiones derivadas únicamente de las mediciones ejecutadas."""
 
 import csv
+import json
 from pathlib import Path
 
 
@@ -16,6 +17,12 @@ def write_report(output: Path):
              "No mide relevancia semántica por categoría.", "",
              "| Imágenes | Métrica | Índice | Construcción (s) | Consulta media (ms) | Recall@10 | Pico RSS (MiB) |",
              "|---:|---|---|---:|---:|---:|---:|"]
+    counts_path = output / "fallback_counts.json"
+    if counts_path.is_file():
+        counts = json.loads(counts_path.read_text(encoding="utf-8"))
+        details = ", ".join(f"{size}: {count}" for size, count in counts.items())
+        lines[2] += (" Las imágenes sin puntos SIFT usan un histograma gris de 128 dimensiones "
+                     f"escalado al tamaño mediano de los vectores SIFT; casos por tamaño: {details}.")
     for row in sorted(rows, key=lambda r: (int(r["size"]), r["metric"], r["technique"])):
         lines.append(f'| {row["size"]} | {row["metric"]} | {row["technique"]} | '
                      f'{float(row["build_seconds"]):.3f} | '

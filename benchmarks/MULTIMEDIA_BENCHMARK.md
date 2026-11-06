@@ -4,6 +4,9 @@ El script usa los subconjuntos de imágenes COCO de #58 y el promedio de
 descriptores SIFT de #52. La comparación cubre IVF y HNSW, distancia euclidiana
 y coseno, y los tamaños 1K, 10K y 100K. Las consultas vienen de `queries.json`
 de #58; se excluye la propia imagen consultada y se buscan diez vecinos.
+Si una imagen no tiene puntos SIFT, se usa su histograma de intensidad gris
+de 128 dimensiones, escalado a la norma mediana de los vectores SIFT. La salida
+`fallback_counts.json` registra cuántas imágenes necesitaron esta alternativa.
 
 ```sh
 python -m pip install -r requirements.txt
