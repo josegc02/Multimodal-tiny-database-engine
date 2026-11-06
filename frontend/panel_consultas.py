@@ -4,7 +4,8 @@ import tkinter as tk
 from tkinter import filedialog
 import ttkbootstrap as ttk
 from frontend.csv_sql import sql_para_csv
-from frontend.sql_highlight import keyword_spans
+from frontend.sql_highlight import syntax_spans
+from frontend import tema
 
 SQL_EJEMPLO = """-- Escribe tu consulta aqui
 SELECT * FROM cuentas;
@@ -26,6 +27,9 @@ class PanelConsultas(ttk.Frame):
         frame_editor = ttk.Frame(self)
         frame_editor.pack(fill="both", expand=True, padx=4, pady=4)
 
+        self.margen_lineas = tk.Canvas(frame_editor, width=42, bg=tema.LATERAL,
+                                       highlightthickness=0)
+        self.margen_lineas.pack(side="left", fill="y")
         self.editor = tk.Text(frame_editor, height=10, width=50, wrap="word",
                               font=("Consolas", 10))
         self.editor.pack(side="left", fill="both", expand=True)
@@ -38,9 +42,15 @@ class PanelConsultas(ttk.Frame):
         scroll_y = ttk.Scrollbar(frame_editor, orient="vertical",
                                  command=self.editor.yview)
         scroll_y.pack(side="right", fill="y")
-        self.editor.configure(yscrollcommand=scroll_y.set)
+        def actualizar_scroll(first, last):
+            scroll_y.set(first, last)
+            self.after_idle(self._dibujar_lineas)
+        self.editor.configure(yscrollcommand=actualizar_scroll)
+        self.editor.bind("<Configure>", lambda _event: self.after_idle(self._dibujar_lineas), add=True)
 
-        self.editor.tag_configure("sql_keyword", foreground="#005cc5")
+        self.editor.tag_configure("sql_keyword", foreground=tema.ACENTO)
+        self.editor.tag_configure("sql_string", foreground="#23714e")
+        self.editor.tag_configure("sql_comment", foreground=tema.SECUNDARIO)
         self._resaltado_pendiente = None
         self.editor.bind("<KeyRelease>", self._programar_resaltado, add=True)
         self.editor.bind("<<Paste>>", self._programar_resaltado, add=True)
@@ -51,7 +61,7 @@ class PanelConsultas(ttk.Frame):
         self.editor.edit_reset()
 
         frame_botones = ttk.Frame(self)
-        frame_botones.pack(fill="x", padx=4, pady=(0, 4))
+        frame_botones.pack(fill="x", padx=8, pady=(2, 8))
 
         self.boton_limpiar = ttk.Button(frame_botones, text="Limpiar",
                                         command=self.limpiar)
@@ -109,11 +119,30 @@ class PanelConsultas(ttk.Frame):
 
     def _resaltar_sql(self):
         self._resaltado_pendiente = None
-        self.editor.tag_remove("sql_keyword", "1.0", tk.END)
+        for tag in ("sql_keyword", "sql_string", "sql_comment"):
+            self.editor.tag_remove(tag, "1.0", tk.END)
         text = self.editor.get("1.0", "end-1c")
-        for start, end in keyword_spans(text):
-            self.editor.tag_add("sql_keyword", f"1.0+{start}c", f"1.0+{end}c")
+        for kind, start, end in syntax_spans(text):
+            self.editor.tag_add("sql_" + kind, f"1.0+{start}c", f"1.0+{end}c")
         self.editor.tag_raise("sel")
+        self.after_idle(self._dibujar_lineas)
+
+    def _dibujar_lineas(self):
+        if not self.editor.winfo_exists():
+            return
+        self.margen_lineas.delete("all")
+        indice = self.editor.index("@0,0")
+        while True:
+            posicion = self.editor.dlineinfo(indice)
+            if posicion is None:
+                break
+            self.margen_lineas.create_text(34, posicion[1], anchor="ne",
+                                           text=indice.split(".")[0], fill=tema.SECUNDARIO,
+                                           font=self.editor.cget("font"))
+            siguiente = self.editor.index(f"{indice} + 1 line")
+            if siguiente == indice:
+                break
+            indice = siguiente
 
     def cargar_csv(self):
         path = filedialog.askopenfilename(

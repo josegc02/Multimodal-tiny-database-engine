@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk
 import tkintermapview
 import math
+from frontend import tema
 
 from frontend.mapa_datos import encuadre, seleccionar_puntos
 
@@ -29,7 +30,8 @@ class PanelMapa(ttk.Frame):
         # --- BOTÓN PARA CENTRAR LA VISTA ---
         self.btn_centrar = tk.Button(
             self, text="⦿", font=("Arial", 9, "bold"),
-            bg="#ffffff", fg="#333333", cursor="hand2", relief="raised",
+            bg=tema.SUPERFICIE, fg=tema.ACENTO, cursor="hand2", relief="flat",
+            activebackground=tema.SELECCION, activeforeground=tema.ACENTO,
             command=self._centrar_mapa
         )
         # Lo colocamos flotando en la esquina inferior derecha del mapa

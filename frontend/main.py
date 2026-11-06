@@ -11,6 +11,7 @@ from frontend.panel_consultas import PanelConsultas
 from frontend.panel_resultados import PanelResultados
 from frontend.panel_plan_ejecucion import PanelPlanEjecucion
 from frontend.panel_mapa import PanelMapa
+from frontend import tema
 
 
 class Aplicacion(ttk.Window):
@@ -89,16 +90,32 @@ class Aplicacion(ttk.Window):
 
     def _aplicar_tema(self):
         """Colores del tema en lo que ttkbootstrap no estiliza: widgets tk y fondo de Treeview."""
-        colores = self.style.colors
-        # La altura por defecto de las filas no escala con el DPI de la pantalla.
         alto_fila = tkfont.nametofont("TkDefaultFont").metrics("linespace") + 4
-        self.style.configure("Treeview", fieldbackground=colores.bg, rowheight=alto_fila)
-
-        tema = dict(bg=colores.inputbg, fg=colores.fg, selectbackground=colores.selectbg,
-                    selectforeground=colores.selectfg)
-        self.panel_archivos.lista.configure(**tema)
-        for texto in (self.panel_archivos.texto_esquema, self.panel_consultas.editor):
-            texto.configure(insertbackground=colores.fg, **tema)
+        self.configure(background=tema.FONDO)
+        self.style.configure("TFrame", background=tema.FONDO)
+        self.style.configure("TLabelframe", background=tema.LATERAL)
+        self.style.configure("TLabelframe.Label", background=tema.LATERAL, foreground=tema.TEXTO)
+        self.style.configure("TLabel", background=tema.FONDO, foreground=tema.TEXTO)
+        self.style.configure("TNotebook", background=tema.FONDO, borderwidth=0)
+        self.style.configure("TNotebook.Tab", padding=(16, 8), background=tema.LATERAL,
+                             foreground=tema.SECUNDARIO)
+        self.style.map("TNotebook.Tab", background=[("selected", tema.SUPERFICIE)],
+                       foreground=[("selected", tema.ACENTO)])
+        self.style.configure("Treeview", background=tema.SUPERFICIE,
+                             fieldbackground=tema.SUPERFICIE, foreground=tema.TEXTO, rowheight=alto_fila)
+        self.style.map("Treeview", background=[("selected", tema.SELECCION)],
+                       foreground=[("selected", tema.TEXTO)])
+        self.style.configure("Treeview.Heading", background=tema.ENCABEZADO,
+                             foreground=tema.TEXTO, padding=(6, 5))
+        self.panel_archivos.lista.configure(bg=tema.LATERAL, fg=tema.TEXTO,
+                                           selectbackground=tema.SELECCION, selectforeground=tema.TEXTO,
+                                           relief="flat", highlightthickness=0)
+        self.panel_archivos.texto_esquema.configure(bg=tema.LATERAL, fg=tema.TEXTO,
+                                                    selectbackground=tema.SELECCION,
+                                                    selectforeground=tema.TEXTO, relief="flat")
+        self.panel_consultas.editor.configure(bg=tema.SUPERFICIE, fg=tema.TEXTO,
+                                              insertbackground=tema.TEXTO, selectbackground=tema.SELECCION,
+                                              selectforeground=tema.TEXTO, relief="flat", padx=10, pady=8)
 
     def _on_cerrar(self):
         """Cierra los storages antes de salir."""

@@ -2,6 +2,7 @@
 
 import tkinter as tk
 from tkinter import ttk
+from frontend import tema
 
 
 def es_numerica(valores):
@@ -33,6 +34,7 @@ class PanelResultados(ttk.Frame):
         frame.pack(fill="both", expand=True, padx=4, pady=4)
 
         self.tree = ttk.Treeview(frame, show="headings", selectmode="browse")
+        self.tree.tag_configure("alterna", background=tema.FILA_ALTERNA)
         self.tree.pack(side="left", fill="both", expand=True)
 
         scroll_y = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
@@ -84,8 +86,8 @@ class PanelResultados(ttk.Frame):
             else:
                 self.tree.column(col, width=100, anchor=alineacion)
 
-        for fila in filas:
-            self.tree.insert("", tk.END, values=tuple(fila))
+        for i, fila in enumerate(filas):
+            self.tree.insert("", tk.END, values=tuple(fila), tags=("alterna",) if i % 2 else ())
 
         n = len(filas)
         self.mensaje.config(text=f"{n} fila(s)")

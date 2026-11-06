@@ -22,3 +22,18 @@ def keyword_spans(text):
     return [(match.start(), match.end()) for match in _TOKEN.finditer(text)
             if match[0][0].isalpha() or match[0][0] == "_"
             if match[0].upper() in _KEYWORDS]
+
+
+def syntax_spans(text):
+    """Intervalos de palabras clave, cadenas y comentarios."""
+    for match in _TOKEN.finditer(text):
+        token = match[0]
+        if token.startswith(("--", "/*")):
+            kind = "comment"
+        elif token.startswith("'"):
+            kind = "string"
+        elif token.upper() in _KEYWORDS:
+            kind = "keyword"
+        else:
+            continue
+        yield kind, match.start(), match.end()

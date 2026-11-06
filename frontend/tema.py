@@ -1,0 +1,11 @@
+"""Paleta clara del espacio de trabajo."""
+
+FONDO = "#e2e8f0"
+LATERAL = "#e8edf3"
+SUPERFICIE = "#f6f8fb"
+ENCABEZADO = "#dce5ef"
+TEXTO = "#253449"
+SECUNDARIO = "#5a6d82"
+ACENTO = "#005cc5"
+SELECCION = "#c6dcf6"
+FILA_ALTERNA = "#edf2f8"
