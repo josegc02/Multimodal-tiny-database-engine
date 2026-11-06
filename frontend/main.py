@@ -103,6 +103,7 @@ class Aplicacion(tk.Tk):
         tema.configurar_sintaxis(self.panel_consultas.editor)
         self.panel_consultas._dibujar_lineas()
         self.panel_resultados.tree.tag_configure("alterna", background=tema.FILA_ALTERNA)
+        self.panel_resultados._programar_reajuste()
         self.panel_resultados.vacio.configure(bg=tema.SUPERFICIE, fg=tema.SECUNDARIO)
         if self.panel_resultados.canvas_galeria is not None:
             self.panel_resultados.canvas_galeria.configure(background=tema.FONDO)
