@@ -1,6 +1,7 @@
 """Panel de consultas: editor donde el usuario escribe SQL."""
 
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import filedialog
 import ttkbootstrap as ttk
 from frontend.csv_sql import sql_para_csv
@@ -30,8 +31,10 @@ class PanelConsultas(ttk.Frame):
         self.margen_lineas = tk.Canvas(frame_editor, width=42, bg=tema.MARGEN,
                                        highlightthickness=0)
         self.margen_lineas.pack(side="left", fill="y")
+        self._fuente_codigo = tkfont.nametofont("TkFixedFont").copy()
+        self._fuente_codigo.configure(size=12)
         self.editor = tk.Text(frame_editor, height=10, width=50, wrap="word",
-                              font=("Consolas", 10))
+                              font=self._fuente_codigo, spacing1=2, spacing3=2)
         self.editor.pack(side="left", fill="both", expand=True)
 
         # --- CONFIGURACIÓN DE DESHACER/REHACER ---

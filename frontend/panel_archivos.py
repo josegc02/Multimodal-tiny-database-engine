@@ -1,6 +1,7 @@
 """Panel de archivos: muestra las tablas cargadas y su estructura."""
 
 import tkinter as tk
+from tkinter import font as tkfont
 import ttkbootstrap as ttk
 from tkinter import ttk as ttk_classic
 from frontend import tema
@@ -26,7 +27,7 @@ class PanelArchivos(ttk.Frame):
         paned.add(frame_arriba, weight=1)
 
         self.lista = tk.Listbox(frame_arriba, exportselection=False)
-        self.lista.pack(side="left", fill="both", expand=True)
+        self.lista.pack(side="left", fill="both", expand=True, padx=(10, 2), pady=(2, 8))
 
         scroll_lista = ttk.Scrollbar(frame_arriba, orient="vertical", command=self.lista.yview)
         scroll_lista.pack(side="right", fill="y")
@@ -44,8 +45,11 @@ class PanelArchivos(ttk.Frame):
         frame_texto = ttk.Frame(frame_abajo, style="Sidebar.TFrame")
         frame_texto.pack(fill="both", expand=True, pady=2)
 
+        self._fuente_esquema = tkfont.nametofont("TkFixedFont").copy()
+        self._fuente_esquema.configure(size=11)
         self.texto_esquema = tk.Text(frame_texto, height=10, width=30,
-                                     state="disabled", font=("Consolas", 9), wrap="word")
+                                     state="disabled", font=self._fuente_esquema, wrap="word",
+                                     spacing1=2, spacing3=2)
         self.texto_esquema.pack(side="left", fill="both", expand=True)
 
         scroll_texto = ttk.Scrollbar(frame_texto, orient="vertical", command=self.texto_esquema.yview)
@@ -91,13 +95,11 @@ class PanelArchivos(ttk.Frame):
             return
 
         lineas = [f"Tabla: {nombre}", ""]
-        lineas.append(f"Storage: {type(storage).__name__}")
+        archivos = []
         if hasattr(storage, "filepath"):
-            lineas.append(f"Archivo: {storage.filepath}")
+            archivos.append(f"Archivo: {storage.filepath}")
         elif hasattr(storage, "filepath_main"):
-            lineas.append(f"Archivo main: {storage.filepath_main}")
-            lineas.append(f"Archivo aux: {storage.filepath_aux}")
-        lineas.append("")
+            archivos.extend((f"Archivo main: {storage.filepath_main}", f"Archivo aux: {storage.filepath_aux}"))
         lineas.append("Campos:")
         for campo, tipo in zip(storage.schema.fields, storage.schema.types):
             lineas.append(f"  - {campo}: {tipo}")
@@ -137,6 +139,9 @@ class PanelArchivos(ttk.Frame):
             lineas.append("")
             lineas.append(f"Filas: {stats.rows}")
             lineas.append(f"Páginas: {stats.pages}")
+
+        lineas.extend(("", f"Storage: {type(storage).__name__}"))
+        lineas.extend(archivos)
 
         self._mostrar_esquema("\n".join(lineas))
 

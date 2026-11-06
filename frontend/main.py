@@ -91,7 +91,10 @@ class Aplicacion(ttk.Window):
 
     def _aplicar_tema(self):
         """Colores del tema en lo que ttkbootstrap no estiliza: widgets tk y fondo de Treeview."""
-        alto_fila = tkfont.nametofont("TkDefaultFont").metrics("linespace") + 4
+        fuente = tkfont.nametofont("TkDefaultFont").copy()
+        fuente.configure(size=max(11, abs(fuente.cget("size"))))
+        self._fuente_interfaz = fuente
+        alto_fila = fuente.metrics("linespace") + 8
         self.configure(background=tema.FONDO)
         self.style.configure("TFrame", background=tema.FONDO)
         self.style.configure("Sidebar.TFrame", background=tema.LATERAL)
@@ -102,17 +105,19 @@ class Aplicacion(ttk.Window):
         self.style.configure("TLabel", background=tema.FONDO, foreground=tema.TEXTO)
         self.style.configure("TNotebook", background=tema.FONDO, borderwidth=0)
         self.style.configure("TNotebook.Tab", padding=(16, 8), background=tema.FONDO,
-                             foreground=tema.SECUNDARIO, borderwidth=0)
+                             foreground=tema.SECUNDARIO, borderwidth=0, font=fuente)
         self.style.map("TNotebook.Tab", background=[("selected", tema.SUPERFICIE)],
                        foreground=[("selected", tema.ACENTO)])
         self.style.configure("primary.TButton", background=tema.ACENTO, foreground="#ffffff", padding=(12, 6))
         self.style.configure("Treeview", background=tema.SUPERFICIE,
-                             fieldbackground=tema.SUPERFICIE, foreground=tema.TEXTO, rowheight=alto_fila)
+                             fieldbackground=tema.SUPERFICIE, foreground=tema.TEXTO, rowheight=alto_fila,
+                             font=fuente)
         self.style.map("Treeview", background=[("selected", tema.SELECCION)],
                        foreground=[("selected", tema.TEXTO)])
         self.style.configure("Treeview.Heading", background=tema.ENCABEZADO,
                              foreground=tema.TEXTO, padding=(6, 5))
         self.panel_archivos.lista.configure(bg=tema.LATERAL, fg=tema.LATERAL_TEXTO,
+                                           font=fuente,
                                            selectbackground=tema.LATERAL_SELECCION,
                                            selectforeground=tema.LATERAL_TEXTO,
                                            relief="flat", highlightthickness=0, borderwidth=0)
