@@ -1,5 +1,3 @@
-"""Panel de consultas: editor donde el usuario escribe SQL."""
-
 import tkinter as tk
 from tkinter import filedialog
 import ttkbootstrap as ttk
@@ -10,7 +8,6 @@ SELECT * FROM cuentas;
 """
 
 class PanelConsultas(ttk.Frame):
-    """Panel con un editor de texto para escribir SQL."""
 
     def __init__(self, master, on_ejecutar=None, base_dir=None):
         super().__init__(master)
@@ -18,6 +15,7 @@ class PanelConsultas(ttk.Frame):
         self.base_dir = base_dir
         self.obtener_tablas = set
         self.on_error = None
+        self.archivo_consulta = None
         self._construir()
         self._actualizar_botones()
 
@@ -29,7 +27,6 @@ class PanelConsultas(ttk.Frame):
                               font=("Consolas", 10))
         self.editor.pack(side="left", fill="both", expand=True)
 
-        # --- CONFIGURACIÓN DE DESHACER/REHACER ---
         self.editor.config(undo=True, maxundo=-1, autoseparators=True)
         self.editor.bind("<Control-z>", self._deshacer)
         self.editor.bind("<Control-y>", self._rehacer)
@@ -57,7 +54,16 @@ class PanelConsultas(ttk.Frame):
                                     command=self.cargar_csv)
         self.boton_csv.pack(side="left")
 
-        # --- ATAJOS DE TECLADO ---
+        frame_archivo = ttk.Frame(frame_botones)
+        frame_archivo.pack(side="left", padx=(10, 0))
+
+        self.entry_archivo = ttk.Entry(frame_archivo, width=40)
+        self.entry_archivo.pack(side="left", padx=(0, 4))
+
+        self.boton_archivo = ttk.Button(frame_archivo, text="Archivo...",
+                                        command=self._seleccionar_archivo_consulta)
+        self.boton_archivo.pack(side="left")
+
         self.editor.bind("<Control-Return>", self._atajo_ejecutar)
         self.editor.bind("<F5>", self._atajo_ejecutar)
         self.editor.bind("<Control-l>", self._seleccionar_linea)
@@ -75,7 +81,6 @@ class PanelConsultas(ttk.Frame):
             self.boton_ejecutar.state(["!disabled"])
 
     def get_sql(self) -> str:
-        """Obtiene el SQL. Si hay texto seleccionado, devuelve solo esa selección."""
         try:
             seleccion = self.editor.get("sel.first", "sel.last").strip()
             if seleccion:
@@ -85,7 +90,6 @@ class PanelConsultas(ttk.Frame):
         return self.editor.get("1.0", tk.END).strip()
 
     def set_sql(self, sql: str):
-        # Un solo paso de deshacer: Ctrl+Z recupera el texto que había.
         self.editor.edit_separator()
         self.editor.config(autoseparators=False)
         self.editor.delete("1.0", tk.END)
@@ -108,8 +112,51 @@ class PanelConsultas(ttk.Frame):
         self.set_sql(sql)
         self.editor.focus_set()
 
+    def _seleccionar_archivo_consulta(self):
+        tipos = [
+            ("Imagenes", "*.jpg *.jpeg *.png *.bmp *.gif"),
+            ("Audio", "*.mp3 *.wav *.ogg *.flac"),
+            ("Todos los archivos multimedia", "*.jpg *.jpeg *.png *.bmp *.gif *.mp3 *.wav *.ogg *.flac"),
+            ("Todos los archivos", "*.*")
+        ]
+        ruta = filedialog.askopenfilename(
+            title="Seleccionar archivo de consulta",
+            initialdir=self.base_dir,
+            filetypes=tipos
+        )
+        if ruta:
+            self.archivo_consulta = ruta
+            self.entry_archivo.delete(0, tk.END)
+            self.entry_archivo.insert(0, ruta)
+            self._insertar_plantilla_similar_to(ruta)
+
+    def _insertar_plantilla_similar_to(self, ruta_archivo):
+        extension = ruta_archivo.lower().split('.')[-1]
+        if extension in ['jpg', 'jpeg', 'png', 'bmp', 'gif']:
+            tabla = "imagenes"
+            metrica = "cosine"
+        elif extension in ['mp3', 'wav', 'ogg', 'flac']:
+            tabla = "canciones"
+            metrica = "euclidean"
+        else:
+            tabla = "datos"
+            metrica = "cosine"
+        
+        plantilla = (f"SELECT *, SIMILARITY_SCORE() as score\n"
+                     f"FROM {tabla}\n"
+                     f"WHERE SIMILAR_TO('{ruta_archivo}', k=10)\n"
+                     f"  USING HNSW WITH METRIC={metrica}\n"
+                     f"ORDER BY score DESC;")
+        self.set_sql(plantilla)
+        self.editor.focus_set()
+
+    def limpiar_archivo_consulta(self):
+        self.archivo_consulta = None
+        self.entry_archivo.delete(0, tk.END)
+
     def limpiar(self):
         self.set_sql("")
+        self.limpiar_archivo_consulta()
 
     def _deshacer(self, event):
         try:
@@ -141,16 +188,12 @@ class PanelConsultas(ttk.Frame):
     def _mover_linea_arriba(self, event):
         indice = self.editor.index("insert")
         num_linea = int(indice.split(".")[0])
-
         if num_linea <= 1:
             return "break"
-
         texto_actual = self.editor.get(f"{num_linea}.0", f"{num_linea}.end")
         texto_arriba = self.editor.get(f"{num_linea-1}.0", f"{num_linea-1}.end")
-
         self.editor.replace(f"{num_linea-1}.0", f"{num_linea-1}.end", texto_actual)
         self.editor.replace(f"{num_linea}.0", f"{num_linea}.end", texto_arriba)
-
         columna = len(texto_actual)
         self.editor.mark_set("insert", f"{num_linea-1}.{columna}")
         return "break"
@@ -158,17 +201,13 @@ class PanelConsultas(ttk.Frame):
     def _mover_linea_abajo(self, event):
         indice = self.editor.index("insert")
         num_linea = int(indice.split(".")[0])
-
         total_lineas = int(self.editor.index("end-1c").split(".")[0])
         if num_linea >= total_lineas:
             return "break"
-
         texto_actual = self.editor.get(f"{num_linea}.0", f"{num_linea}.end")
         texto_abajo = self.editor.get(f"{num_linea+1}.0", f"{num_linea+1}.end")
-
         self.editor.replace(f"{num_linea+1}.0", f"{num_linea+1}.end", texto_actual)
         self.editor.replace(f"{num_linea}.0", f"{num_linea}.end", texto_abajo)
-
         columna = len(texto_actual)
         self.editor.mark_set("insert", f"{num_linea+1}.{columna}")
         return "break"
@@ -179,4 +218,7 @@ class PanelConsultas(ttk.Frame):
         sql = self.get_sql()
         if not sql:
             return
-        self.on_ejecutar(sql)
+        if self.archivo_consulta:
+            self.on_ejecutar(sql, archivo_consulta=self.archivo_consulta)
+        else:
+            self.on_ejecutar(sql)
