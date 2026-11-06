@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import filedialog
 import ttkbootstrap as ttk
 from frontend.csv_sql import sql_para_csv
+from frontend.sql_highlight import keyword_spans
 
 SQL_EJEMPLO = """-- Escribe tu consulta aqui
 SELECT * FROM cuentas;
@@ -39,7 +40,14 @@ class PanelConsultas(ttk.Frame):
         scroll_y.pack(side="right", fill="y")
         self.editor.configure(yscrollcommand=scroll_y.set)
 
+        self.editor.tag_configure("sql_keyword", foreground="#268bd2")
+        self._resaltado_pendiente = None
+        self.editor.bind("<KeyRelease>", self._programar_resaltado, add=True)
+        self.editor.bind("<<Paste>>", self._programar_resaltado, add=True)
+        self.editor.bind("<<Cut>>", self._programar_resaltado, add=True)
+
         self.editor.insert("1.0", SQL_EJEMPLO)
+        self._resaltar_sql()
         self.editor.edit_reset()
 
         frame_botones = ttk.Frame(self)
@@ -90,8 +98,22 @@ class PanelConsultas(ttk.Frame):
         self.editor.config(autoseparators=False)
         self.editor.delete("1.0", tk.END)
         self.editor.insert("1.0", sql)
+        self._resaltar_sql()
         self.editor.config(autoseparators=True)
         self.editor.edit_separator()
+
+    def _programar_resaltado(self, _event=None):
+        if self._resaltado_pendiente is not None:
+            self.after_cancel(self._resaltado_pendiente)
+        self._resaltado_pendiente = self.after(35, self._resaltar_sql)
+
+    def _resaltar_sql(self):
+        self._resaltado_pendiente = None
+        self.editor.tag_remove("sql_keyword", "1.0", tk.END)
+        text = self.editor.get("1.0", "end-1c")
+        for start, end in keyword_spans(text):
+            self.editor.tag_add("sql_keyword", f"1.0+{start}c", f"1.0+{end}c")
+        self.editor.tag_raise("sel")
 
     def cargar_csv(self):
         path = filedialog.askopenfilename(
