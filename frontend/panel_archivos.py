@@ -1,29 +1,32 @@
 """Panel de archivos: muestra las tablas cargadas y su estructura."""
 
 import tkinter as tk
-import ttkbootstrap as ttk
-from tkinter import ttk as ttk_classic
+from tkinter import ttk
+from frontend import tema
 
-class PanelArchivos(ttk.LabelFrame):
+class PanelArchivos(ttk.Frame):
     """Panel que lista las tablas y sus esquemas."""
 
     def __init__(self, master, catalog=None):
-        super().__init__(master, text="Explorador de Objetos")
+        super().__init__(master, style="Sidebar.TFrame")
         self.catalog = catalog
         self._construir()
         self.refresh()
 
     def _construir(self):
+        self.titulo = tk.Label(self, text="EXPLORADOR", anchor="w", bg=tema.LATERAL,
+                               fg=tema.LATERAL_SECUNDARIO, padx=10, pady=8)
+        self.titulo.pack(fill="x")
         # 1. Usamos ttk_classic aquí para evitar el bug de ttkbootstrap
-        paned = ttk_classic.PanedWindow(self, orient=tk.VERTICAL)
+        paned = ttk.PanedWindow(self, orient=tk.VERTICAL)
         paned.pack(fill="both", expand=True, padx=2, pady=2)
 
         # --- Parte Superior: Lista de tablas ---
-        frame_arriba = ttk.Frame(paned)
+        frame_arriba = ttk.Frame(paned, style="Sidebar.TFrame")
         paned.add(frame_arriba, weight=1)
 
         self.lista = tk.Listbox(frame_arriba, exportselection=False)
-        self.lista.pack(side="left", fill="both", expand=True)
+        self.lista.pack(side="left", fill="both", expand=True, padx=(10, 2), pady=(2, 8))
 
         scroll_lista = ttk.Scrollbar(frame_arriba, orient="vertical", command=self.lista.yview)
         scroll_lista.pack(side="right", fill="y")
@@ -32,16 +35,20 @@ class PanelArchivos(ttk.LabelFrame):
         self.lista.bind("<<ListboxSelect>>", self._on_seleccion)
 
         # --- Parte Inferior: Esquema de la tabla ---
-        frame_abajo = ttk.Frame(paned)
+        frame_abajo = ttk.Frame(paned, style="Sidebar.TFrame")
         paned.add(frame_abajo, weight=2)
 
-        ttk.Label(frame_abajo, text="Propiedades / Esquema:").pack(anchor="w", padx=2, pady=(2,0))
+        self.titulo_esquema = tk.Label(frame_abajo, text="PROPIEDADES / ESQUEMA", anchor="w", bg=tema.LATERAL,
+                                       fg=tema.LATERAL_SECUNDARIO, padx=8, pady=8)
+        self.titulo_esquema.pack(fill="x")
 
-        frame_texto = ttk.Frame(frame_abajo)
+        frame_texto = ttk.Frame(frame_abajo, style="Sidebar.TFrame")
         frame_texto.pack(fill="both", expand=True, pady=2)
 
+        self._fuente_esquema = tema.fuentes(self)[1]
         self.texto_esquema = tk.Text(frame_texto, height=10, width=30,
-                                     state="disabled", font=("Consolas", 9), wrap="word")
+                                     state="disabled", font=self._fuente_esquema, wrap="word",
+                                     spacing1=2, spacing3=2)
         self.texto_esquema.pack(side="left", fill="both", expand=True)
 
         scroll_texto = ttk.Scrollbar(frame_texto, orient="vertical", command=self.texto_esquema.yview)
@@ -87,13 +94,11 @@ class PanelArchivos(ttk.LabelFrame):
             return
 
         lineas = [f"Tabla: {nombre}", ""]
-        lineas.append(f"Storage: {type(storage).__name__}")
+        archivos = []
         if hasattr(storage, "filepath"):
-            lineas.append(f"Archivo: {storage.filepath}")
+            archivos.append(f"Archivo: {storage.filepath}")
         elif hasattr(storage, "filepath_main"):
-            lineas.append(f"Archivo main: {storage.filepath_main}")
-            lineas.append(f"Archivo aux: {storage.filepath_aux}")
-        lineas.append("")
+            archivos.extend((f"Archivo main: {storage.filepath_main}", f"Archivo aux: {storage.filepath_aux}"))
         lineas.append("Campos:")
         for campo, tipo in zip(storage.schema.fields, storage.schema.types):
             lineas.append(f"  - {campo}: {tipo}")
@@ -133,6 +138,9 @@ class PanelArchivos(ttk.LabelFrame):
             lineas.append("")
             lineas.append(f"Filas: {stats.rows}")
             lineas.append(f"Páginas: {stats.pages}")
+
+        lineas.extend(("", f"Storage: {type(storage).__name__}"))
+        lineas.extend(archivos)
 
         self._mostrar_esquema("\n".join(lineas))
 
