@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk
+from tkinter import font as tkfont
 from frontend import tema
 import os
 import sys
@@ -21,6 +22,7 @@ class PanelResultados(ttk.Frame):
 
     def __init__(self, master):
         super().__init__(master)
+        self._filas_originales = {}
         self._construir()
 
     def _construir(self):
@@ -33,6 +35,7 @@ class PanelResultados(ttk.Frame):
 
         self.tree = ttk.Treeview(frame, show="headings", selectmode="browse")
         self.tree.tag_configure("alterna", background=tema.FILA_ALTERNA)
+        self.tree.bind("<Double-1>", self._mostrar_detalle)
         self.tree.pack(side="left", fill="both", expand=True)
 
         scroll_y = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
@@ -49,8 +52,12 @@ class PanelResultados(ttk.Frame):
         scroll_x.pack(fill="x", padx=4, pady=(0, 4))
         self.tree.configure(xscrollcommand=scroll_x.set)
 
-        self.mensaje = ttk.Label(self, text="Sin resultados", anchor="w")
-        self.mensaje.pack(fill="x", padx=4, pady=(0, 4))
+        self.barra_estado = ttk.Frame(self)
+        self.barra_estado.pack(fill="x", padx=4, pady=(0, 4))
+        self.mensaje = ttk.Label(self.barra_estado, text="Sin resultados", anchor="w")
+        self.mensaje.pack(side="left", fill="x", expand=True)
+        self.ayuda_detalle = ttk.Label(self.barra_estado, text="Doble clic en una fila: ver valores completos")
+        self.ayuda_detalle.pack(side="right")
 
         # Frame para la galería multimedia (oculto por defecto)
         self.frame_galeria = ttk.Frame(self)
@@ -62,6 +69,7 @@ class PanelResultados(ttk.Frame):
         self.tree["columns"] = ()
         for item in self.tree.get_children():
             self.tree.delete(item)
+        self._filas_originales.clear()
         self.mensaje.config(text="Sin resultados")
         self.mensaje.configure(style="TLabel")
         self.vacio.configure(text="Ejecuta una consulta para ver los resultados")
@@ -73,9 +81,9 @@ class PanelResultados(ttk.Frame):
         for widget in self.frame_galeria.winfo_children():
             widget.destroy()
         if not self.frame_tabla.winfo_manager():
-            self.frame_tabla.pack(fill="both", expand=True, padx=4, pady=4, before=self.mensaje)
+            self.frame_tabla.pack(fill="both", expand=True, padx=4, pady=4, before=self.barra_estado)
         if not self.scroll_x.winfo_manager():
-            self.scroll_x.pack(fill="x", padx=4, pady=(0, 4), before=self.mensaje)
+            self.scroll_x.pack(fill="x", padx=4, pady=(0, 4), before=self.barra_estado)
 
     def mostrar_resultados(self, columnas, filas):
         self.limpiar()
@@ -87,11 +95,13 @@ class PanelResultados(ttk.Frame):
         self.tree["columns"] = list(columnas)
         es_plan = list(columnas) == ["QUERY PLAN"]
         self.tree.configure(style="Plan.Treeview" if es_plan else "Treeview")
+        fuente = tkfont.Font(self, font=tema.fuentes(self)[1])
 
         for i, col in enumerate(columnas):
             # Números a la derecha para comparar magnitudes, texto a la izquierda.
             numerica = es_numerica(fila[i] for fila in filas)
-            alineacion = "e" if numerica else "w"
+            # Centrar números deja separación visual respecto al texto contiguo.
+            alineacion = "center" if numerica else "w"
             col_lower = col.lower()
             self.tree.heading(col, text=col, anchor=alineacion)
 
@@ -99,11 +109,15 @@ class PanelResultados(ttk.Frame):
                 largo = max((len(str(fila[0])) for fila in filas), default=40)
                 self.tree.column(col, width=max(400, largo * 8), stretch=True, anchor="w")
             elif "score" in col_lower or "relevancia" in col_lower:
-                self.tree.column(col, width=100, anchor="e")
+                self.tree.column(col, width=120, minwidth=100, stretch=False, anchor="center")
             elif "fragmento" in col_lower or "snippet" in col_lower:
-                self.tree.column(col, width=400, anchor="w", stretch=True)
+                self.tree.column(col, width=420, minwidth=200, anchor="w", stretch=True)
             else:
-                self.tree.column(col, width=120 if numerica else 220, minwidth=90,
+                # Medir una muestra acotada: evita recorrer dos veces tablas enormes.
+                muestra = filas[:200]
+                ancho = max((fuente.measure(str(fila[i])) for fila in muestra if fila[i] is not None), default=0)
+                ancho = max(fuente.measure(str(col)), ancho) + 32
+                self.tree.column(col, width=min(700, max(100 if numerica else 200, ancho)), minwidth=90,
                                  stretch=not numerica, anchor=alineacion)
 
         for i, fila in enumerate(filas):
@@ -120,11 +134,36 @@ class PanelResultados(ttk.Frame):
                     if len(val_str) > 150:
                         val = val_str[:147] + "..."
                 fila_formateada.append(val)
-            self.tree.insert("", tk.END, values=tuple(fila_formateada), tags=("alterna",) if i % 2 else ())
+            item = self.tree.insert("", tk.END, values=tuple(fila_formateada), tags=("alterna",) if i % 2 else ())
+            self._filas_originales[item] = tuple(fila)
 
         n = len(filas)
         self.mensaje.config(text=f"{n} fila(s)")
         self.mensaje.configure(style="StatusOk.TLabel")
+
+    def _mostrar_detalle(self, event):
+        """Muestra los valores originales, sin truncamiento ni redondeo visual."""
+        item = self.tree.identify_row(event.y)
+        fila = self._filas_originales.get(item)
+        if fila is None:
+            return
+        ventana = tk.Toplevel(self)
+        ventana.title("Detalle de la fila")
+        ventana.geometry("760x440")
+        ventana.minsize(400, 220)
+        ventana.configure(bg=tema.FONDO)
+        contenido = tk.Text(ventana, wrap="word", bg=tema.SUPERFICIE, fg=tema.TEXTO,
+                            insertbackground=tema.TEXTO, font=tema.fuentes(ventana)[1],
+                            padx=16, pady=12, relief="flat", borderwidth=0)
+        scroll = ttk.Scrollbar(ventana, orient="vertical", command=contenido.yview)
+        contenido.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
+        contenido.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
+        contenido.tag_configure("columna", foreground=tema.ACENTO)
+        for nombre, valor in zip(self.tree["columns"], fila):
+            contenido.insert("end", f"{nombre}\n", "columna")
+            contenido.insert("end", f"{'NULL' if valor is None else valor}\n\n")
+        contenido.configure(state="disabled")
 
     def mostrar_galeria(self, tipo, items):
         """Muestra galería de imágenes o lista de audio.
@@ -134,7 +173,7 @@ class PanelResultados(ttk.Frame):
         self.limpiar()
         self.frame_tabla.pack_forget()
         self.scroll_x.pack_forget()
-        self.frame_galeria.pack(fill="both", expand=True, before=self.mensaje)
+        self.frame_galeria.pack(fill="both", expand=True, before=self.barra_estado)
 
         self.canvas_galeria = tk.Canvas(self.frame_galeria, background=tema.FONDO, highlightthickness=0)
         scroll = ttk.Scrollbar(self.frame_galeria, orient="vertical", command=self.canvas_galeria.yview)
