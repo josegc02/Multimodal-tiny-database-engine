@@ -105,5 +105,37 @@ class TestMultimediaCompare(unittest.TestCase):
                 self.assertGreater((output / name).stat().st_size, 0)
 
 
+    def test_gallery_marks_semantic_hits_with_coco_categories(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "out"
+            output.mkdir()
+            subset = root / "datasets" / "coco1k"
+            (subset / "images").mkdir(parents=True)
+            names = ["q1.jpg", "q2.jpg", "dog1.jpg", "dog2.jpg", "cat1.jpg"]
+            for name in names:
+                (subset / "images" / name).touch()
+            labels = {"q1.jpg": 1, "q2.jpg": 2, "dog1.jpg": 1, "dog2.jpg": 1, "cat1.jpg": 2}
+            (subset / "instances_subset.json").write_text(json.dumps({
+                "images": [{"id": i, "file_name": n} for i, n in enumerate(names)],
+                "annotations": [{"image_id": i, "category_id": labels[n]} for i, n in enumerate(names)],
+                "categories": [{"id": 1, "name": "dog"}, {"id": 2, "name": "cat"}],
+            }), encoding="utf-8")
+            base = {"size": 1000, "metric": "cosine", "technique": "HNSW", "exact_files": []}
+            (output / "queries.json").write_text(json.dumps([
+                {**base, "query_file": "q1.jpg", "category": "dog", "recall_at_10": 0.9,
+                 "found_files": ["dog1.jpg", "dog2.jpg", "cat1.jpg"]},
+                {**base, "query_file": "q2.jpg", "category": "cat", "recall_at_10": 1.0,
+                 "found_files": ["dog1.jpg", "dog2.jpg"]},
+            ]), encoding="utf-8")
+            write_gallery(output, root / "datasets")
+            page = (output / "gallery.html").read_text(encoding="utf-8")
+            self.assertIn("Éxito</span>1000 · cosine · HNSW · Recall@10 0.90 · Precisión semántica@10 0.67", page)
+            self.assertIn("Error</span>1000 · cosine · HNSW · Recall@10 1.00 · Precisión semántica@10 0.00", page)
+            self.assertEqual(page.count('class="hit"'), 2)
+            self.assertEqual(page.count('class="miss"'), 3)
+            self.assertIn("<td>1000 · cosine · HNSW</td><td>0.333</td><td>0.950</td>", page)
+
+
 if __name__ == "__main__":
     unittest.main()
