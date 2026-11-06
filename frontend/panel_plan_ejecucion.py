@@ -13,7 +13,8 @@ from tkinter import ttk
 AYUDA = (
     "El plan se muestra al ejecutar EXPLAIN, como en PostgreSQL:\n\n"
     "  EXPLAIN SELECT * FROM cuentas WHERE id = 1;\n"
-    "  EXPLAIN ANALYZE SELECT * FROM cuentas ORDER BY saldo;\n\n"
+    "  EXPLAIN ANALYZE SELECT * FROM documentos WHERE MATCH(contenido, 'consulta') USING BM25;\n"
+    "  EXPLAIN ANALYZE SELECT * FROM imagenes WHERE SIMILAR_TO('ruta.jpg', k=10) USING HNSW;\n\n"
     "Resultados muestra el QUERY PLAN en texto; aquí aparece el mismo árbol\n"
     "como tabla, con una fila por operador.\n\n"
     "EXPLAIN muestra costos y filas estimadas sin ejecutar la consulta.\n"
@@ -30,13 +31,11 @@ COLUMNAS = [
     ("loops", "Loops", "e"),
 ]
 
-# Desvío de la estimación de filas (como el "rows x" de pgAdmin y explain.depesz).
 DESVIO_MEDIO = 2.0
 DESVIO_ALTO = 10.0
 
 
 def desvio_estimacion(estimadas, reales):
-    """Factor entre filas estimadas y reales: (factor, "↑" subestimó / "↓" sobreestimó)."""
     estimadas, reales = max(estimadas, 1), max(reales, 1)
     if reales >= estimadas:
         return reales / estimadas, "↑"
@@ -44,13 +43,6 @@ def desvio_estimacion(estimadas, reales):
 
 
 def filas_analisis(nodos):
-    """Convierte los nodos del plan (preorden con profundidad) en filas de la tabla.
-
-    Devuelve [(profundidad, etiqueta, valores, tag, detalles)]. El tiempo exclusivo
-    es el inclusivo del nodo menos el de sus hijos directos. Bajo un Limit el hijo
-    entrega menos filas de las estimadas porque el Limit deja de pedirle: no se
-    marca como error de estimación.
-    """
     filas = []
     padres = {}
     for i, nodo in enumerate(nodos):
@@ -83,13 +75,6 @@ def filas_analisis(nodos):
 
 
 class PanelPlanEjecucion(ttk.Frame):
-    """Árbol de operadores con costos, filas y tiempos.
-
-    Uso:
-        panel.mostrar_plan(nodos, analyze=True, tiempos=(0.0002, 0.0051))
-        panel.limpiar()
-    """
-
     def __init__(self, master):
         super().__init__(master)
         self._construir()
@@ -113,13 +98,11 @@ class PanelPlanEjecucion(ttk.Frame):
         self.arbol.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
         self.arbol.pack(side="left", fill="both", expand=True)
         scroll_y.pack(side="right", fill="y")
-        # Antes que la tabla: con poca altura se recorta ella, no el pie con los tiempos.
         scroll_x.pack(side="bottom", fill="x", before=frame)
 
         cursiva = tkfont.nametofont("TkDefaultFont").copy()
         cursiva.configure(slant="italic")
         self.arbol.tag_configure("detalle", font=cursiva)
-        # Fondos claros en cualquier tema: el texto no puede heredar el del tema oscuro.
         self.arbol.tag_configure("medio", background="#fff3cd", foreground="#212529")
         self.arbol.tag_configure("alto", background="#f8d7da", foreground="#212529")
 
@@ -127,7 +110,6 @@ class PanelPlanEjecucion(ttk.Frame):
         self.pie.pack(side="bottom", fill="x", pady=(4, 0), before=scroll_x)
 
     def _ajustar_columnas(self, valores):
-        """Ancho según el texto: un ancho fijo corta los títulos si la pantalla escala la letra."""
         fuente = tkfont.nametofont("TkDefaultFont")
         margen = fuente.measure("000")
         for i, (clave, titulo, _) in enumerate(COLUMNAS):
@@ -135,13 +117,11 @@ class PanelPlanEjecucion(ttk.Frame):
             self.arbol.column(clave, width=max(map(fuente.measure, textos)) + margen)
 
     def limpiar(self):
-        """Vuelve al texto de ayuda (las consultas normales no muestran plan)."""
         self.arbol.delete(*self.arbol.get_children())
         self.frame_arbol.pack_forget()
         self.ayuda.pack(fill="both", expand=True, padx=8, pady=8)
 
     def mostrar_plan(self, nodos, analyze=False, tiempos=(None, None)):
-        """Muestra el árbol del plan como tabla de análisis."""
         self.ayuda.pack_forget()
         self.frame_arbol.pack(fill="both", expand=True, padx=4, pady=4)
         self.arbol.delete(*self.arbol.get_children())

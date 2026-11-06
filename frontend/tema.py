@@ -75,6 +75,10 @@ def inicializar_estilos(master):
     style.configure("TFrame", background=FONDO)
     style.configure("Sidebar.TFrame", background=LATERAL)
     style.configure("TLabel", background=FONDO, foreground=TEXTO, padding=2)
+    style.configure("TEntry", fieldbackground=SUPERFICIE, foreground=TEXTO,
+                    insertcolor=TEXTO, bordercolor=TOKENS["border"], padding=6)
+    style.map("TEntry", bordercolor=[("focus", TOKENS["focus"])],
+              fieldbackground=[("readonly", SUPERFICIE)], foreground=[("readonly", TEXTO)])
     style.configure("StatusError.TLabel", foreground=TOKENS["error"])
     style.configure("StatusOk.TLabel", foreground=TOKENS["success"])
     style.configure("TNotebook", background=FONDO, borderwidth=0, tabmargins=(0, 0, 0, 0),
