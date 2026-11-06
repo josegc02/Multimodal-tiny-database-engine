@@ -75,10 +75,24 @@ class IVFIndex:
 
     @staticmethod
     def _assign(data: np.ndarray, centroids: np.ndarray, metric: str) -> np.ndarray:
-        if metric == "euclidean":
-            distances = np.sum((data[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
-            return np.argmin(distances, axis=1)
-        return np.argmax(data @ centroids.T, axis=1)
+        # Evitar el arreglo (vectores, centroides, dimensiones): con 100K x 316
+        # x 128 en float64 supera 30 GiB. Cada bloque solo crea una matriz
+        # (hasta 2048, centroides), tanto para euclidiana como para coseno.
+        assignments = np.empty(len(data), dtype=np.intp)
+        center_transpose = centroids.T
+        center_norms = np.einsum("ij,ij->i", centroids, centroids) if metric == "euclidean" else None
+        for start in range(0, len(data), 2048):
+            stop = min(start + 2048, len(data))
+            scores = data[start:stop] @ center_transpose
+            if metric == "euclidean":
+                # ||x-c||² = ||x||² + ||c||² - 2 x·c;
+                # ||x||² es igual para todos los centroides de una fila.
+                scores *= -2
+                scores += center_norms
+                assignments[start:stop] = np.argmin(scores, axis=1)
+            else:
+                assignments[start:stop] = np.argmax(scores, axis=1)
+        return assignments
 
     def insert(self, identifier: int, vector: Sequence[float]) -> None:
         """Inserta un vector en la lista de su centroide más cercano."""

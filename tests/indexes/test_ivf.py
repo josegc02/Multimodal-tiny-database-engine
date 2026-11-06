@@ -8,6 +8,22 @@ from engine.indexes.ivf import IVFIndex
 
 
 class TestIVFIndex(unittest.TestCase):
+    def test_assignment_matches_direct_distances_across_blocks(self):
+        rng = np.random.default_rng(91)
+        data = rng.normal(size=(4099, 16))
+        centroids = rng.normal(size=(23, 16))
+        for metric in ("euclidean", "cosine"):
+            with self.subTest(metric=metric):
+                expected = np.empty(len(data), dtype=int)
+                for start in range(0, len(data), 128):
+                    block = data[start:start + 128]
+                    if metric == "euclidean":
+                        distances = np.sum((block[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
+                        expected[start:start + 128] = np.argmin(distances, axis=1)
+                    else:
+                        expected[start:start + 128] = np.argmax(block @ centroids.T, axis=1)
+                np.testing.assert_array_equal(IVFIndex._assign(data, centroids, metric), expected)
+
     def test_train_and_search(self):
         index = IVFIndex(2, seed=0)
         index.train({0: [0, 0], 1: [1, 0], 2: [10, 0], 3: [11, 0]})
