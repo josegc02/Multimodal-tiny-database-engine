@@ -1,6 +1,9 @@
 """Carga reproducible de vectores SIFT de los subconjuntos COCO."""
 
 import json
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -38,13 +41,24 @@ def extract_vectors(directory: Path, filenames: list[str], cache: Path) -> np.nd
         return vectors
     from engine.features.image.sift import SIFTExtractor
 
-    extractor = SIFTExtractor(n_features=500)
-    vectors = []
-    for filename in filenames:
-        vector = extractor.extract_to_fixed_vector(directory / "images" / filename)
+    import cv2
+
+    # Cada tarea procesa una imagen; OpenCV libera el GIL durante el trabajo
+    # pesado. Se limita su paralelismo interno para no multiplicar los hilos.
+    cv2.setNumThreads(1)
+    workers = min(8, os.cpu_count() or 1)
+    local = threading.local()
+
+    def extract(filename):
+        if not hasattr(local, "extractor"):
+            local.extractor = SIFTExtractor(n_features=500)
+        vector = local.extractor.extract_to_fixed_vector(directory / "images" / filename)
         if not np.isfinite(vector).all() or np.linalg.norm(vector) == 0:
             raise ValueError(f"Vector inválido: {filename}")
-        vectors.append(vector)
+        return vector
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        vectors = list(pool.map(extract, filenames))
     result = np.asarray(vectors, dtype=np.float32)
     cache.parent.mkdir(parents=True, exist_ok=True)
     np.savez(cache, vectors=result, filenames=np.asarray(filenames))

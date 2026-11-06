@@ -62,7 +62,12 @@ def create_subset(
         src = os.path.join(IMAGES_DIR, img_info["file_name"])
         dst = os.path.join(subset_images_dir, img_info["file_name"])
         if os.path.exists(src):
-            shutil.copy2(src, dst)
+            if not os.path.exists(dst):
+                try:
+                    # Mismo volumen: evita copiar 111K JPEG y duplicar el espacio.
+                    os.link(src, dst)
+                except OSError:
+                    shutil.copy2(src, dst)
         else:
             print(f"  Advertencia: {src} no existe, omitiendo.")
 
