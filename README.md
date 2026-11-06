@@ -6,10 +6,27 @@ Proyecto de Base de Datos II (UTEC, 2026-2): un gestor de bases de datos constru
 | :--- | :--- | :--- |
 | **1. Relacional** | Completa | Heap File, Archivo Secuencial y tabla B+ agrupada; índices B+ y Hash extensible; SQL con optimizador por costos; transacciones con control de concurrencia; interfaz gráfica; comparación experimental. |
 | **2. Espacial** | Completa | R-Tree en disco con consultas por radio, k-NN y polígonos; métricas Euclidiana y Haversine; SQL espacial; mapa interactivo (tkintermapview); comparación contra GiST de PostGIS. |
-| **3. Texto** | En curso | Preprocesamiento, índice invertido SPIMI, rankings TF-IDF y BM25 y SQL de texto. Falta la comparación experimental. |
-| 4–5 | Pendientes | Multimedia y aplicación. |
+| **3. Texto** | Completa | Preprocesamiento (stopwords y stemming en español e inglés), índice invertido SPIMI en disco, rankings TF-IDF + coseno y BM25, SQL con `MATCH ... USING TF_IDF \| BM25` y `SCORE()`; comparación contra GIN de PostgreSQL. |
+| **4. Multimedia** | Completa (experimento con BoVW por actualizar) | ExtractFeatures con Bag of Visual/Audio Words (SIFT o MFCC → K-Means K=256 → TF-IDF); índices IVF y HNSW; métricas euclidiana, producto punto y coseno; SQL con `SIMILAR_TO` y `SIMILARITY_SCORE()`; galería en la interfaz; comparación IVF vs HNSW. |
+| 5. Aplicación de IA | Pendiente | Entrega final. |
 
 El diseño, los algoritmos y los resultados experimentales están en el [informe](docs/informe.md).
+
+> **Nota sobre la comparación experimental de la Parte 4.** Los resultados publicados en
+> [`benchmarks/results/multimedia/`](benchmarks/results/multimedia/report.md) (1K, 10K y 100K imágenes de
+> MS-COCO, IVF vs HNSW, euclidiana vs coseno) se midieron **antes** de integrar Bag of Visual Words, con un
+> descriptor global: el promedio de los descriptores SIFT (128 dimensiones). Son mediciones válidas de los
+> índices sobre ese vector, pero no sobre el vector final de ExtractFeatures (histograma BoVW de 256
+> dimensiones). Por falta de tiempo para repetir la corrida completa (~2 h) antes de este avance, se presentan
+> esos resultados. Qué cambia en teoría con BoVW:
+> - **Tiempos y memoria:** la misma tendencia, con valores mayores (el costo de cada distancia es O(d) y d pasa de 128 a 256).
+> - **Recall@10:** más bajo con los mismos parámetros, porque en más dimensiones las distancias se concentran.
+>   En una prueba con 500 imágenes de `coco1k`, IVF pasó de 0,99 a 0,87 y HNSW de 0,998 a 0,97.
+> - **Euclidiana vs coseno:** los vectores BoVW tienen norma 1, y entonces ‖a − b‖² = 2 − 2·cos(a, b):
+>   ambas métricas dan el mismo ranking de vecinos.
+>
+> El benchmark ya usa BoVW por defecto (`--features bovw`; `--features sift-mean` reproduce la tabla publicada)
+> y la corrida completa se actualizará en la entrega final. Detalles en la sección 11 del informe.
 
 ---
 
@@ -19,7 +36,8 @@ El diseño, los algoritmos y los resultados experimentales están en el [informe
 - **Python 3.12 o superior.** Probado con 3.13 en Windows 11 y Ubuntu.
 - **Tkinter**, para la interfaz gráfica. Viene con el instalador oficial de Python en Windows; en Ubuntu: `sudo apt install python3-tk`.
 - **Internet**, solo para el fondo del mapa (el panel descarga los mosaicos; los datos son locales).
-- **Opcional:** Docker, para la comparación con PostgreSQL + PostGIS.
+- **OpenCV y librosa** (en `requirements.txt`), para extraer los vectores de las columnas `IMAGE` y `AUDIO`.
+- **Opcional:** Docker, para las comparaciones con PostgreSQL (PostGIS en la Parte 2 y GIN en la Parte 3).
 
 ### Instalación básica
 
@@ -44,6 +62,16 @@ docker compose -f postgis/docker-compose.yml down            # detener (con -v t
 ```
 
 Detalles en [`postgis/README.md`](postgis/README.md).
+
+### PostgreSQL + GIN (opcional, solo para el benchmark de texto)
+
+```bash
+python -m pip install -r requirements-text-postgres.txt     # psycopg
+docker compose -f postgres_text/docker-compose.yml up -d --wait
+docker compose -f postgres_text/docker-compose.yml down
+```
+
+Detalles en [`postgres_text/README.md`](postgres_text/README.md).
 
 ---
 
@@ -208,9 +236,16 @@ python -m benchmarks.bench_indexes       # Parte 1: B+ agrupado vs B+ no agrupad
 python -m benchmarks.concurrency_demo    # Parte 1: transacciones concurrentes con hilos
 python -m benchmarks.bench_spatial       # Parte 2: Secuencial vs R-Tree vs GiST (requiere PostGIS)
 python -m benchmarks.bench_spatial --sin-postgis   # Parte 2 sin PostgreSQL (GiST queda como NA)
+
+python -m benchmarks.generate_text_datasets         # Parte 3: corpus de noticias de 1K, 10K y 100K documentos
+python -m benchmarks.bench_text                     # Parte 3: TF-IDF vs BM25 vs GIN (requiere PostgreSQL GIN)
+
+# Parte 4: IVF vs HNSW sobre MS-COCO (requiere los subconjuntos de scripts/download_coco.py,
+# create_subsets.py y generate_queries.py); ~2 h para 1K, 10K y 100K
+python -m benchmarks.multimedia_compare --dataset-dir datasets/coco_subsets --output benchmarks/results/smoke/multimedia
 ```
 
-Por defecto usan 1.000, 10.000 y 100.000 registros y 3 repeticiones; los resultados y las gráficas se guardan en `benchmarks/results/`. La metodología está en [`benchmarks/README.md`](benchmarks/README.md) y los análisis en las secciones 3 y 5 del informe.
+Por defecto usan 1.000, 10.000 y 100.000 registros; los resultados y las gráficas se guardan en `benchmarks/results/`. La metodología está en [`benchmarks/README.md`](benchmarks/README.md), [`benchmarks/TEXT_BENCHMARK.md`](benchmarks/TEXT_BENCHMARK.md) y [`benchmarks/MULTIMEDIA_BENCHMARK.md`](benchmarks/MULTIMEDIA_BENCHMARK.md), y los análisis en las secciones 3, 5, 9 y 11 del informe.
 
 ---
 
@@ -227,8 +262,11 @@ flowchart TD
     EX --> EXT["Algoritmos externos<br/>sort k-way, hash group by / join"]
     EX --> CAT["Catalog<br/>tablas, índices, estadísticas, latches"]
     CAT --> ST["Almacenamiento<br/>HeapFile · SequentialFile · tabla B+"]
-    CAT --> IDX["Índices<br/>B+ · Hash extensible · R-Tree"]
+    CAT --> IDX["Índices<br/>B+ · Hash extensible · R-Tree · SPIMI · HNSW · IVF"]
     IDX --> SP["Espacial<br/>Point, MBR, Polygon, Euclidiana, Haversine"]
+    IDX --> TX["Texto<br/>tokens, stopwords, stemming; TF-IDF y BM25"]
+    ST --> FE["ExtractFeatures<br/>SIFT / MFCC → Bag of Words (K-Means) → TF-IDF"]
+    IDX --> VE["Vectores<br/>euclidiana, producto punto, coseno"]
     SE --> CC["Concurrencia<br/>LockManager + TransactionManager"]
 ```
 
@@ -236,7 +274,7 @@ Recorrido de una sentencia:
 1. El **Motor** recibe el SQL del frontend.
 2. El **StatementExecutor** abre la transacción y toma los locks.
 3. El SQL se convierte en un **plan lógico**.
-4. El **optimizador** elige, con su modelo de costos, la ruta de acceso: recorrer la tabla o usar un índice (B+, hash o R-Tree).
+4. El **optimizador** elige, con su modelo de costos, la ruta de acceso: recorrer la tabla o usar un índice (B+, hash o R-Tree). `MATCH` usa siempre su índice SPIMI y `SIMILAR_TO` su índice HNSW o IVF.
 5. El **ejecutor** produce las filas; si los datos no caben en el buffer, usa algoritmos externos.
 
 El **catálogo** mantiene los índices actualizados en cada escritura y las estadísticas que usa el optimizador.
@@ -248,7 +286,9 @@ El **catálogo** mantiene los índices actualizados en cada escritura y las esta
 ```text
 engine/                         # Motor de base de datos (sin dependencias externas)
 ├── storage/
-│   ├── record.py               # Schema de largo fijo (INT, FLOAT, VARCHAR, POINT) y serialización
+│   ├── record.py               # Schema de largo fijo (INT, FLOAT, VARCHAR, POINT, TEXT, IMAGE, AUDIO)
+│   ├── text_store.py           # Valores TEXT fuera de la página del registro
+│   ├── media_store.py          # Ruta y vector de cada valor IMAGE / AUDIO
 │   ├── heap_file.py            # Heap File: páginas de 4 KB (slotted pages), reutilización de slots
 │   ├── sequential_file.py      # Archivo secuencial: main ordenado + aux, reorganización automática
 │   └── clustered_file.py       # Tabla organizada como B+ agrupado
@@ -257,15 +297,26 @@ engine/                         # Motor de base de datos (sin dependencias exter
 │   ├── bplus_tree_clustered.py # Hojas con registros completos
 │   ├── bplus_tree_unclustered.py # Hojas con (clave, RID)
 │   ├── extendible_hash.py      # Hash extensible con snapshot JSON
-│   └── rtree.py                # R-Tree en disco: split cuadrático, rango, k-NN y polígonos
+│   ├── rtree.py                # R-Tree en disco: split cuadrático, rango, k-NN y polígonos
+│   ├── spimi.py                # Índice invertido SPIMI en disco; rankings TF-IDF + coseno y BM25
+│   ├── ivf.py, hnsw.py         # Índices vectoriales aproximados
+│   └── vector_index.py         # Adapta IVF y HNSW al catálogo (columnas IMAGE / AUDIO)
+├── text/
+│   └── preprocessing.py        # Tokenización, stopwords (es/en) y stemming Snowball
+├── features/
+│   ├── image/sift.py, audio/mfcc.py   # Descriptores locales
+│   ├── kmeans.py, bow.py       # K-Means y Bag of Visual/Audio Words con TF-IDF
+│   └── registry.py             # ExtractFeatures: el vector de cada IMAGE / AUDIO
+├── vector/
+│   └── metrics.py              # Euclidiana, producto punto y coseno
 ├── spatial/
 │   ├── geometry.py             # Point, MBR, Polygon (ray casting) y lectura de GeoJSON
 │   └── distance.py             # Euclidiana, Haversine, MINDIST y radio → MBR
 ├── query/
-│   ├── lexer.py, parser.py, ast.py   # Análisis léxico y sintáctico (incluye POINT, POLYGON, distancia, WITHIN)
+│   ├── lexer.py, parser.py, ast.py   # Análisis léxico y sintáctico (POINT, POLYGON, MATCH, SIMILAR_TO, ...)
 │   ├── logical_plan.py         # Plan lógico
 │   ├── planner.py              # Modelo de costos en páginas
-│   ├── sql_optimizer.py        # Rutas de acceso: scan, B+, hash, R-Tree
+│   ├── sql_optimizer.py        # Rutas de acceso: scan, B+, hash, R-Tree, texto y vectores
 │   ├── sql_executor.py         # Ejecución incremental de planes
 │   ├── statement_executor.py   # Sesión SQL: transacciones, locks, COPY, EXPLAIN
 │   ├── explain.py              # EXPLAIN [ANALYZE] con el formato de PostgreSQL
@@ -279,23 +330,28 @@ engine/                         # Motor de base de datos (sin dependencias exter
 frontend/
 ├── main.py                     # Ventana principal
 ├── motor.py                    # Fachada entre la interfaz y el motor
-├── panel_*.py                  # Paneles: archivos, consultas, resultados, plan y mapa
+├── panel_*.py                  # Paneles: archivos, consultas, resultados (con galería), plan y mapa
+├── tema.py, sql_highlight.py   # Tema claro/oscuro y resaltado de SQL
 ├── csv_sql.py                  # SQL sugerido para cargar un CSV
 ├── mapa_datos.py               # Datos que recibe el panel de mapa
 benchmarks/
 ├── bench_storage.py, bench_indexes.py, complexity.py, concurrency_demo.py   # Parte 1
 ├── bench_spatial.py, generate_spatial_datasets.py                          # Parte 2
+├── bench_text.py, generate_text_datasets.py, text_*.py                     # Parte 3
+├── multimedia_*.py                                                         # Parte 4
 └── results/                    # CSV, metadatos y gráficas de las corridas oficiales
-datasets/spatial/               # Polígonos de distritos (GeoJSON) y datos generados (no versionados)
+models/                         # Vocabularios Bag of Words (imagen y audio, K=256)
+datasets/                       # Distritos (GeoJSON) y descripción del corpus de texto; lo generado no se versiona
 postgis/                        # docker-compose, esquema SQL y cliente de PostGIS
-tests/                          # storage, indexes, query, concurrency, spatial y frontend
+postgres_text/                  # docker-compose y cliente de PostgreSQL con índice GIN
+tests/                          # storage, indexes, query, concurrency, spatial, text, features y frontend
 docs/                           # Informe y documentación técnica
-scripts/                        # Automatización de GitHub (etiquetas e issues por avance)
+scripts/                        # Datasets COCO, entrenamiento de vocabularios y automatización de GitHub
 ```
 
 Otros archivos:
-- **`requirements.txt`:** dependencias (matplotlib, tabulate, ttkbootstrap, tkintermapview); `requirements-postgis.txt` agrega psycopg.
-- **`scripts/`:** `setup_avance1.*` y `setup_avance2.*` crean las etiquetas, el milestone y los issues de cada avance en GitHub (requieren `gh`). No forman parte del motor.
+- **`requirements.txt`:** dependencias (numpy, matplotlib, tabulate, ttkbootstrap, tkintermapview, snowballstemmer, opencv-python, librosa); `requirements-postgis.txt` y `requirements-text-postgres.txt` agregan psycopg.
+- **`scripts/`:** `download_coco.py`, `create_subsets.py` y `generate_queries.py` preparan los subconjuntos de MS-COCO; `download_bow_training_data.py` y `train_codebook.py` regeneran los vocabularios de `models/`. Los `setup_avance*` crean etiquetas e issues en GitHub (requieren `gh`).
 
 ---
 
@@ -303,10 +359,13 @@ Otros archivos:
 
 | Archivo | Contenido |
 | :--- | :--- |
-| [`docs/informe.md`](docs/informe.md) | Informe incremental: arquitectura, dominio de datos, algoritmos y resultados experimentales de las Partes 1 y 2. |
+| [`docs/informe.md`](docs/informe.md) | Informe incremental: arquitectura, dominio de datos, algoritmos y resultados experimentales de las Partes 1 a 4. |
 | [`docs/parte2_espacial.md`](docs/parte2_espacial.md) | Diseño de la Parte 2 por issue. |
 | [`docs/consultas_espaciales.md`](docs/consultas_espaciales.md) | Contratos de las consultas espaciales (rango, k-NN, polígonos, SQL). |
 | [`docs/mapa.md`](docs/mapa.md) | Funcionamiento del mapa. |
 | [`docs/sql_parser.md`](docs/sql_parser.md), [`docs/sql_grammar.ebnf`](docs/sql_grammar.ebnf) | Parser y gramática SQL. |
 | [`docs/bplus_indexes.md`](docs/bplus_indexes.md) | Índices B+. |
 | [`benchmarks/README.md`](benchmarks/README.md) | Cómo correr los experimentos y su metodología. |
+| [`benchmarks/TEXT_BENCHMARK.md`](benchmarks/TEXT_BENCHMARK.md), [`datasets/text/README.md`](datasets/text/README.md) | Benchmark y corpus de la Parte 3. |
+| [`postgres_text/README.md`](postgres_text/README.md) | PostgreSQL con GIN para la comparación de texto. |
+| [`benchmarks/MULTIMEDIA_BENCHMARK.md`](benchmarks/MULTIMEDIA_BENCHMARK.md) | Benchmark multimedia y cómo repetirlo con BoVW. |
