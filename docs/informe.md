@@ -1055,6 +1055,30 @@ y esa copia, junto con las matrices temporales de la construcción y del cálcul
 exacto de referencia, domina la medida; el grafo de HNSW (≤ 16 enlaces por nodo
 en la capa 0) y las listas de IVF agregan poco en comparación.
 
+**Precisión por categoría (galería).** Recall@10 mide si el índice aproxima
+bien a la búsqueda exacta, no si las imágenes se parecen en contenido. Para eso
+se contó, en los diez resultados de cada consulta, cuántas imágenes contienen
+la categoría COCO de la consulta (euclidiana;
+[`category_precision.json`](../benchmarks/results/multimedia/category_precision.json),
+`benchmarks/multimedia_category_precision.py`). "Azar" es la fracción de
+imágenes del subconjunto que tienen esa categoría.
+
+| Tamaño | Exacto | IVF | HNSW | Azar |
+|---:|---:|---:|---:|---:|
+| 1K | 6,0 % | 5,8 % | 5,9 % | 4,0 % |
+| 10K | 11,4 % | 11,4 % | 9,9 % | 3,6 % |
+| 100K | 8,3 % | 9,5 % | 7,7 % | 3,6 % |
+
+Los resultados superan al azar entre 1,5 y 3 veces, pero rara vez son de la
+misma categoría. Los índices no son la causa: IVF y HNSW dan casi la misma
+precisión que la búsqueda exacta. El límite es el descriptor: SIFT + BoVW
+compara texturas y estructuras locales, no el significado de la imagen (por
+eso una consulta de un gato puede devolver una fachada antes que otro gato).
+Una búsqueda semántica requiere embeddings aprendidos (CNN o CLIP), fuera del
+alcance de esta parte. Los porcentajes son menores que en la prueba con
+val2017 de la sección 10 porque estas consultas cubren categorías poco
+frecuentes (azar ≈ 4 % frente a ≈ 20 %).
+
 **Recomendación.**
 
 | Escenario | Técnica | Motivo medido |
