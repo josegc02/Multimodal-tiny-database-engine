@@ -5,9 +5,10 @@ ExtractFeatures del enunciado: sus puntos SIFT se cuantizan con el vocabulario
 Bag of Visual Words de `models/bow_image_k1024.npz` y el histograma se pesa con
 TF-IDF (1024 dimensiones). Las cachés de vectores de un
 vocabulario anterior (K = 256) se vuelven a extraer. Una imagen sin puntos SIFT queda en el vector nulo y
-se excluye de las corridas con coseno. `--features sift-mean` reproduce los
-resultados publicados en #83, que usaban el promedio SIFT (128 dimensiones);
-el resto de esta página describe esa versión.
+se excluye de las corridas con coseno. Los resultados publicados en
+`benchmarks/results/multimedia/` se midieron así. `--features sift-mean`
+reproduce la versión anterior (#83), que usaba el promedio SIFT (128 dimensiones)
+y, para imágenes sin puntos SIFT, el histograma gris descrito abajo.
 
 El script usa los subconjuntos de imágenes COCO de #58 y el promedio de
 descriptores SIFT de #52. La comparación cubre IVF y HNSW, distancia euclidiana
@@ -32,7 +33,9 @@ tamaño y se comparten mediante un archivo `.npz` dentro del directorio de
 salida. El tiempo de construcción excluye la extracción SIFT, la lectura del
 cache y la preparación de consultas. El tiempo medio de consulta incluye solo
 la llamada al índice. El pico RSS sí incluye el proceso Python, los vectores
-cargados y el índice. La columna *Memoria del índice* (y `memory.png`) es el
+cargados y el índice. Ambos índices guardan una copia float64 de cada vector
+(100K × 1024 × 8 B ≈ 800 MB), así que esa copia domina la memoria; el grafo de HNSW
+y las listas de IVF agregan poco. La columna *Memoria del índice* (y `memory.png`) es el
 pico menos la memoria del proceso justo antes de construir el índice, cuando los
 vectores ya están cargados: aísla lo que ocupan el índice y su construcción.
 
@@ -47,9 +50,7 @@ La referencia de Recall@10 son los diez vecinos exactos del mismo conjunto de
 vectores, excluida la consulta. Esta medida evalúa la aproximación del índice;
 no demuestra relevancia semántica. IVF usa `nlist ≈ √N` y `nprobe ≈ √nlist`;
 HNSW usa `M=8` (2·M vecinos en la capa 0), `ef_construction=50` y `ef_search=50`, con semilla 42,
-y la heurística de selección de vecinos del algoritmo original. Los resultados publicados se
-midieron con la versión anterior del índice, que podía dejar nodos inalcanzables (ver el informe).
-Esos parámetros están fijos para ambas métricas y no se ajustaron por dataset.
+y la heurística de selección de vecinos del algoritmo original. Esos parámetros están fijos para ambas métricas y no se ajustaron por dataset.
 
 La salida contiene `summary.csv`, `queries.json`, cuatro gráficas PNG,
 `gallery.html` y `report.md`. El informe construye sus recomendaciones a
