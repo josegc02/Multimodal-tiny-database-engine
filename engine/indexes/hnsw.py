@@ -36,6 +36,8 @@ class HNSWIndex:
         self.vectors: dict[int, np.ndarray] = {}
         self.levels: dict[int, int] = {}
         self.links: dict[int, list[set[int]]] = {}
+        # Cuántos enlaces llegan a cada nodo en cada capa: el recorte nunca borra el último.
+        self.incoming: dict[int, list[int]] = {}
         self.entrypoint: int | None = None
         self.max_level = -1
 
@@ -63,15 +65,26 @@ class HNSWIndex:
             return -product
         return -product / float(np.linalg.norm(a) * np.linalg.norm(b))
 
+    def _distances_to(self, query: np.ndarray, identifiers: list[int]) -> list[float]:
+        """Distancia de `query` a varios nodos con una sola operación matricial.
+
+        Equivale a llamar _distance por cada nodo, pero evita el costo de numpy por
+        llamada: la construcción calcula cientos de miles de distancias.
+        """
+        if not identifiers:
+            return []
+        matrix = np.stack([self.vectors[i] for i in identifiers])
+        return self._distances(matrix, query[None, :])[:, 0].tolist()
+
     def _greedy(self, query: np.ndarray, entry: int, layer: int) -> tuple[int, set[int]]:
         current = entry
         visited = {entry}
         best = self._distance(query, self.vectors[entry])
         while True:
             next_node = current
-            for neighbor in self.links[current][layer]:
-                visited.add(neighbor)
-                distance = self._distance(query, self.vectors[neighbor])
+            neighbors = sorted(self.links[current][layer])
+            visited.update(neighbors)
+            for neighbor, distance in zip(neighbors, self._distances_to(query, neighbors)):
                 if (distance, neighbor) < (best, next_node):
                     best, next_node = distance, neighbor
             if next_node == current:
@@ -88,11 +101,9 @@ class HNSWIndex:
             current_distance, current = heapq.heappop(candidates)
             if len(best) == ef and (current_distance, current) > (-best[0][0], -best[0][1]):
                 break
-            for neighbor in self.links[current][layer]:
-                if neighbor in visited:
-                    continue
-                visited.add(neighbor)
-                distance = self._distance(query, self.vectors[neighbor])
+            pending = sorted(n for n in self.links[current][layer] if n not in visited)
+            visited.update(pending)
+            for neighbor, distance in zip(pending, self._distances_to(query, pending)):
                 if len(best) < ef or (distance, neighbor) < (-best[0][0], -best[0][1]):
                     heapq.heappush(candidates, (distance, neighbor))
                     heapq.heappush(best, (-distance, -neighbor))
@@ -100,18 +111,65 @@ class HNSWIndex:
                         heapq.heappop(best)
         return sorted((-distance, -identifier) for distance, identifier in best), visited
 
+    def max_links(self, layer: int) -> int:
+        """Vecinos que guarda un nodo por capa: 2·M en la capa 0 y M en las demás (Malkov y Yashunin)."""
+        return 2 * self.M if layer == 0 else self.M
+
+    def _select_neighbors(self, base: np.ndarray, candidates: list[int], limit: int) -> list[int]:
+        """Heurística de selección de vecinos (Malkov y Yashunin, algoritmo 4).
+
+        Recorre los candidatos del más cercano al más lejano y acepta uno solo si
+        está más cerca de `base` que de todos los ya aceptados. Así los vecinos
+        apuntan en direcciones distintas y el grafo sigue conectado aunque los
+        datos formen grupos; quedarse solo con los más cercanos ataba todos los
+        enlaces a un mismo grupo.
+        """
+        if not candidates:
+            return []
+        matrix = np.stack([self.vectors[c] for c in candidates])
+        to_base = self._distances(matrix, base[None, :])[:, 0]
+        between = self._distances(matrix, matrix)
+        order = sorted(range(len(candidates)), key=lambda i: (to_base[i], candidates[i]))
+        chosen: list[int] = []
+        for i in order:
+            if len(chosen) == limit:
+                break
+            if all(to_base[i] < between[i, j] for j in chosen):
+                chosen.append(i)
+        return [candidates[i] for i in chosen]
+
+    def _distances(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        """Matriz de distancias entre las filas de `a` y las de `b`, con la misma métrica que _distance."""
+        gram = a @ b.T
+        if self.metric == "dot_product":
+            return -gram
+        if self.metric == "cosine":
+            return -gram / np.outer(np.linalg.norm(a, axis=1), np.linalg.norm(b, axis=1))
+        squared = np.einsum("ij,ij->i", a, a)[:, None] + np.einsum("ij,ij->i", b, b)[None, :] - 2 * gram
+        return np.sqrt(np.maximum(squared, 0.0))
+
     def _prune(self, identifier: int, layer: int) -> None:
+        """Deja en la lista de `identifier` a lo más max_links vecinos, elegidos con la heurística.
+
+        Los enlaces son dirigidos: recortar la lista de un nodo no toca las listas
+        de los demás. Si se borrara también el enlace de vuelta, un nodo podía
+        perder todos sus vecinos y quedar inalcanzable para la búsqueda.
+
+        Tampoco se borra el único enlace que llega a un vecino: sin él, ese vecino
+        no tendría por dónde ser alcanzado. En ese caso la lista puede superar
+        max_links.
+        """
         neighbors = self.links[identifier][layer]
-        if len(neighbors) <= self.M:
+        limit = self.max_links(layer)
+        if len(neighbors) <= limit:
             return
-        closest = sorted(
-            neighbors,
-            key=lambda other: (self._distance(self.vectors[identifier], self.vectors[other]), other),
-        )[:self.M]
-        removed = neighbors - set(closest)
-        self.links[identifier][layer] = set(closest)
-        for other in removed:
-            self.links[other][layer].discard(identifier)
+        kept = set(self._select_neighbors(self.vectors[identifier], list(neighbors), limit))
+        for other in neighbors - kept:
+            if self.incoming[other][layer] <= 1:
+                kept.add(other)
+            else:
+                self.incoming[other][layer] -= 1
+        self.links[identifier][layer] = kept
 
     def insert(self, identifier: int, vector: Sequence[float]) -> None:
         """Inserta un nodo y lo conecta con vecinos en cada capa que alcanza."""
@@ -124,6 +182,7 @@ class HNSWIndex:
         self.vectors[identifier] = vector.copy()
         self.levels[identifier] = level
         self.links[identifier] = [set() for _ in range(level + 1)]
+        self.incoming[identifier] = [0] * (level + 1)
         if self.entrypoint is None:
             self.entrypoint, self.max_level = identifier, level
             return
@@ -133,9 +192,12 @@ class HNSWIndex:
             entry, _ = self._greedy(vector, entry, layer)
         for layer in range(min(level, self.max_level), -1, -1):
             candidates, _ = self._search_layer(vector, entry, layer, self.ef_construction)
-            for _, neighbor in candidates[:self.M]:
+            chosen = self._select_neighbors(vector, [c for _, c in candidates], self.M)
+            for neighbor in chosen:
                 self.links[identifier][layer].add(neighbor)
+                self.incoming[neighbor][layer] += 1
                 self.links[neighbor][layer].add(identifier)
+                self.incoming[identifier][layer] += 1
                 self._prune(neighbor, layer)
             if candidates:
                 entry = candidates[0][1]
@@ -200,11 +262,15 @@ class HNSWIndex:
             index.vectors[identifier] = index._validate_vector(vector)
             index.levels[identifier] = level
             index.links[identifier] = [set(neighbors) for neighbors in layers]
+            index.incoming[identifier] = [0] * len(layers)
         for identifier, layers in index.links.items():
             for layer, neighbors in enumerate(layers):
-                if any(other not in index.links or layer >= len(index.links[other])
-                       or identifier not in index.links[other][layer] for other in neighbors):
+                # Los enlaces son dirigidos: basta con que el vecino exista en esa capa.
+                if any(other not in index.links or layer >= len(index.links[other]) or other == identifier
+                       for other in neighbors):
                     raise ValueError("Enlaces inválidos en el índice")
+                for other in neighbors:
+                    index.incoming[other][layer] += 1
         if (index.entrypoint is None) != (not index.vectors):
             raise ValueError("Punto de entrada inválido")
         if index.entrypoint is not None and index.entrypoint not in index.vectors:

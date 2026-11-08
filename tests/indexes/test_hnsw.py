@@ -18,12 +18,46 @@ class TestHNSWIndex(unittest.TestCase):
             copy.insert(identifier, vector)
         self.assertEqual(index.levels, copy.levels)
         self.assertEqual(index.max_level, max(index.levels.values()))
+        incoming = {identifier: [0] * len(layers) for identifier, layers in index.links.items()}
         for identifier, layers in index.links.items():
             self.assertEqual(len(layers), index.levels[identifier] + 1)
             for layer, neighbors in enumerate(layers):
-                self.assertLessEqual(len(neighbors), index.M)
+                self.assertEqual(index.max_links(layer), 12 if layer == 0 else 6)
                 for neighbor in neighbors:
-                    self.assertIn(identifier, index.links[neighbor][layer])
+                    self.assertNotEqual(neighbor, identifier)
+                    self.assertGreater(len(index.links[neighbor]), layer)
+                    incoming[neighbor][layer] += 1
+        self.assertEqual(index.incoming, incoming)
+        for identifier, layers in index.links.items():
+            for layer, neighbors in enumerate(layers):
+                # Solo se supera max_links para no dejar a un vecino sin enlaces de entrada.
+                extra = len(neighbors) - index.max_links(layer)
+                if extra > 0:
+                    protected = [n for n in neighbors if incoming[n][layer] == 1]
+                    self.assertGreaterEqual(len(protected), extra)
+
+    def test_no_node_becomes_unreachable(self):
+        # Histogramas dispersos y no negativos, como los de Bag of Visual Words: unos pocos
+        # nodos son vecinos de casi todos (hubs) y recortan su lista seguido. Antes, el
+        # recorte borraba también el enlace de vuelta y dejaba nodos sin ningún vecino.
+        rng = np.random.default_rng(7)
+        vectors = rng.random((400, 64)) ** 6
+        vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
+        index = HNSWIndex(M=4, ef_construction=20, metric="cosine", seed=7)
+        for identifier, vector in enumerate(vectors):
+            index.insert(identifier, vector)
+        reached, pending = {index.entrypoint}, [index.entrypoint]
+        while pending:
+            for layer in index.links[pending.pop()]:
+                for neighbor in layer - reached:
+                    reached.add(neighbor)
+                    pending.append(neighbor)
+        self.assertEqual(len(reached), len(vectors))
+        self.assertTrue(all(index.links[i][0] for i in range(len(vectors))))
+        # Cada vector debe encontrarse a sí mismo como su vecino más cercano.
+        found = sum(index.search(vector, k=1, ef_search=20).matches[0][0] == i
+                    for i, vector in enumerate(vectors))
+        self.assertGreaterEqual(found / len(vectors), 0.98)
 
     def test_search_and_metric_order(self):
         vectors = {0: [1, 0], 1: [2, 0], 2: [0, 1], 3: [-1, 0]}

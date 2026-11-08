@@ -7,10 +7,11 @@
 3. Calcula el IDF con el histograma de cada archivo de entrenamiento.
 
 El resultado (models/bow_<tipo>_k<K>.npz por defecto) es el que usa
-ExtractFeatures al insertar en columnas IMAGE y AUDIO.
+ExtractFeatures al insertar en columnas IMAGE y AUDIO. K por defecto: 1024
+para imágenes y 256 para audio (VOCABULARY_K en engine/features/registry.py).
 
 Uso:
-    python scripts/train_codebook.py --kind image --input datasets/bow_training/coco
+    python scripts/train_codebook.py --kind image --input datasets/bow_training/coco --sample 200000
     python scripts/train_codebook.py --kind audio --input datasets/bow_training/esc50
     python scripts/train_codebook.py --subset coco1k          # datasets/multimedia/coco1k/images
 """
@@ -26,33 +27,24 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from engine.features.bow import DEFAULT_K, DEFAULT_SAMPLE, BagOfWords  # noqa: E402
-from engine.features.registry import vocabulary_path  # noqa: E402
+from engine.features.bow import DEFAULT_SAMPLE, BagOfWords  # noqa: E402
+from engine.features.registry import VOCABULARY_K, local_describer, vocabulary_path  # noqa: E402
 
 DATASETS_DIR = ROOT / "datasets" / "multimedia"
 EXTENSIONS = {"image": (".jpg", ".jpeg", ".png", ".bmp"), "audio": (".wav", ".mp3", ".flac", ".ogg")}
 
 
-def describer(kind: str):
-    if kind == "image":
-        from engine.features.image.sift import SIFTExtractor
-        extractor = SIFTExtractor(n_features=500)
-        return extractor.extract_descriptors
-    from engine.features.audio.mfcc import MFCCExtractor
-    extractor = MFCCExtractor()
-    return extractor.extract_frames
-
-
 def local_descriptors(kind: str, files: list[Path], workers: int) -> list[np.ndarray]:
-    describe = describer(kind)
+    describe = local_describer(kind)
     # OpenCV y librosa liberan el GIL en la parte costosa: los hilos aceleran la extracción.
     with ThreadPoolExecutor(max_workers=workers) as pool:
         return list(pool.map(lambda path: describe(str(path)), files))
 
 
-def train_codebook(kind: str, input_dir: Path, k: int = DEFAULT_K, sample: int = DEFAULT_SAMPLE,
+def train_codebook(kind: str, input_dir: Path, k: int | None = None, sample: int = DEFAULT_SAMPLE,
                    output: Path | None = None, max_files: int | None = None, workers: int = 8,
                    seed: int = 42) -> BagOfWords:
+    k = VOCABULARY_K[kind] if k is None else k
     files = sorted(p for p in input_dir.iterdir() if p.suffix.lower() in EXTENSIONS[kind])[:max_files]
     if not files:
         raise SystemExit(f"No hay archivos de {kind} en {input_dir}")
@@ -82,7 +74,7 @@ def main(argv=None):
     parser.add_argument("--kind", choices=("image", "audio"), default="image")
     parser.add_argument("--input", type=Path, help="carpeta con los archivos de entrenamiento")
     parser.add_argument("--subset", help="subconjunto COCO de #58 (datasets/multimedia/<subset>/images)")
-    parser.add_argument("--k", type=int, default=DEFAULT_K)
+    parser.add_argument("--k", type=int, help="palabras del vocabulario (por defecto, 1024 imagen y 256 audio)")
     parser.add_argument("--sample", type=int, default=DEFAULT_SAMPLE)
     parser.add_argument("--max-files", type=int)
     parser.add_argument("--output", type=Path)
