@@ -56,7 +56,7 @@ class TestMultimediaPreparation(unittest.TestCase):
             cv2.imwrite(str(root / "images/blank.jpg"), np.zeros((128, 128), dtype=np.uint8))
             cache = root / "vectors.npz"
             vectors = extract_vectors(root, ["textured.jpg", "blank.jpg"], cache, "bovw")
-            self.assertEqual(vectors.shape, (2, 256))
+            self.assertEqual(vectors.shape, (2, 1024))
             np.testing.assert_allclose(vectors[0], extract_features("image", str(root / "images/textured.jpg")),
                                        rtol=1e-5)
             self.assertFalse(vectors[1].any())

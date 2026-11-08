@@ -33,7 +33,16 @@ def test_trains_an_audio_vocabulary_from_mfcc_windows(tmp_path):
 
 
 def test_committed_vocabularies():
-    for kind, dimension in (("image", 128), ("audio", 13)):
-        bow = BagOfWords.load(vocabulary_path(kind, 256))
-        assert (bow.k, bow.dimension, bow.kind) == (256, dimension, kind)
+    for kind, k, dimension in (("image", 1024, 128), ("audio", 256, 13)):
+        bow = BagOfWords.load(vocabulary_path(kind))
+        assert (bow.k, bow.dimension, bow.kind) == (k, dimension, kind)
         assert np.all(bow.idf > 0)
+
+
+def test_image_vocabulary_matches_the_sift_scale():
+    # OpenCV entrega descriptores SIFT con norma L2 cercana a 512. Un vocabulario entrenado
+    # con descriptores normalizados (por ejemplo, RootSIFT, de norma 1) no serviría con
+    # los que extrae el motor, y todo caería en las mismas pocas palabras sin dar error.
+    bow = BagOfWords.load(vocabulary_path("image"))
+    norms = np.linalg.norm(bow.centroids, axis=1)
+    assert np.all((norms > 100) & (norms < 600))

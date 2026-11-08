@@ -7,7 +7,7 @@ Proyecto de Base de Datos II (UTEC, 2026-2): un gestor de bases de datos constru
 | **1. Relacional** | Completa | Heap File, Archivo Secuencial y tabla B+ agrupada; índices B+ y Hash extensible; SQL con optimizador por costos; transacciones con control de concurrencia; interfaz gráfica; comparación experimental. |
 | **2. Espacial** | Completa | R-Tree en disco con consultas por radio, k-NN y polígonos; métricas Euclidiana y Haversine; SQL espacial; mapa interactivo (tkintermapview); comparación contra GiST de PostGIS. |
 | **3. Texto** | Completa | Preprocesamiento (stopwords y stemming en español e inglés), índice invertido SPIMI en disco, rankings TF-IDF + coseno y BM25, SQL con `MATCH ... USING TF_IDF \| BM25` y `SCORE()`; comparación contra GIN de PostgreSQL. |
-| **4. Multimedia** | Completa (experimento con BoVW por actualizar) | ExtractFeatures con Bag of Visual/Audio Words (SIFT o MFCC → K-Means K=256 → TF-IDF); índices IVF y HNSW; métricas euclidiana, producto punto y coseno; SQL con `SIMILAR_TO` y `SIMILARITY_SCORE()`; galería en la interfaz; comparación IVF vs HNSW. |
+| **4. Multimedia** | Completa (experimento con BoVW por actualizar) | ExtractFeatures con Bag of Visual/Audio Words (SIFT → K-Means K=1024 para imágenes, MFCC → K=256 para audio → TF-IDF); índices IVF y HNSW; métricas euclidiana, producto punto y coseno; SQL con `SIMILAR_TO` y `SIMILARITY_SCORE()`; galería en la interfaz; comparación IVF vs HNSW. |
 | 5. Aplicación de IA | Pendiente | Entrega final. |
 
 El diseño, los algoritmos y los resultados experimentales están en el [informe](docs/informe.md).
@@ -152,11 +152,11 @@ CREATE INDEX canciones_audio ON canciones (audio) USING IVF;                 -- 
 SELECT * FROM canciones WHERE SIMILAR_TO('audio_query.wav', k=5) USING IVF;
 ```
 
-El vector de cada archivo es su histograma Bag of Visual/Audio Words (K = 256, TF-IDF), calculado con los vocabularios de `models/`. Para volver a entrenarlos:
+El vector de cada archivo es su histograma Bag of Visual/Audio Words con TF-IDF, calculado con los vocabularios de `models/`: K = 1024 palabras sobre descriptores SIFT para imágenes y K = 256 sobre MFCC para audio. Para volver a entrenarlos (el de imágenes tarda ~8 min):
 
 ```bash
 python scripts/download_bow_training_data.py            # 500 imágenes de coco1k y 200 clips de ESC-50 (~160 MB)
-python scripts/train_codebook.py --kind image --input datasets/bow_training/coco
+python scripts/train_codebook.py --kind image --input datasets/bow_training/coco --sample 200000
 python scripts/train_codebook.py --kind audio --input datasets/bow_training/esc50
 ```
 
@@ -340,7 +340,7 @@ benchmarks/
 ├── bench_text.py, generate_text_datasets.py, text_*.py                     # Parte 3
 ├── multimedia_*.py                                                         # Parte 4
 └── results/                    # CSV, metadatos y gráficas de las corridas oficiales
-models/                         # Vocabularios Bag of Words (imagen y audio, K=256)
+models/                         # Vocabularios Bag of Words (imagen K=1024, audio K=256)
 datasets/                       # Distritos (GeoJSON) y descripción del corpus de texto; lo generado no se versiona
 postgis/                        # docker-compose, esquema SQL y cliente de PostGIS
 postgres_text/                  # docker-compose y cliente de PostgreSQL con índice GIN

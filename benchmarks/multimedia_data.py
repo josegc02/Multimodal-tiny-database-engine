@@ -2,8 +2,8 @@
 
 Dos representaciones (--features):
 - bovw (por defecto): ExtractFeatures del enunciado 2.4.1. Todos los puntos
-  SIFT de la imagen se cuantizan con el vocabulario de models/bow_image_k256.npz
-  y se pesan con TF-IDF: 256 dimensiones. Una imagen sin puntos SIFT queda en
+  SIFT de la imagen se cuantizan con el vocabulario de
+  models/bow_image_k1024.npz y se pesan con TF-IDF: 1024 dimensiones. Una imagen sin puntos SIFT queda en
   el vector nulo y se registra en empty_files.
 - sift-mean: promedio de los descriptores SIFT (128 dimensiones), la versión de
   los resultados publicados en #83; las imágenes sin puntos usan un histograma gris.
@@ -38,6 +38,7 @@ def load_subset(directory: Path, expected_size: int):
 
 
 FEATURES = ("bovw", "sift-mean")
+LEGACY_BOVW_K = 256  # cachés bovw anteriores al vocabulario K = 1024
 
 
 def extract_vectors(directory: Path, filenames: list[str], cache: Path, features: str | None = None) -> np.ndarray:
@@ -47,6 +48,9 @@ def extract_vectors(directory: Path, filenames: list[str], cache: Path, features
     """
     if features is not None and features not in FEATURES:
         raise ValueError(f"features debe ser uno de {FEATURES}")
+    if cache.is_file() and _stale_bovw(cache):
+        # Caché de un vocabulario anterior (por ejemplo, K=256 con SIFT): se vuelve a extraer.
+        cache.unlink()
     if cache.is_file():
         with np.load(cache, allow_pickle=False) as saved:
             vectors = saved["vectors"]
@@ -64,22 +68,37 @@ def extract_vectors(directory: Path, filenames: list[str], cache: Path, features
     return _extract_sift_mean(directory, filenames, cache)
 
 
+def _stale_bovw(cache: Path) -> bool:
+    """Si la caché tiene vectores bovw de otro vocabulario que el actual.
+
+    Las cachés nuevas guardan el nombre del vocabulario; las anteriores no, y
+    se reconocen por sus 256 dimensiones (SIFT con K = 256).
+    """
+    from engine.features.registry import vocabulary_path
+
+    with np.load(cache, allow_pickle=False) as saved:
+        if "features" not in saved or str(saved["features"]) != "bovw":
+            return False
+        if "vocabulary" in saved:
+            return str(saved["vocabulary"]) != vocabulary_path("image").name
+        return saved["vectors"].ndim == 2 and saved["vectors"].shape[1] == LEGACY_BOVW_K
+
+
 def _extract_bovw(directory: Path, filenames: list[str], cache: Path) -> np.ndarray:
     import cv2
 
     from engine.features.bow import BagOfWords
-    from engine.features.image.sift import SIFTExtractor
-    from engine.features.registry import VOCABULARY_K, vocabulary_path
+    from engine.features.registry import local_describer, vocabulary_path
 
-    vocabulary = BagOfWords.load(vocabulary_path("image", VOCABULARY_K))
+    vocabulary = BagOfWords.load(vocabulary_path("image"))
     cv2.setNumThreads(1)
     local = threading.local()
 
     def extract(filename):
-        if not hasattr(local, "extractor"):
-            local.extractor = SIFTExtractor(n_features=500)
+        if not hasattr(local, "describe"):
+            local.describe = local_describer("image")
         try:
-            descriptors = local.extractor.extract_descriptors(directory / "images" / filename)
+            descriptors = local.describe(directory / "images" / filename)
         except ValueError as error:
             raise ValueError(f"{filename}: {error}") from error
         return vocabulary.transform(descriptors)
@@ -89,7 +108,7 @@ def _extract_bovw(directory: Path, filenames: list[str], cache: Path) -> np.ndar
     empty_files = [name for name, vector in zip(filenames, result) if not vector.any()]
     cache.parent.mkdir(parents=True, exist_ok=True)
     np.savez(cache, vectors=result, filenames=np.asarray(filenames), features="bovw",
-             empty_files=np.asarray(empty_files, dtype=str))
+             vocabulary=vocabulary_path("image").name, empty_files=np.asarray(empty_files, dtype=str))
     return result
 
 

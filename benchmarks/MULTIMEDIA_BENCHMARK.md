@@ -2,8 +2,9 @@
 
 **Vectores.** Por defecto (`--features bovw`) cada imagen se representa con
 ExtractFeatures del enunciado: sus puntos SIFT se cuantizan con el vocabulario
-Bag of Visual Words de `models/bow_image_k256.npz` y el histograma se pesa con
-TF-IDF (256 dimensiones). Una imagen sin puntos SIFT queda en el vector nulo y
+Bag of Visual Words de `models/bow_image_k1024.npz` y el histograma se pesa con
+TF-IDF (1024 dimensiones). Las cachés de vectores de un
+vocabulario anterior (K = 256) se vuelven a extraer. Una imagen sin puntos SIFT queda en el vector nulo y
 se excluye de las corridas con coseno. `--features sift-mean` reproduce los
 resultados publicados en #83, que usaban el promedio SIFT (128 dimensiones);
 el resto de esta página describe esa versión.

@@ -54,7 +54,7 @@ class TestRealExtractors(unittest.TestCase):
         self.execute(f"INSERT INTO imagenes VALUES {values}")
         self.execute("CREATE INDEX imagenes_foto ON imagenes (foto) USING HNSW WITH (METRIC = cosine)")
         schema = self.motor.catalog.table("imagenes").storage.schema
-        self.assertEqual(schema.vector("foto", self.path("img0.png")).shape, (256,))
+        self.assertEqual(schema.vector("foto", self.path("img0.png")).shape, (1024,))
         rows = self.execute(f"SELECT id, SIMILARITY_SCORE() FROM imagenes "
                             f"WHERE SIMILAR_TO('{self.path('consulta.png')}', k=3) USING HNSW WITH METRIC=cosine")
         self.assertEqual(rows[0][0], 2)
@@ -79,11 +79,11 @@ class TestRealExtractors(unittest.TestCase):
     def test_vectors_are_bag_of_words_histograms(self):
         self.write_images()
         vector = extract_features("image", self.path("img0.png"))
-        self.assertEqual(vector.shape, (256,))
+        self.assertEqual(vector.shape, (1024,))
         self.assertAlmostEqual(float(np.linalg.norm(vector)), 1.0, places=5)
         self.assertTrue(np.all(vector >= 0))
         # Un histograma: la mayoría de las palabras no aparecen en una sola imagen.
-        self.assertLess(np.count_nonzero(vector), 256)
+        self.assertLess(np.count_nonzero(vector), 1024)
 
     def test_image_without_keypoints_is_the_zero_vector(self):
         self.write_images()
