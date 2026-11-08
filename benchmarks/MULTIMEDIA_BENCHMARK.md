@@ -36,7 +36,9 @@ la llamada al índice. El pico RSS sí incluye el proceso Python y el índice.
 La referencia de Recall@10 son los diez vecinos exactos del mismo conjunto de
 vectores, excluida la consulta. Esta medida evalúa la aproximación del índice;
 no demuestra relevancia semántica. IVF usa `nlist ≈ √N` y `nprobe ≈ √nlist`;
-HNSW usa `M=8`, `ef_construction=50` y `ef_search=50`, con semilla 42.
+HNSW usa `M=8` (2·M vecinos en la capa 0), `ef_construction=50` y `ef_search=50`, con semilla 42,
+y la heurística de selección de vecinos del algoritmo original. Los resultados publicados se
+midieron con la versión anterior del índice, que podía dejar nodos inalcanzables (ver el informe).
 Esos parámetros están fijos para ambas métricas y no se ajustaron por dataset.
 
 La salida contiene `summary.csv`, `queries.json`, cuatro gráficas PNG,
