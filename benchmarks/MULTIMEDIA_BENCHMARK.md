@@ -31,7 +31,17 @@ métrica corre en un proceso nuevo. Los vectores SIFT se extraen una vez por
 tamaño y se comparten mediante un archivo `.npz` dentro del directorio de
 salida. El tiempo de construcción excluye la extracción SIFT, la lectura del
 cache y la preparación de consultas. El tiempo medio de consulta incluye solo
-la llamada al índice. El pico RSS sí incluye el proceso Python y el índice.
+la llamada al índice. El pico RSS sí incluye el proceso Python, los vectores
+cargados y el índice. La columna *Memoria del índice* (y `memory.png`) es el
+pico menos la memoria del proceso justo antes de construir el índice, cuando los
+vectores ya están cargados: aísla lo que ocupan el índice y su construcción.
+
+Con vectores BoVW (norma 1) la distancia euclidiana y el coseno ordenan igual a
+los vecinos exactos, porque ‖a − b‖² = 2 − 2·cos(a, b); las diferencias entre
+métricas salen de cada índice (k-means euclidiano o esférico en IVF, grafo
+distinto en HNSW). El vocabulario se entrenó con 500 fotos de `coco1k`: no
+afecta Recall@10 ni tiempos, pero puede favorecer un poco la precisión
+semántica de la galería en el tamaño de 1K.
 
 La referencia de Recall@10 son los diez vecinos exactos del mismo conjunto de
 vectores, excluida la consulta. Esta medida evalúa la aproximación del índice;

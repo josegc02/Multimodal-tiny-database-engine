@@ -85,7 +85,8 @@ class TestMultimediaCompare(unittest.TestCase):
                     records.append({"size": 1000, "metric": metric, "technique": technique,
                                     "queries": 1, "build_seconds": 1.0,
                                     "mean_query_seconds": 0.01, "mean_recall_at_10": 0.5,
-                                    "rss_initial_bytes": 1024, "rss_peak_bytes": 2048})
+                                    "rss_initial_bytes": 1024 ** 2,
+                                    "rss_peak_bytes": (4 if technique == "IVF" else 3) * 1024 ** 2})
             import csv
             with (output / "summary.csv").open("w", newline="", encoding="utf-8") as stream:
                 writer = csv.DictWriter(stream, fieldnames=list(records[0]))
@@ -99,7 +100,11 @@ class TestMultimediaCompare(unittest.TestCase):
             plot_results(output)
             write_gallery(output, root / "datasets")
             write_report(output)
-            self.assertIn("0.500", (output / "report.md").read_text(encoding="utf-8"))
+            report = (output / "report.md").read_text(encoding="utf-8")
+            self.assertIn("0.500", report)
+            # Memoria del índice = pico - inicial: 3 MiB (IVF) y 2 MiB (HNSW).
+            self.assertIn("| 1000 | cosine | IVF | 1.000 | 10.000 | 0.500 | 4.0 | 3.0 |", report)
+            self.assertIn("**HNSW** usó menos memoria para el índice", report)
             self.assertIn("a.jpg", (output / "gallery.html").read_text(encoding="utf-8"))
             for name in ("construction.png", "query.png", "recall.png", "memory.png"):
                 self.assertGreater((output / name).stat().st_size, 0)

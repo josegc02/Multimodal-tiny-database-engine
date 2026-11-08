@@ -7,12 +7,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from benchmarks.multimedia_report import index_memory
+
 
 MEASURES = (
     ("build_seconds", "Construcción (s)", "construction.png"),
     ("mean_query_seconds", "Consulta media (s)", "query.png"),
     ("mean_recall_at_10", "Recall@10 frente a vecinos exactos", "recall.png"),
-    ("rss_peak_bytes", "Pico RSS del proceso (MiB)", "memory.png"),
+    ("index_memory", "Memoria del índice: pico − inicial (MiB)", "memory.png"),
 )
 
 
@@ -28,7 +30,7 @@ def plot_results(output: Path):
                 subset = sorted((r for r in rows if r["metric"] == metric and
                                  r["technique"] == technique), key=lambda r: int(r["size"]))
                 if subset:
-                    values = [float(r[field]) / (1024 ** 2 if field == "rss_peak_bytes" else 1)
+                    values = [index_memory(r) / 1024 ** 2 if field == "index_memory" else float(r[field])
                               for r in subset]
                     ax.plot([int(r["size"]) for r in subset], values, marker="o", label=technique)
             ax.set_title(metric)
