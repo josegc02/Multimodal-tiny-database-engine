@@ -5,6 +5,21 @@ import json
 from pathlib import Path
 
 
+def vector_dimension(output: Path, features: str) -> int | None:
+    """Dimensión de los vectores medidos, leída de la caché que dejó el benchmark."""
+    import numpy as np
+
+    for cache in sorted(output.glob(f"vectors_{features}_*.npz")):
+        with np.load(cache, allow_pickle=False) as saved:
+            return int(saved["vectors"].shape[1])
+    return None
+
+
+def index_memory(row: dict) -> int:
+    """Memoria atribuible al índice: pico del proceso menos la memoria antes de construirlo."""
+    return max(0, int(row["rss_peak_bytes"]) - int(row["rss_initial_bytes"]))
+
+
 def write_report(output: Path):
     with (output / "summary.csv").open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
@@ -13,15 +28,24 @@ def write_report(output: Path):
     features_path = output / "features.json"
     features = (json.loads(features_path.read_text(encoding="utf-8"))["features"]
                 if features_path.is_file() else "sift-mean")
-    description = ("Los vectores son histogramas Bag of Visual Words (K=256, TF-IDF) de los puntos SIFT "
-                   "de imágenes COCO." if features == "bovw" else "Los vectores son promedios SIFT de imágenes COCO.")
+    if features == "bovw":
+        dimension = vector_dimension(output, features)
+        size = f"K={dimension}, " if dimension else ""
+        description = (f"Los vectores son histogramas Bag of Visual Words ({size}TF-IDF) de los puntos SIFT "
+                       "de imágenes COCO. Tienen norma L2 igual a 1, así que ‖a − b‖² = 2 − 2·cos(a, b): "
+                       "la distancia euclidiana y el coseno ordenan los vecinos exactos igual. Las diferencias "
+                       "entre métricas vienen de cada índice: IVF agrupa con k-means euclidiano o esférico "
+                       "(coseno) y HNSW arma un grafo distinto según la métrica.")
+    else:
+        description = "Los vectores son promedios SIFT de imágenes COCO."
     lines = ["# Comparación experimental multimedia (#59)", "",
              description + " Cada configuración usa el mismo corpus y "
              "las mismas consultas; el vector de la consulta se excluye de los resultados. "
              "Recall@10 compara los diez IDs recuperados con los diez vecinos exactos bajo la misma métrica. "
              "No mide relevancia semántica por categoría.", "",
-             "| Imágenes | Métrica | Índice | Construcción (s) | Consulta media (ms) | Recall@10 | Pico RSS (MiB) |",
-             "|---:|---|---|---:|---:|---:|---:|"]
+             "| Imágenes | Métrica | Índice | Construcción (s) | Consulta media (ms) | Recall@10 | Pico RSS (MiB) "
+             "| Memoria del índice (MiB) |",
+             "|---:|---|---|---:|---:|---:|---:|---:|"]
     counts_path = output / "fallback_counts.json"
     if counts_path.is_file():
         counts = json.loads(counts_path.read_text(encoding="utf-8"))
@@ -37,7 +61,8 @@ def write_report(output: Path):
                      f'{float(row["build_seconds"]):.3f} | '
                      f'{float(row["mean_query_seconds"]) * 1000:.3f} | '
                      f'{float(row["mean_recall_at_10"]):.3f} | '
-                     f'{int(row["rss_peak_bytes"]) / 1024 ** 2:.1f} |')
+                     f'{int(row["rss_peak_bytes"]) / 1024 ** 2:.1f} | '
+                     f'{index_memory(row) / 1024 ** 2:.1f} |')
     lines.extend(["", "## Recomendaciones basadas en estas corridas", ""])
     for size in sorted({int(r["size"]) for r in rows}):
         for metric in ("euclidean", "cosine"):
@@ -46,13 +71,15 @@ def write_report(output: Path):
                 continue
             fast = min(group, key=lambda r: float(r["mean_query_seconds"]))
             accurate = max(group, key=lambda r: float(r["mean_recall_at_10"]))
-            low_memory = min(group, key=lambda r: int(r["rss_peak_bytes"]))
+            low_memory = min(group, key=index_memory)
             lines.append(f'- {size} imágenes, {metric}: **{fast["technique"]}** tuvo menor latencia media; '
                          f'**{accurate["technique"]}** obtuvo mayor Recall@10; '
-                         f'**{low_memory["technique"]}** registró menor pico RSS.')
+                         f'**{low_memory["technique"]}** usó menos memoria para el índice.')
     lines.extend(["", "Estos resultados corresponden a una sola corrida por configuración, "
-                  "sin intervalos de confianza. El pico RSS incluye el intérprete y las páginas compartidas; "
-                  "no representa la memoria exclusiva del índice. Para comparar máquinas o tomar decisiones "
+                  "sin intervalos de confianza. El pico RSS incluye el intérprete, los vectores cargados y las "
+                  "páginas compartidas. La memoria del índice es el pico menos la memoria del proceso justo antes "
+                  "de construirlo (vectores ya cargados): aproxima lo que ocupa el índice y su construcción, "
+                  "igual para IVF y HNSW. Para comparar máquinas o tomar decisiones "
                   "de producción hay que repetir las corridas bajo condiciones controladas.", "",
                   "![Construcción](construction.png)", "![Consultas](query.png)",
                   "![Recall](recall.png)", "![Memoria](memory.png)", "",

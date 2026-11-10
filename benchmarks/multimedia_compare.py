@@ -102,7 +102,7 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sizes", type=int, nargs="+", default=list(SIZES))
     parser.add_argument("--features", choices=FEATURES, default="bovw",
-                        help="bovw: Bag of Visual Words K=256 (enunciado); sift-mean: promedio SIFT de #83")
+                        help="bovw: Bag of Visual Words con el vocabulario de models/ (enunciado); sift-mean: promedio SIFT de #83")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.worker:
