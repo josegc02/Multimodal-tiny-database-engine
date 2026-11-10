@@ -1079,6 +1079,35 @@ alcance de esta parte. Los porcentajes son menores que en la prueba con
 val2017 de la sección 10 porque estas consultas cubren categorías poco
 frecuentes (azar ≈ 4 % frente a ≈ 20 %).
 
+**Qué cambió respecto a la corrida anterior y qué ganó K = 1024.** La primera
+versión de este benchmark midió el promedio de descriptores SIFT (128
+dimensiones), no el vector de ExtractFeatures, y obtuvo Recall@10 cercano a 1
+(IVF 0,99–1,00 y HNSW 0,93–1,00). Ese número no es comparable con el actual:
+Recall@10 mide qué tanto se acerca el índice a la búsqueda exacta *sobre el
+mismo vector*, y un promedio de 128 dimensiones, en el que todas las fotos se
+parecen, es mucho más fácil de aproximar que un histograma de 1024. Por eso el
+Recall@10 bajó sin que el buscador empeorara. La precisión por categoría de la
+búsqueda exacta quedó prácticamente igual (promedio SIFT: 6,0 / 9,1 / 8,9 % en
+1K / 10K / 100K; BoVW K = 1024: 6,0 / 11,4 / 8,3 %). Lo que el cambio de K
+debía mejorar se midió en la sección 10 (5000 imágenes de COCO val2017,
+mismas condiciones para cada K):
+
+| Medida | K = 256 | K = 1024 | Resultado |
+|---|---:|---:|---|
+| La foto original sale 1.ª entre 5100 (48 variantes de la demo) | 92 % | 100 % | Mejora |
+| Ventaja de la original sobre la 2.ª foto (coseno) | 0,05 | 0,23 | Mejora |
+| Variantes de la demo SQL que encuentran su original (con HNSW corregido) | 46/48 | 48/48 | Mejora |
+| P@10 por categoría COCO (azar 20,5 %) | 27,8 % | 26,7 % | Sin cambio |
+| Recall@10 HNSW / IVF, N = 5000 | 0,86 / 0,79 | 0,82 / 0,73 | Baja un poco |
+| Memoria del índice HNSW / IVF, N = 5000 | 20 / 38 MiB | 66 / 127 MiB | Sube ~3× |
+
+K = 1024 hace al motor más preciso y robusto en lo que SIFT sabe hacer:
+encontrar la misma foto, objeto o lugar aunque esté recortado, girado o con
+otro brillo. A cambio, los índices aproximan un poco peor y ocupan más memoria.
+No mejora la búsqueda por categoría (un gato que devuelva otros gatos), porque
+ese límite es del descriptor local y no depende de K; para eso se necesitan
+embeddings aprendidos (Parte 5).
+
 **Recomendación.**
 
 | Escenario | Técnica | Motivo medido |
