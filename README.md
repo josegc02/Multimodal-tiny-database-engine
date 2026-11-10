@@ -7,26 +7,18 @@ Proyecto de Base de Datos II (UTEC, 2026-2): un gestor de bases de datos constru
 | **1. Relacional** | Completa | Heap File, Archivo Secuencial y tabla B+ agrupada; índices B+ y Hash extensible; SQL con optimizador por costos; transacciones con control de concurrencia; interfaz gráfica; comparación experimental. |
 | **2. Espacial** | Completa | R-Tree en disco con consultas por radio, k-NN y polígonos; métricas Euclidiana y Haversine; SQL espacial; mapa interactivo (tkintermapview); comparación contra GiST de PostGIS. |
 | **3. Texto** | Completa | Preprocesamiento (stopwords y stemming en español e inglés), índice invertido SPIMI en disco, rankings TF-IDF + coseno y BM25, SQL con `MATCH ... USING TF_IDF \| BM25` y `SCORE()`; comparación contra GIN de PostgreSQL. |
-| **4. Multimedia** | Completa (experimento con BoVW por actualizar) | ExtractFeatures con Bag of Visual/Audio Words (SIFT → K-Means K=1024 para imágenes, MFCC → K=256 para audio → TF-IDF); índices IVF y HNSW; métricas euclidiana, producto punto y coseno; SQL con `SIMILAR_TO` y `SIMILARITY_SCORE()`; galería en la interfaz; comparación IVF vs HNSW. |
+| **4. Multimedia** | Completa | ExtractFeatures con Bag of Visual/Audio Words (SIFT → K-Means K=1024 para imágenes, MFCC → K=256 para audio → TF-IDF); índices IVF y HNSW; métricas euclidiana, producto punto y coseno; SQL con `SIMILAR_TO` y `SIMILARITY_SCORE()`; galería en la interfaz; comparación IVF vs HNSW. |
 | 5. Aplicación de IA | Pendiente | Entrega final. |
 
 El diseño, los algoritmos y los resultados experimentales están en el [informe](docs/informe.md).
 
-> **Nota sobre la comparación experimental de la Parte 4.** Los resultados publicados en
+> **Comparación experimental de la Parte 4.** Los resultados de
 > [`benchmarks/results/multimedia/`](benchmarks/results/multimedia/report.md) (1K, 10K y 100K imágenes de
-> MS-COCO, IVF vs HNSW, euclidiana vs coseno) se midieron **antes** de integrar Bag of Visual Words, con un
-> descriptor global: el promedio de los descriptores SIFT (128 dimensiones). Son mediciones válidas de los
-> índices sobre ese vector, pero no sobre el vector final de ExtractFeatures (histograma BoVW de 256
-> dimensiones). Por falta de tiempo para repetir la corrida completa (~2 h) antes de este avance, se presentan
-> esos resultados. Qué cambia en teoría con BoVW:
-> - **Tiempos y memoria:** la misma tendencia, con valores mayores (el costo de cada distancia es O(d) y d pasa de 128 a 256).
-> - **Recall@10:** más bajo con los mismos parámetros, porque en más dimensiones las distancias se concentran.
->   En una prueba con 500 imágenes de `coco1k`, IVF pasó de 0,99 a 0,87 y HNSW de 0,998 a 0,97.
-> - **Euclidiana vs coseno:** los vectores BoVW tienen norma 1, y entonces ‖a − b‖² = 2 − 2·cos(a, b):
->   ambas métricas dan el mismo ranking de vecinos.
->
-> El benchmark ya usa BoVW por defecto (`--features bovw`; `--features sift-mean` reproduce la tabla publicada)
-> y la corrida completa se actualizará en la entrega final. Detalles en la sección 11 del informe.
+> MS-COCO 2017, IVF vs HNSW, euclidiana vs coseno, k=10) usan el vector final de ExtractFeatures: histogramas
+> BoVW de 1024 dimensiones con TF-IDF. Con los parámetros fijos del benchmark, IVF construye 8–50× más rápido y
+> mantiene Recall@10 ≈ 0,67–0,70 en los tres tamaños; HNSW responde 7–10× más rápido en 100K, pero su Recall@10
+> baja de 0,95 (1K) a 0,41 (100K) porque `ef_search=50` no crece con el corpus. Euclidiana y coseno dan
+> resultados casi iguales (vectores de norma 1). Análisis completo en la sección 11 del informe.
 
 ---
 

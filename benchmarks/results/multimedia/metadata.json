@@ -1,37 +1,42 @@
 {
-    "dataset":  "MS-COCO 2017 train",
-    "source_images":  118287,
-    "sizes":  [
-                  1000,
-                  10000,
-                  100000
-              ],
-    "vectors":  "SIFT mean descriptor, 128 dimensions; grayscale histogram fallback for images without SIFT points",
-    "fallback_images":  {
-                            "100000":  1,
-                            "1000":  0,
-                            "10000":  1
-                        },
-    "metric_reference":  "exact top-10 excluding query image",
-    "techniques":  [
-                       "IVF",
-                       "HNSW"
-                   ],
-    "metrics":  [
-                    "euclidean",
-                    "cosine"
-                ],
-    "k":  10,
-    "repetitions":  1,
-    "started_local":  "2026-11-06T03:15:24-05:00",
-    "completed_local":  "2026-11-06T05:11:53-05:00",
-    "platform":  "Windows",
-    "python":  "3.14.7",
-    "cpu":  "Intel Core i7-12700H",
-    "code_revision":  "08d7a3a",
-    "subset_manifest_sha256":  {
-                                   "coco100k":  "8bde70a767f7a98bb0b7234b870ff057ab05a74c3c1a386f6e95fa0a3018e6d9",
-                                   "coco1k":  "8c804286b9d4cb042351302535257cb2b781a69d655f9e431923afb6f0a54500",
-                                   "coco10k":  "058d2206470409c225e58e653f298d9f80acdf7befdf335f2b91e93196247e30"
-                               }
+    "dataset": "MS-COCO 2017 train",
+    "source_images": 118287,
+    "sizes": [
+        1000,
+        10000,
+        100000
+    ],
+    "vectors": "ExtractFeatures BoVW: SIFT (500 points) quantized with models/bow_image_k1024.npz, TF-IDF, L2 norm 1; 1024 dimensions",
+    "images_without_sift_points": {
+        "1000": 0,
+        "10000": 0,
+        "100000": 0
+    },
+    "metric_reference": "exact top-10 excluding query image",
+    "techniques": [
+        "IVF",
+        "HNSW"
+    ],
+    "metrics": [
+        "euclidean",
+        "cosine"
+    ],
+    "k": 10,
+    "repetitions": 1,
+    "parameters": {
+        "IVF": "nlist=round(sqrt(N)), nprobe=round(sqrt(nlist)), seed=42",
+        "HNSW": "M=8 (2M at layer 0), ef_construction=50, ef_search=50, seed=42"
+    },
+    "ef_search_sweep": "hnsw_ef_sweep.json (HNSW euclidean, same graph, ef_search 50..800, 10K and 100K)",
+    "started_local": "2026-11-08T02:41:38-05:00",
+    "completed_local": "2026-11-08T05:02:31-05:00",
+    "platform": "Windows 11",
+    "python": "3.13.5",
+    "cpu": "Intel Core i7-10510U",
+    "code_revision": "983dafd",
+    "subset_manifest_sha256": {
+        "coco1k": "8c804286b9d4cb042351302535257cb2b781a69d655f9e431923afb6f0a54500",
+        "coco10k": "058d2206470409c225e58e653f298d9f80acdf7befdf335f2b91e93196247e30",
+        "coco100k": "8bde70a767f7a98bb0b7234b870ff057ab05a74c3c1a386f6e95fa0a3018e6d9"
+    }
 }

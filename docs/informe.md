@@ -981,51 +981,149 @@ Vector Search using imagenes_foto on imagenes  (cost=4.00..4.00 rows=2) (actual 
 
 ### 11. Comparación experimental de índices multimedia (#59)
 
-Se ejecutaron 12 configuraciones sobre imágenes de MS-COCO 2017: 1K, 10K y
-100K, con IVF y HNSW bajo distancias euclidiana y coseno. Cada búsqueda pide
-diez vecinos y excluye la propia imagen. La referencia de `Recall@10` son los
-diez vecinos exactos de los mismos vectores, **no** juicios humanos de relevancia
-semántica. Se usó el promedio de descriptores SIFT (128 dimensiones); una
-imagen de 10K y otra de 100K sin puntos SIFT usaron un histograma gris de la
-misma dimensión, registrado en los metadatos.
-
-> **Pendiente:** estas mediciones son anteriores a ExtractFeatures con Bag of
-> Visual Words (sección 10). `benchmarks/multimedia_compare.py` ya usa los
-> histogramas BoVW de 256 dimensiones por defecto (`--features sift-mean`
-> reproduce esta tabla), y la corrida completa sobre 1K, 10K y 100K se repetirá.
-> En una prueba con 500 imágenes de `coco1k`, el Recall@10 bajó de 0,99 a 0,87
-> en IVF y de 0,998 a 0,97 en HNSW: los histogramas de 256 dimensiones son más
-> difíciles de aproximar que el promedio SIFT de 128.
+Se ejecutaron 12 configuraciones sobre imágenes de MS-COCO 2017 (train): 1K,
+10K y 100K, con IVF y HNSW bajo distancias euclidiana y coseno. Los vectores
+son los de ExtractFeatures (sección 10): histogramas Bag of Visual Words de
+1024 dimensiones con TF-IDF y norma L2 igual a 1. Ninguna imagen quedó sin
+puntos SIFT. Cada búsqueda pide diez vecinos y excluye la propia imagen
+(73 consultas en 1K y 80 en 10K y 100K, de `queries.json`). La referencia de
+`Recall@10` son los diez vecinos exactos de los mismos vectores, **no** juicios
+humanos de relevancia semántica. Parámetros fijos para todos los tamaños:
+IVF con `nlist ≈ √N` y `nprobe ≈ √nlist`; HNSW con `M=8`,
+`ef_construction=50` y `ef_search=50`.
 
 | Tamaño | Métrica | IVF: construcción | HNSW: construcción | IVF: consulta media | HNSW: consulta media | Recall@10 IVF / HNSW |
 |---:|---|---:|---:|---:|---:|---:|
-| 1K | Euclidiana | 0,029 s | 0,415 s | 0,459 ms | 0,421 ms | 0,992 / 0,999 |
-| 1K | Coseno | 0,023 s | 0,724 s | 0,830 ms | 0,643 ms | 0,990 / 0,993 |
-| 10K | Euclidiana | 2,220 s | 34,258 s | 26,973 ms | 3,851 ms | 1,000 / 0,953 |
-| 10K | Coseno | 0,472 s | 57,808 s | 4,389 ms | 3,820 ms | 0,995 / 0,952 |
-| 100K | Euclidiana | 85,956 s | 363,576 s | 130,637 ms | 2,577 ms | 1,000 / 0,928 |
-| 100K | Coseno | 63,695 s | 774,351 s | 113,972 ms | 8,209 ms | 1,000 / 0,911 |
+| 1K | Euclidiana | 0,35 s | 3,9 s | 1,6 ms | 3,9 ms | 0,696 / 0,949 |
+| 1K | Coseno | 0,08 s | 4,0 s | 2,4 ms | 3,6 ms | 0,704 / 0,949 |
+| 10K | Euclidiana | 2,8 s | 55 s | 8,0 ms | 5,0 ms | 0,671 / 0,673 |
+| 10K | Coseno | 1,9 s | 60 s | 15,8 ms | 5,4 ms | 0,686 / 0,673 |
+| 100K | Euclidiana | 95 s | 823 s | 50,8 ms | 7,4 ms | 0,664 / 0,412 |
+| 100K | Coseno | 115 s | 874 s | 77,4 ms | 7,6 ms | 0,688 / 0,416 |
 
 ![Construcción por tamaño](../benchmarks/results/multimedia/construction.png)
 ![Consultas por tamaño](../benchmarks/results/multimedia/query.png)
 ![Recall@10 por tamaño](../benchmarks/results/multimedia/recall.png)
-![Pico RSS por tamaño](../benchmarks/results/multimedia/memory.png)
+![Memoria del índice por tamaño](../benchmarks/results/multimedia/memory.png)
 
-En esta corrida, IVF construyó más rápido y obtuvo mayor Recall@10 en 10K y
-100K. HNSW respondió más rápido, especialmente en 100K, a cambio de una
-construcción más larga y una pérdida de vecinos exactos con los parámetros
-fijados (`M=8`, `ef_construction=50`, `ef_search=50`). Para un corpus que se
-reconstruye con frecuencia y tolera consultas más lentas, IVF resultó
-conveniente; para consultas frecuentes con tolerancia a aproximación, HNSW
-ofreció menor latencia. La elección depende de cuánta pérdida de vecinos se
-acepte. El pico de memoria del proceso rondó 2,5 GiB en 100K para ambas
-técnicas; incluye vectores, intérprete y páginas compartidas, por lo que no
-permite atribuir una diferencia fiable de memoria exclusivamente al índice.
+**Construcción.** IVF construyó entre 8 y 50 veces más rápido: entrena k-means
+una vez y asigna cada vector a una lista. HNSW inserta los vectores uno por uno
+y en cada inserción busca vecinos en el grafo (Python puro); en 100K tardó unos
+14 minutos.
 
-El [informe detallado](../benchmarks/results/multimedia/report.md), los CSV,
+**Consulta y Recall@10 con los parámetros fijos.** El costo de IVF crece con N:
+con `nprobe ≈ √nlist` revisa alrededor de N/√nlist vectores (unos 5 600 en
+100K), así que su latencia sube de 1,6 a 51–77 ms, pero su Recall@10 se
+mantiene estable en ≈ 0,67–0,70. HNSW visita un número de nodos que depende de
+`ef_search` y casi no de N: su latencia apenas sube (3,6 → 7,6 ms), pero con
+`ef_search=50` fijo su Recall@10 cae de 0,95 en 1K a 0,41 en 100K. En 1024
+dimensiones las distancias se concentran (*maldición de la dimensionalidad*):
+muchos vectores están casi a la misma distancia de la consulta y una búsqueda
+voraz con 50 candidatos se queda con vecinos "buenos" pero no exactos.
+
+**Barrido de `ef_search`.** Las dos técnicas no se compararon en el mismo
+punto de exactitud, así que se midió HNSW (euclidiana) variando solo
+`ef_search` sobre el mismo grafo
+([`hnsw_ef_sweep.json`](../benchmarks/results/multimedia/hnsw_ef_sweep.json),
+`benchmarks/multimedia_ef_sweep.py`):
+
+| `ef_search` | 10K: Recall@10 | 10K: consulta | 100K: Recall@10 | 100K: consulta |
+|---:|---:|---:|---:|---:|
+| 50 | 0,673 | 4,4 ms | 0,413 | 6,7 ms |
+| 100 | 0,760 | 9,2 ms | 0,495 | 11,9 ms |
+| 200 | 0,857 | 13,2 ms | 0,595 | 18,0 ms |
+| 400 | 0,939 | 28,0 ms | 0,701 | 33,7 ms |
+| 800 | 0,971 | 53,5 ms | 0,805 | 76,7 ms |
+
+Con `ef_search=400`, HNSW en 100K alcanza Recall@10 0,70 (más que IVF, 0,66)
+en 34 ms (IVF: 51 ms). En 10K, con `ef_search=100` supera a IVF en exactitud
+(0,76 frente a 0,67) con una latencia similar (9 ms frente a 8 ms). Es decir: a
+igual exactitud, HNSW sigue respondiendo más rápido, pero `ef_search` debe
+crecer con el corpus; el valor por defecto de 50 solo es suficiente en 1K.
+
+**Euclidiana vs coseno.** Con vectores de norma 1, ‖a − b‖² = 2 − 2·cos(a, b):
+ambas métricas ordenan los vecinos exactos igual, y en HNSW los resultados
+fueron casi idénticos (Recall@10 0,412 / 0,416 en 100K). En IVF difieren un
+poco porque el k-means euclidiano y el esférico (coseno) forman listas
+distintas; el coseno dio algo más de Recall@10 y consultas más lentas en esta
+corrida. La elección de métrica no cambia la recomendación.
+
+**Memoria.** La memoria del índice (pico del proceso menos la memoria antes de
+construirlo) fue casi igual para ambas técnicas, ≈ 2 GiB en 100K. Los dos
+índices guardan una copia float64 de cada vector (100K × 1024 × 8 B ≈ 800 MB),
+y esa copia, junto con las matrices temporales de la construcción y del cálculo
+exacto de referencia, domina la medida; el grafo de HNSW (≤ 16 enlaces por nodo
+en la capa 0) y las listas de IVF agregan poco en comparación.
+
+**Precisión por categoría (galería).** Recall@10 mide si el índice aproxima
+bien a la búsqueda exacta, no si las imágenes se parecen en contenido. Para eso
+se contó, en los diez resultados de cada consulta, cuántas imágenes contienen
+la categoría COCO de la consulta (euclidiana;
+[`category_precision.json`](../benchmarks/results/multimedia/category_precision.json),
+`benchmarks/multimedia_category_precision.py`). "Azar" es la fracción de
+imágenes del subconjunto que tienen esa categoría.
+
+| Tamaño | Exacto | IVF | HNSW | Azar |
+|---:|---:|---:|---:|---:|
+| 1K | 6,0 % | 5,8 % | 5,9 % | 4,0 % |
+| 10K | 11,4 % | 11,4 % | 9,9 % | 3,6 % |
+| 100K | 8,3 % | 9,5 % | 7,7 % | 3,6 % |
+
+Los resultados superan al azar entre 1,5 y 3 veces, pero rara vez son de la
+misma categoría. Los índices no son la causa: IVF y HNSW dan casi la misma
+precisión que la búsqueda exacta. El límite es el descriptor: SIFT + BoVW
+compara texturas y estructuras locales, no el significado de la imagen (por
+eso una consulta de un gato puede devolver una fachada antes que otro gato).
+Una búsqueda semántica requiere embeddings aprendidos (CNN o CLIP), fuera del
+alcance de esta parte. Los porcentajes son menores que en la prueba con
+val2017 de la sección 10 porque estas consultas cubren categorías poco
+frecuentes (azar ≈ 4 % frente a ≈ 20 %).
+
+**Qué cambió respecto a la corrida anterior y qué ganó K = 1024.** La primera
+versión de este benchmark midió el promedio de descriptores SIFT (128
+dimensiones), no el vector de ExtractFeatures, y obtuvo Recall@10 cercano a 1
+(IVF 0,99–1,00 y HNSW 0,93–1,00). Ese número no es comparable con el actual:
+Recall@10 mide qué tanto se acerca el índice a la búsqueda exacta *sobre el
+mismo vector*, y un promedio de 128 dimensiones, en el que todas las fotos se
+parecen, es mucho más fácil de aproximar que un histograma de 1024. Por eso el
+Recall@10 bajó sin que el buscador empeorara. La precisión por categoría de la
+búsqueda exacta quedó prácticamente igual (promedio SIFT: 6,0 / 9,1 / 8,9 % en
+1K / 10K / 100K; BoVW K = 1024: 6,0 / 11,4 / 8,3 %). Lo que el cambio de K
+debía mejorar se midió en la sección 10 (5000 imágenes de COCO val2017,
+mismas condiciones para cada K):
+
+| Medida | K = 256 | K = 1024 | Resultado |
+|---|---:|---:|---|
+| La foto original sale 1.ª entre 5100 (48 variantes de la demo) | 92 % | 100 % | Mejora |
+| Ventaja de la original sobre la 2.ª foto (coseno) | 0,05 | 0,23 | Mejora |
+| Variantes de la demo SQL que encuentran su original (con HNSW corregido) | 46/48 | 48/48 | Mejora |
+| P@10 por categoría COCO (azar 20,5 %) | 27,8 % | 26,7 % | Sin cambio |
+| Recall@10 HNSW / IVF, N = 5000 | 0,86 / 0,79 | 0,82 / 0,73 | Baja un poco |
+| Memoria del índice HNSW / IVF, N = 5000 | 20 / 38 MiB | 66 / 127 MiB | Sube ~3× |
+
+K = 1024 hace al motor más preciso y robusto en lo que SIFT sabe hacer:
+encontrar la misma foto, objeto o lugar aunque esté recortado, girado o con
+otro brillo. A cambio, los índices aproximan un poco peor y ocupan más memoria.
+No mejora la búsqueda por categoría (un gato que devuelva otros gatos), porque
+ese límite es del descriptor local y no depende de K; para eso se necesitan
+embeddings aprendidos (Parte 5).
+
+**Recomendación.**
+
+| Escenario | Técnica | Motivo medido |
+|---|---|---|
+| Corpus pequeño (≈ 1K) | HNSW | Recall@10 0,95 frente a 0,70, latencia de pocos ms y construcción de segundos. |
+| Corpus que se reconstruye seguido o se carga en lote | IVF | Construcción 8–30× más rápida en 10K–100K y exactitud estable sin ajustar parámetros. |
+| Muchas consultas sobre un corpus grande (≥ 100K) | HNSW con `ef_search` ajustado (≈ 400) | A igual o mayor Recall@10 que IVF, consultas más rápidas (34 frente a 51 ms). |
+| Euclidiana o coseno | Indistinto | Vectores BoVW de norma 1: mismo ranking exacto. |
+
+El [informe detallado](../benchmarks/results/multimedia/report.md), el CSV,
 las cuatro gráficas y la [galería de casos](../benchmarks/results/multimedia/gallery.html)
-permiten auditar cada configuración. La galería compartida carga las fotos
-desde el servidor de COCO y requiere internet. Estos números proceden de una
-sola corrida por configuración en Windows con Python 3.14; no tienen intervalos
-de confianza ni justifican extrapolaciones a otros equipos o a relevancia
-semántica de las categorías COCO.
+permiten auditar cada configuración. La galería muestra, por consulta, los
+vecinos exactos y los recuperados por cada índice; carga las fotos desde el
+servidor de COCO y requiere internet. Como se vio en la sección 10, SIFT + BoVW
+encuentra imágenes parecidas en textura y estructura local, no necesariamente
+de la misma categoría, así que en la galería son comunes resultados de otra
+categoría aunque el Recall@10 sea alto. Estos números proceden de una sola
+corrida por configuración (Windows 11, Intel Core i7-10510U, Python 3.13); no
+tienen intervalos de confianza ni justifican extrapolaciones a otros equipos.

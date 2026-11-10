@@ -1,0 +1,170 @@
+[
+  {
+    "size": 1000,
+    "metric": "cosine",
+    "technique": "HNSW",
+    "queries": 73,
+    "precision_at_10": 0.0589041095890411
+  },
+  {
+    "size": 1000,
+    "metric": "cosine",
+    "technique": "IVF",
+    "queries": 73,
+    "precision_at_10": 0.06027397260273973
+  },
+  {
+    "size": 1000,
+    "metric": "cosine",
+    "technique": "azar",
+    "queries": 73,
+    "precision_at_10": 0.039917808219178084
+  },
+  {
+    "size": 1000,
+    "metric": "cosine",
+    "technique": "exacto",
+    "queries": 73,
+    "precision_at_10": 0.06027397260273973
+  },
+  {
+    "size": 1000,
+    "metric": "euclidean",
+    "technique": "HNSW",
+    "queries": 73,
+    "precision_at_10": 0.0589041095890411
+  },
+  {
+    "size": 1000,
+    "metric": "euclidean",
+    "technique": "IVF",
+    "queries": 73,
+    "precision_at_10": 0.057534246575342465
+  },
+  {
+    "size": 1000,
+    "metric": "euclidean",
+    "technique": "azar",
+    "queries": 73,
+    "precision_at_10": 0.039917808219178084
+  },
+  {
+    "size": 1000,
+    "metric": "euclidean",
+    "technique": "exacto",
+    "queries": 73,
+    "precision_at_10": 0.06027397260273973
+  },
+  {
+    "size": 10000,
+    "metric": "cosine",
+    "technique": "HNSW",
+    "queries": 80,
+    "precision_at_10": 0.09875
+  },
+  {
+    "size": 10000,
+    "metric": "cosine",
+    "technique": "IVF",
+    "queries": 80,
+    "precision_at_10": 0.11374999999999999
+  },
+  {
+    "size": 10000,
+    "metric": "cosine",
+    "technique": "azar",
+    "queries": 80,
+    "precision_at_10": 0.0361775
+  },
+  {
+    "size": 10000,
+    "metric": "cosine",
+    "technique": "exacto",
+    "queries": 80,
+    "precision_at_10": 0.11374999999999999
+  },
+  {
+    "size": 10000,
+    "metric": "euclidean",
+    "technique": "HNSW",
+    "queries": 80,
+    "precision_at_10": 0.09875
+  },
+  {
+    "size": 10000,
+    "metric": "euclidean",
+    "technique": "IVF",
+    "queries": 80,
+    "precision_at_10": 0.11374999999999999
+  },
+  {
+    "size": 10000,
+    "metric": "euclidean",
+    "technique": "azar",
+    "queries": 80,
+    "precision_at_10": 0.0361775
+  },
+  {
+    "size": 10000,
+    "metric": "euclidean",
+    "technique": "exacto",
+    "queries": 80,
+    "precision_at_10": 0.11374999999999999
+  },
+  {
+    "size": 100000,
+    "metric": "cosine",
+    "technique": "HNSW",
+    "queries": 80,
+    "precision_at_10": 0.0775
+  },
+  {
+    "size": 100000,
+    "metric": "cosine",
+    "technique": "IVF",
+    "queries": 80,
+    "precision_at_10": 0.0975
+  },
+  {
+    "size": 100000,
+    "metric": "cosine",
+    "technique": "azar",
+    "queries": 80,
+    "precision_at_10": 0.036214375
+  },
+  {
+    "size": 100000,
+    "metric": "cosine",
+    "technique": "exacto",
+    "queries": 80,
+    "precision_at_10": 0.0825
+  },
+  {
+    "size": 100000,
+    "metric": "euclidean",
+    "technique": "HNSW",
+    "queries": 80,
+    "precision_at_10": 0.0775
+  },
+  {
+    "size": 100000,
+    "metric": "euclidean",
+    "technique": "IVF",
+    "queries": 80,
+    "precision_at_10": 0.095
+  },
+  {
+    "size": 100000,
+    "metric": "euclidean",
+    "technique": "azar",
+    "queries": 80,
+    "precision_at_10": 0.036214375
+  },
+  {
+    "size": 100000,
+    "metric": "euclidean",
+    "technique": "exacto",
+    "queries": 80,
+    "precision_at_10": 0.0825
+  }
+]
