@@ -2,7 +2,7 @@
 
 La documentación e informe técnico del proyecto se encuentran organizados en este directorio:
 
-* [**`informe.md`**](informe.md): Informe técnico incremental (arquitectura, dominio de datos, algoritmos y resultados experimentales de las Partes 1 y 2).
+* [**`informe.md`**](informe.md): Informe técnico incremental (arquitectura, dominio de datos, algoritmos y resultados experimentales de las Partes 1 a 4: relacional, espacial, texto y multimedia).
 * [**`sql_grammar.ebnf`**](sql_grammar.ebnf): Gramática formal del dialecto SQL soportado.
 * [**`sql_parser.md`**](sql_parser.md): Diseño del parser, contrato del AST y límites del análisis sintáctico.
 * [**`bplus_indexes.md`**](bplus_indexes.md): Índices B+ agrupado y no agrupado.
@@ -10,3 +10,5 @@ La documentación e informe técnico del proyecto se encuentran organizados en e
 * [**`consultas_espaciales.md`**](consultas_espaciales.md): contratos de las consultas por radio, k-NN, polígonos y SQL espacial.
 * [**`mapa.md`**](mapa.md): funcionamiento del panel de mapa.
 * [**`../benchmarks/README.md`**](../benchmarks/README.md): Metodología de los experimentos.
+* [**`../benchmarks/TEXT_BENCHMARK.md`**](../benchmarks/TEXT_BENCHMARK.md): Benchmark de texto (Parte 3): TF-IDF vs BM25 vs GIN.
+* [**`../benchmarks/MULTIMEDIA_BENCHMARK.md`**](../benchmarks/MULTIMEDIA_BENCHMARK.md): Benchmark multimedia (Parte 4): IVF vs HNSW.
