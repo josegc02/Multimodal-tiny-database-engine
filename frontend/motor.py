@@ -52,6 +52,7 @@ from engine.storage.media_store import MediaStore
 from engine.storage.text_store import TextStore
 from engine.storage.heap_file import HeapFile
 from engine.storage.sequential_file import SequentialFile
+from engine.spatial.geometry import Point
 
 
 # Raíz del proyecto: base de las rutas relativas de COPY.
@@ -90,6 +91,17 @@ def _ddl_desde_dict(datos: dict):
     return CreateTableStatement(**datos)
 
 
+def _valor_json(valor):
+    """Convierte un valor de una fila a un tipo que acepta json.dumps."""
+    if valor is None or isinstance(valor, (bool, int, float, str)):
+        return valor
+    if isinstance(valor, Point):
+        return {"lat": valor.lat, "lon": valor.lon}
+    if hasattr(valor, "tolist"):  # escalares y arreglos de numpy
+        return valor.tolist()
+    return str(valor)
+
+
 class Resultado:
     """Resultado de una ejecucion SQL.
 
@@ -110,6 +122,22 @@ class Resultado:
         self.tiempos = tiempos        # (planificación, ejecución) en segundos, con ANALYZE
         self.error = error
         self.mapa = mapa
+
+    def a_dict(self) -> dict:
+        """El resultado como diccionario serializable en JSON (para la API).
+
+        POINT pasa a {"lat", "lon"} y los escalares de numpy (puntajes de
+        SIMILARITY_SCORE, por ejemplo) a números de Python.
+        """
+        planificacion, ejecucion = self.tiempos
+        return {
+            "columnas": list(self.columnas),
+            "filas": [[_valor_json(valor) for valor in fila] for fila in self.filas],
+            "mensaje": self.mensaje,
+            "plan": list(self.plan) if self.plan is not None else None,
+            "tiempos": {"planificacion": planificacion, "ejecucion": ejecucion},
+            "error": self.error,
+        }
 
     @property
     def tiene_tabla(self):

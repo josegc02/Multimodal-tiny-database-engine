@@ -134,6 +134,20 @@ class TestMotorPersistente(unittest.TestCase):
             self.assertEqual(fh.read(), original)
         self.assertEqual(len(json.loads(original)["ddl"]), 2)
 
+    def test_resultados_se_convierten_a_json(self):
+        self.abrir()
+        self.execute(SCRIPT)
+        for sql in CONSULTAS + ["EXPLAIN ANALYZE " + CONSULTAS[7], "INSERT INTO carreras VALUES (3, 'IA')"]:
+            with self.subTest(sql=sql):
+                datos = json.loads(json.dumps(self.execute(sql).a_dict()))
+                self.assertIsNone(datos["error"])
+        fila = self.execute(CONSULTAS[-1]).a_dict()["filas"][0]
+        self.assertEqual(fila, ["laptops gamer", "img/gato2.jpg", {"lat": -12.0566, "lon": -77.1181}])
+        puntajes = self.execute(CONSULTAS[7]).a_dict()["filas"]
+        self.assertTrue(all(type(s) is float for _, s in puntajes))
+        error = self.motor.ejecutar("SELECT * FROM no_existe").a_dict()
+        self.assertEqual((error["filas"], bool(error["error"])), ([], True))
+
     def test_error_al_reabrir_indica_la_entrada(self):
         self.abrir()
         self.execute("CREATE TABLE t (id INT)")
