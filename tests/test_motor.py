@@ -221,6 +221,20 @@ class TestMotorDDL(unittest.TestCase):
             finally:
                 motor.cerrar()
 
+    def test_without_demo_mode_keeps_files_and_creates_no_tables(self):
+        with tempfile.TemporaryDirectory() as otro:
+            previo = os.path.join(otro, "previo.db")
+            with open(previo, "wb") as fh:
+                fh.write(b"datos de otra sesion")
+            motor = Motor(directorio=otro, modo_demo=False)
+            try:
+                self.assertEqual(motor.catalog.tables, {})
+                self.assertTrue(os.path.exists(previo))
+                result = motor.ejecutar("CREATE TABLE productos (id INT PRIMARY KEY, nombre VARCHAR(30))")
+                self.assertFalse(result.tiene_error, result.error)
+            finally:
+                motor.cerrar()
+
     def test_ddl_rejects_duplicate_index_name(self):
         self.execute("CREATE TABLE first_table (id INT)")
         self.execute("CREATE TABLE second_table (id INT)")

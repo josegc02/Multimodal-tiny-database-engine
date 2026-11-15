@@ -1,9 +1,11 @@
 """Encapsula el motor de base de datos para el frontend.
 
-Modo demo: cada vez que se crea un Motor se vacía DEMO_DIR (solo los archivos
-que genera el motor) y se crean las tablas de ejemplo. Nada sobrevive al
-cierre de la aplicación; la capa de almacenamiento sí permite reabrir sus
-archivos (ver los tests de reapertura de HeapFile, SequentialFile y B+).
+Modo demo (por defecto, el de la interfaz Tkinter): cada vez que se crea un
+Motor se vacía DEMO_DIR (solo los archivos que genera el motor) y se crean las
+tablas de ejemplo; nada sobrevive al cierre de la aplicación. Con
+modo_demo=False (la API) no se borra ni se crea nada; la capa de almacenamiento
+permite reabrir sus archivos (ver los tests de reapertura de HeapFile,
+SequentialFile y B+).
 
 Une:
 - Catalog con tablas de demo
@@ -93,10 +95,15 @@ class Resultado:
 class Motor:
     """Fachada del motor para el frontend."""
 
-    def __init__(self, directorio: str | None = None):
-        # Carpeta donde viven los archivos de tablas e índices. Se resuelve al
-        # crear el Motor (no al importar) para que DEMO_DIR pueda cambiarse.
+    def __init__(self, directorio: str | None = None, modo_demo: bool = True):
+        """Crea el motor sobre `directorio` (por defecto DEMO_DIR).
+
+        Con `modo_demo=True` (la interfaz Tkinter) vacía la carpeta y crea las
+        tablas de ejemplo. Con `modo_demo=False` (la API) no borra ni crea nada.
+        """
+        # Se resuelve al crear el Motor (no al importar) para que DEMO_DIR pueda cambiarse.
         self.directorio = os.path.abspath(directorio or DEMO_DIR)
+        self.modo_demo = modo_demo
         self.catalog = Catalog()
         self.lock_manager = LockManager()
         self.transaction_manager = TransactionManager(
@@ -113,8 +120,11 @@ class Motor:
         )
         self._cerrado = False
         self._puntos_mapa = {}  # tabla -> puntos para el mapa
-        self._limpiar_directorio_demo()
-        self._cargar_tablas_demo()
+        if modo_demo:
+            self._limpiar_directorio_demo()
+            self._cargar_tablas_demo()
+        else:
+            os.makedirs(self.directorio, exist_ok=True)
 
     # ------------------------------------------------------------------
     # Carga de tablas de demo
