@@ -1,7 +1,7 @@
 # Informe del Proyecto — Base de Datos II
 
 Minigestor de base de datos multimodal construido desde cero en Python (UTEC, Base de Datos II, 2026-2). Este informe es incremental y crece con cada entrega:
-- **Partes 1 y 2:** se documentan el diseño arquitectónico, el dominio de datos, los algoritmos y la comparación experimental.
+- **Partes 1 a 4:** se documentan el diseño arquitectónico, el dominio de datos, los algoritmos y la comparación experimental de cada parte (relacional, espacial, texto y multimedia).
 - **Instalación y uso:** están en el [README](../README.md).
 
 | Sección | Contenido |
@@ -11,6 +11,12 @@ Minigestor de base de datos multimodal construido desde cero en Python (UTEC, Ba
 | [3. Resultados experimentales (Parte 1)](#3-resultados-experimentales-y-benchmarks) | Heap vs Secuencial; B+ agrupado vs no agrupado vs Hash; complejidad. |
 | [4. Diseño de la Parte 2](#4-diseño-e-implementación) | Arquitectura espacial, dominio de datos, métricas, R-Tree, SQL y mapa. |
 | [5. Resultados experimentales (Parte 2)](#5-comparación-experimental-secuencial-vs-r-tree-vs-gist) | Secuencial vs R-Tree vs GiST. |
+| [6. Preprocesamiento de texto](#6-preprocesamiento-de-texto) | Tokenización, stopwords y stemming en español e inglés. |
+| [7. Índice invertido con SPIMI](#7-índice-invertido-con-spimi) | Formato en disco, construcción por bloques, TF-IDF + coseno, BM25 y mantenimiento. |
+| [8. Extensión SQL de texto](#8-extensión-sql-de-texto) | Tipo `TEXT`, `MATCH ... USING TF_IDF \| BM25` y `SCORE()`. |
+| [9. Resultados experimentales (Parte 3)](#9-comparación-experimental-de-texto-parte-3) | TF-IDF vs BM25 vs GIN de PostgreSQL. |
+| [10. Extensión SQL multimedia](#10-extensión-sql-multimedia) | Tipos `IMAGE` y `AUDIO`, ExtractFeatures (Bag of Words), IVF, HNSW y `SIMILAR_TO`. |
+| [11. Resultados experimentales (Parte 4)](#11-comparación-experimental-de-índices-multimedia-59) | IVF vs HNSW sobre MS-COCO, euclidiana vs coseno. |
 
 ## Avance 1: Motor Relacional
 
@@ -944,6 +950,31 @@ Los vocabularios están en `models/bow_image_k1024.npz` y `models/bow_audio_k256
 | Memoria del índice, N = 5000: HNSW / IVF | 20 / 38 MiB | 66 / 127 MiB | 124 / 246 MiB |
 
 Se eligió K = 1024. Es el menor de los tres que encuentra siempre la foto original entre miles de distractores; K = 2048 casi no mejora eso y duplica la memoria de los índices (extrapolada a 100 000 imágenes, IVF pasaría de ~2,5 GB a ~4,9 GB). RootSIFT no aportó una diferencia medible y se descartó. El Recall@10 baja un poco al pasar de 256 a 1024 dimensiones, como anticipa la maldición de la dimensionalidad: las distancias se concentran y el índice aproximado distingue peor a los vecinos. Las filas de HNSW se midieron con el índice corregido (ver *Índices*); K = 2048 no se volvió a medir porque ya estaba descartado. La tabla también muestra el límite del método: ningún K reconoce categorías, y la precisión semántica queda apenas sobre el azar. Como se vio en la clase 10, un descriptor local como SIFT encuentra *el mismo objeto o lugar* aunque cambie el encuadre; la similitud semántica (un gato con otro gato) requiere un descriptor global aprendido, como una CNN o CLIP.
+
+**Algoritmo IVF (*Inverted File*).** Es el índice invertido de la Parte 3 aplicado a vectores: en vez de términos, sus "palabras" son `nlist` centroides (`engine/indexes/ivf.py`).
+
+1. *Entrenamiento.* K-Means (hasta 100 iteraciones, semilla fija) agrupa los vectores en `nlist` regiones; con el coseno los vectores y centroides se normalizan, lo que equivale a un k-means esférico. Cada vector se guarda en la lista de su centroide más cercano. La asignación se calcula por bloques de 2048 filas con `‖x − c‖² = ‖x‖² + ‖c‖² − 2·x·c`, para no crear la matriz N × nlist × D.
+2. *Inserción y borrado.* Un vector nuevo va a la lista de su centroide más cercano, sin volver a entrenar; borrar lo quita de su lista.
+3. *Búsqueda.* Se ordenan los centroides por su distancia a la consulta, se revisan solo las `nprobe` listas más cercanas y se comparan sus vectores uno a uno; un ordenamiento final devuelve los `k` mejores.
+
+El costo de una consulta es `O(nlist · D + (N / nlist) · nprobe · D)`: comparar con los centroides más recorrer las listas elegidas. Con `nlist ≈ √N` ambos términos son del orden de `√N`. La búsqueda es aproximada porque un vecino verdadero puede estar en una lista que no se revisó (cuando la consulta cae cerca de la frontera entre dos regiones); subir `nprobe` aumenta el Recall a cambio de más comparaciones, y `nprobe = nlist` equivale a la búsqueda exacta.
+
+**Algoritmo HNSW (*Hierarchical Navigable Small World*).** Es un grafo de proximidad por capas (Malkov y Yashunin, 2018; `engine/indexes/hnsw.py`), parecido a una *skip list*: las capas altas tienen pocos nodos y enlaces largos para acercarse rápido, y la capa 0 tiene todos los nodos y enlaces cortos para afinar.
+
+1. *Nivel de un nodo.* Al insertar, cada nodo recibe un nivel aleatorio `l` con `P(l ≥ i) = (1/M)^i`, así que cada capa tiene unas M veces menos nodos que la de abajo. El nodo aparece en las capas 0 a `l`.
+2. *Inserción.* Desde el punto de entrada (el nodo del nivel más alto) se baja de forma voraz por las capas superiores a `l`: en cada capa se salta al vecino más cercano al nuevo vector hasta que ninguno mejore. En las capas `l` a 0 se hace una búsqueda de haz con `ef_construction` candidatos, se eligen M vecinos con la heurística del algoritmo 4 y se enlazan en ambos sentidos. Si un vecino supera su máximo de enlaces (2·M en la capa 0 y M en las demás), su lista se recorta con la misma heurística.
+3. *Búsqueda.* Igual que la inserción: descenso voraz hasta la capa 1 y, en la capa 0, búsqueda de haz con `ef_search` candidatos (dos montículos: uno de candidatos por explorar y otro con los `ef` mejores encontrados). Se detiene cuando el candidato más cercano por explorar está más lejos que el peor de los `ef` mejores, y devuelve los `k` primeros.
+
+Una búsqueda visita del orden de `O(ef_search · M · log N)` nodos, por lo que su latencia casi no depende de N; construir cuesta `O(N · ef_construction · M · log N)` comparaciones. Es aproximada porque la búsqueda voraz puede quedarse en un óptimo local del grafo: `ef_search` amplía el haz y sube el Recall a cambio de más nodos visitados (sección 11).
+
+| | IVF | HNSW |
+| :--- | :--- | :--- |
+| Estructura | Particiones por K-Means (listas invertidas) | Grafo de vecinos por capas |
+| Construcción | Rápida: un K-Means y una asignación | Lenta: una búsqueda en el grafo por cada vector |
+| Consulta | Crece con N (`≈ √N` comparaciones) | Casi constante en N |
+| Parámetro de exactitud | `nprobe` | `ef_search` |
+| Inserciones | Sin reentrenar; se reentrena al duplicar la tabla | Incrementales |
+| Borrados | Directos | Marca y reconstrucción periódica |
 
 **Índices.** `CREATE INDEX i ON t (col) USING HNSW | IVF [WITH (METRIC = euclidean | cosine | dot)]` crea el índice; la métrica por defecto es la euclidiana. `VectorIndex` adapta `HNSWIndex` e `IVFIndex` al contrato del catálogo: asigna un identificador entero a cada RID, toma los vectores del `<tabla>.media` y se mantiene con cada inserción, eliminación y `ROLLBACK`. HNSW usa `M = 8`, `ef_construction = 50` y `ef_search = 50`; cada nodo guarda hasta 2·M vecinos en la capa 0 y M en las demás, como en el algoritmo original (Malkov y Yashunin, 2018). Los vecinos se eligen con su heurística (algoritmo 4): un candidato entra solo si está más cerca del nodo que de los vecinos ya elegidos, para que los enlaces apunten en direcciones distintas. Los enlaces son dirigidos y el recorte de la lista de un nodo nunca borra el último enlace que llega a otro. La primera versión borraba también el enlace de vuelta al recortar: con los histogramas de Bag of Visual Words, algunos nodos son vecinos de casi todos y recortan seguido, así que dejaban a otros sin enlaces. Con 5000 imágenes de COCO, 287 (el 6 %) quedaban inalcanzables y nunca aparecían en un resultado, y en la demo una foto girada no encontraba su original. Con la corrección quedan 2 inalcanzables, y el Recall@10 con 3000 imágenes y K = 1024 sube de 0,75 a 0,89, a cambio de una construcción ~1,8 veces más lenta (29 s frente a 16 s). Como HNSW no permite borrar nodos, un borrado deja una marca, la búsqueda pide más vecinos para compensarla y el grafo se reconstruye cuando las marcas superan a los nodos vivos. IVF busca de forma exacta hasta tener 16 vectores; después entrena con `nlist ≈ √N` y `nprobe ≈ √nlist`, y vuelve a entrenar cada vez que la tabla duplica el tamaño del último entrenamiento. Si las listas revisadas no reúnen `k` vectores, revisa más listas, de modo que `k=N` siempre devuelve `min(N, filas)` resultados. Con el coseno, una fila cuyo vector es nulo no se indexa, porque la similitud no está definida. Ambos índices viven en memoria y se reconstruyen desde la tabla al registrarse; al cerrar se guardan en disco.
 
