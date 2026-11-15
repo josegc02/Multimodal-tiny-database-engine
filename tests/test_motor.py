@@ -205,6 +205,71 @@ class TestMotorDDL(unittest.TestCase):
         self.motor = Motor()
         self.assertTrue(os.path.exists(notas))
 
+    def test_explicit_directory_holds_all_files(self):
+        with tempfile.TemporaryDirectory() as otro:
+            motor = Motor(directorio=otro)
+            try:
+                result = motor.ejecutar(
+                    "CREATE TABLE docs (id INT, texto TEXT);"
+                    "INSERT INTO docs VALUES (1, 'hola');"
+                    "CREATE INDEX docs_id ON docs (id) USING HASH")
+                self.assertFalse(result.tiene_error, result.error)
+                self.assertEqual(motor.directorio, os.path.abspath(otro))
+                self.assertTrue(os.path.exists(os.path.join(otro, "docs.db")))
+                self.assertTrue(os.path.exists(os.path.join(otro, "docs.text")))
+                self.assertFalse(os.path.exists(os.path.join(self.temp_dir.name, "docs.db")))
+            finally:
+                motor.cerrar()
+
+    def test_without_demo_mode_keeps_files_and_creates_no_tables(self):
+        with tempfile.TemporaryDirectory() as otro:
+            previo = os.path.join(otro, "previo.db")
+            with open(previo, "wb") as fh:
+                fh.write(b"datos de otra sesion")
+            motor = Motor(directorio=otro, modo_demo=False)
+            try:
+                self.assertEqual(motor.catalog.tables, {})
+                self.assertTrue(os.path.exists(previo))
+                result = motor.ejecutar("CREATE TABLE productos (id INT PRIMARY KEY, nombre VARCHAR(30))")
+                self.assertFalse(result.tiene_error, result.error)
+            finally:
+                motor.cerrar()
+
+    def test_catalog_file_records_successful_ddl_only_outside_demo(self):
+        import json
+        from engine.query.parser import parse_script
+        from frontend.motor import ARCHIVO_CATALOGO, _ddl_a_dict, _ddl_desde_dict
+
+        self.execute("CREATE TABLE en_demo (id INT)")
+        self.assertFalse(os.path.exists(os.path.join(self.temp_dir.name, ARCHIVO_CATALOGO)))
+
+        with tempfile.TemporaryDirectory() as otro:
+            motor = Motor(directorio=otro, modo_demo=False)
+            try:
+                for sql in ("CREATE TABLE padre (id INT PRIMARY KEY, nombre VARCHAR(20)) USING BTREE",
+                            "CREATE TABLE hijo (id INT, padre_id INT REFERENCES padre(id) ON DELETE CASCADE, "
+                            "texto TEXT, foto IMAGE)",
+                            "CREATE INDEX hijo_texto ON hijo (texto) USING SPIMI WITH (LANGUAGE = 'en')",
+                            "CREATE INDEX hijo_foto ON hijo (foto) USING HNSW WITH (METRIC = cosine)"):
+                    result = motor.ejecutar(sql)
+                    self.assertFalse(result.tiene_error, result.error)
+                self.assertTrue(motor.ejecutar("CREATE TABLE padre (id INT)").tiene_error)
+
+                with open(os.path.join(otro, ARCHIVO_CATALOGO), encoding="utf-8") as fh:
+                    ddl = json.load(fh)["ddl"]
+                self.assertEqual([(d["tipo"], d["name"]) for d in ddl],
+                                 [("tabla", "padre"), ("tabla", "hijo"),
+                                  ("indice", "hijo_texto"), ("indice", "hijo_foto")])
+                self.assertEqual(ddl[1]["foreign_keys"][0]["on_delete"], "CASCADE")
+                self.assertEqual((ddl[3]["method"], ddl[3]["metric"]), ("hnsw", "cosine"))
+            finally:
+                motor.cerrar()
+
+        for statement in parse_script(
+                "CREATE TABLE t (id INT PRIMARY KEY, p POINT, n VARCHAR(5) REFERENCES u(id)) USING SEQUENTIAL;"
+                "CREATE INDEX i ON t (n) USING BTREE"):
+            self.assertEqual(_ddl_desde_dict(json.loads(json.dumps(_ddl_a_dict(statement)))), statement)
+
     def test_ddl_rejects_duplicate_index_name(self):
         self.execute("CREATE TABLE first_table (id INT)")
         self.execute("CREATE TABLE second_table (id INT)")
