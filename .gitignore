@@ -18,6 +18,9 @@ env/
 demo_data/
 generated_sql/
 
+# Tablas e índices de la API (Parte 5); se crean con los scripts de carga
+data/
+
 # Datasets espaciales generados (Parte 2): se regeneran con
 # benchmarks/generate_spatial_datasets.py
 datasets/spatial/generated/

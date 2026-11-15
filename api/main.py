@@ -1,0 +1,181 @@
+"""API REST del motor de base de datos (Parte 5).
+
+Levantar desde la raíz del proyecto:
+
+    uvicorn api.main:app --reload
+
+Variables de entorno (opcionales):
+- BD2_DATA_DIR: carpeta de las tablas e índices (por defecto data/app).
+- BD2_ARCHIVOS: carpetas, separadas por os.pathsep, desde las que GET /archivos
+  puede servir imágenes y audios (por defecto datasets, fotos y BD2_DATA_DIR).
+- BD2_CORS_ORIGINS: orígenes del front web, separados por comas
+  (por defecto http://localhost:5173 y http://127.0.0.1:5173).
+
+El motor guarda una sola sesión SQL, así que la API atiende una petición a la
+vez y cada petición es autocommit: si un script deja una transacción abierta,
+se deshace y se responde con error.
+"""
+
+from __future__ import annotations
+
+import os
+import threading
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
+
+from engine.indexes.extendible_hash import ExtendibleHash
+from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
+from engine.indexes.rtree import RTree
+from engine.indexes.spimi import SpimiIndex
+from engine.indexes.vector_index import VectorIndex
+from engine.storage.clustered_file import ClusteredBPlusFile, PrimaryClusteredIndex
+from engine.storage.sequential_file import SequentialFile, SequentialKeyIndex
+from frontend.motor import PROJECT_DIR, Motor
+
+DATA_DIR_DEFECTO = os.path.join(PROJECT_DIR, "data", "app")
+ORIGENES_DEFECTO = ("http://localhost:5173", "http://127.0.0.1:5173")
+EXTENSIONES_ARCHIVOS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
+                        ".wav", ".mp3", ".ogg", ".flac")
+TIPOS_SQL = {"int": "INT", "float": "FLOAT", "str": "VARCHAR", "point": "POINT",
+             "text": "TEXT", "image": "IMAGE", "audio": "AUDIO"}
+
+
+class ConsultaSQL(BaseModel):
+    sql: str
+
+
+def _error(estado: int, mensaje: str) -> JSONResponse:
+    return JSONResponse(status_code=estado, content={"error": mensaje})
+
+
+def _almacenamiento(storage) -> str:
+    if isinstance(storage, ClusteredBPlusFile):
+        return "btree"
+    if isinstance(storage, SequentialFile):
+        return "sequential"
+    return "heap"
+
+
+def _metodo_indice(registro) -> str:
+    index = registro.index
+    if isinstance(index, VectorIndex):
+        return index.method
+    for clase, nombre in ((SpimiIndex, "spimi"), (RTree, "rtree"), (ExtendibleHash, "hash"),
+                          (BPlusTreeUnclustered, "btree"),
+                          # Clave de orden físico de las tablas BTREE y SEQUENTIAL.
+                          (PrimaryClusteredIndex, "btree agrupado"), (SequentialKeyIndex, "secuencial")):
+        if isinstance(index, clase):
+            return nombre
+    return type(index).__name__
+
+
+def _columnas(schema) -> list[dict]:
+    columnas = []
+    for nombre, tipo, tamano in zip(schema.fields, schema.types, schema.sizes):
+        sql = TIPOS_SQL.get(tipo, tipo.upper())
+        columnas.append({"nombre": nombre, "tipo": f"{sql}({tamano})" if tipo == "str" else sql})
+    return columnas
+
+
+def _carpetas(texto: str | None, defecto: list[str]) -> list[str]:
+    carpetas = [c for c in (texto or "").split(os.pathsep) if c] or defecto
+    return [os.path.realpath(os.path.join(PROJECT_DIR, c)) for c in carpetas]
+
+
+def _dentro_de(ruta: str, carpeta: str) -> bool:
+    try:
+        return os.path.commonpath([ruta, carpeta]) == carpeta
+    except ValueError:  # otra unidad de disco en Windows
+        return False
+
+
+def create_app(directorio: str | None = None, carpetas_archivos: list[str] | None = None,
+               origenes: list[str] | None = None) -> FastAPI:
+    """Crea la aplicación. Los argumentos tienen prioridad sobre las variables de entorno."""
+    estado: dict = {}
+    lock = threading.Lock()
+
+    @asynccontextmanager
+    async def ciclo_de_vida(app: FastAPI):
+        datos = os.path.abspath(directorio or os.environ.get("BD2_DATA_DIR") or DATA_DIR_DEFECTO)
+        estado["motor"] = Motor(directorio=datos, modo_demo=False)
+        estado["archivos"] = (
+            [os.path.realpath(c) for c in carpetas_archivos] if carpetas_archivos is not None
+            else _carpetas(os.environ.get("BD2_ARCHIVOS"), ["datasets", "fotos", datos]))
+        try:
+            yield
+        finally:
+            estado.pop("motor").cerrar()
+
+    app = FastAPI(title="Minigestor BD2", version="1.0", lifespan=ciclo_de_vida)
+    if origenes is None:
+        texto = os.environ.get("BD2_CORS_ORIGINS")
+        origenes = [o.strip() for o in texto.split(",") if o.strip()] if texto else list(ORIGENES_DEFECTO)
+    app.add_middleware(CORSMiddleware, allow_origins=origenes, allow_methods=["GET", "POST"],
+                       allow_headers=["Content-Type"])
+
+    @app.get("/salud")
+    def salud():
+        """Comprueba que la API y el motor están vivos."""
+        with lock:
+            return {"ok": True, "tablas": len(estado["motor"].catalog.tables)}
+
+    @app.post("/sql")
+    def ejecutar_sql(consulta: ConsultaSQL):
+        """Ejecuta una o varias sentencias SQL separadas por ';'.
+
+        Responde con el resultado de la última. Cada petición es autocommit:
+        una transacción que quede abierta se deshace y se informa como error.
+        """
+        motor = estado["motor"]
+        with lock:
+            resultado = motor.ejecutar(consulta.sql)
+            sesion = motor.statement_executor
+            if sesion.in_transaction:
+                motor.ejecutar("ROLLBACK")
+                if not resultado.tiene_error:
+                    return _error(400, "La transacción quedó abierta y se deshizo: "
+                                       "termina el script con COMMIT o ROLLBACK")
+            if resultado.tiene_error:
+                return _error(400, resultado.error)
+            datos = resultado.a_dict()
+            del datos["error"]
+            return datos
+
+    @app.get("/tablas")
+    def tablas():
+        """Tablas con su almacenamiento, columnas, clave primaria e índices."""
+        with lock:
+            respuesta = []
+            for nombre, binding in sorted(estado["motor"].catalog.tables.items()):
+                respuesta.append({
+                    "nombre": nombre,
+                    "almacenamiento": _almacenamiento(binding.storage),
+                    "filas_estimadas": binding.statistics.rows if binding.statistics else None,
+                    "clave_primaria": binding.primary_key,
+                    "columnas": _columnas(binding.storage.schema),
+                    "indices": [{"nombre": registro.metadata.name if registro.metadata else columna,
+                                 "columna": columna, "metodo": _metodo_indice(registro)}
+                                for columna, registro in binding.indexes.items()],
+                })
+            return respuesta
+
+    @app.get("/archivos")
+    def archivos(ruta: str = Query(..., description="Ruta guardada en una columna IMAGE o AUDIO")):
+        """Sirve una imagen o audio, solo desde las carpetas permitidas."""
+        real = os.path.realpath(ruta if os.path.isabs(ruta) else os.path.join(os.getcwd(), ruta))
+        permitida = any(_dentro_de(real, carpeta) for carpeta in estado["archivos"])
+        if not permitida or not real.lower().endswith(EXTENSIONES_ARCHIVOS):
+            return _error(403, "Archivo fuera de las carpetas permitidas o con un tipo no admitido")
+        if not os.path.isfile(real):
+            return _error(404, f"No existe el archivo: {ruta}")
+        return FileResponse(real)
+
+    return app
+
+
+app = create_app()

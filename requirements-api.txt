@@ -1,0 +1,4 @@
+# API REST del motor (Parte 5). Se instala además de requirements.txt.
+fastapi~=0.115.13
+uvicorn~=0.34.3
+httpx~=0.28.1   # cliente de las pruebas (fastapi.testclient)

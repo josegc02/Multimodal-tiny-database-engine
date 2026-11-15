@@ -210,6 +210,16 @@ El optimizador elige por costo estimado entre recorrer la tabla y usar un índic
 
 Gramática completa: [`docs/sql_grammar.ebnf`](docs/sql_grammar.ebnf).
 
+### API REST (Parte 5)
+
+```bash
+python -m pip install -r requirements-api.txt
+uvicorn api.main:app --reload            # http://127.0.0.1:8000/docs
+curl http://127.0.0.1:8000/tablas
+```
+
+Recibe SQL en `POST /sql` y responde en JSON; también lista las tablas (`GET /tablas`) y sirve imágenes y audios (`GET /archivos`). A diferencia de la interfaz gráfica, no está en modo demo: guarda las tablas en `data/app` y las reabre al reiniciar. Endpoints, formato de las respuestas y variables de entorno: [`docs/api.md`](docs/api.md).
+
 ### Pruebas
 
 ```bash
@@ -319,6 +329,8 @@ engine/                         # Motor de base de datos (sin dependencias exter
     ├── lock_manager.py         # Locks IS/IX/S/SIX/X y detección de deadlocks
     ├── transaction.py
     └── transaction_manager.py  # BEGIN/COMMIT/ROLLBACK con undo log
+api/
+└── main.py                     # API REST (FastAPI): /sql, /tablas, /archivos, /salud
 frontend/
 ├── main.py                     # Ventana principal
 ├── motor.py                    # Fachada entre la interfaz y el motor
@@ -352,6 +364,7 @@ Otros archivos:
 | Archivo | Contenido |
 | :--- | :--- |
 | [`docs/informe.md`](docs/informe.md) | Informe incremental: arquitectura, dominio de datos, algoritmos y resultados experimentales de las Partes 1 a 4. |
+| [`docs/api.md`](docs/api.md) | API REST: cómo levantarla, endpoints y formato JSON. |
 | [`docs/parte2_espacial.md`](docs/parte2_espacial.md) | Diseño de la Parte 2 por issue. |
 | [`docs/consultas_espaciales.md`](docs/consultas_espaciales.md) | Contratos de las consultas espaciales (rango, k-NN, polígonos, SQL). |
 | [`docs/mapa.md`](docs/mapa.md) | Funcionamiento del mapa. |
