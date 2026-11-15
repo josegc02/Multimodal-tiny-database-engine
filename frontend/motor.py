@@ -153,6 +153,7 @@ class Motor:
             self._cargar_tablas_demo()
         else:
             os.makedirs(self.directorio, exist_ok=True)
+            self._reabrir_catalogo()
 
     # ------------------------------------------------------------------
     # Carga de tablas de demo
@@ -308,8 +309,13 @@ class Motor:
                 "circle": circle or mapa_datos.centro_knn(statement),
                 "polygon": polygon}
 
-    def _crear_tabla(self, statement: CreateTableStatement) -> str:
-        """Crea un HeapFile y lo incorpora al catálogo de la sesión."""
+    def _crear_tabla(self, statement: CreateTableStatement, *, reabrir: bool = False) -> str:
+        """Crea la tabla y la incorpora al catálogo de la sesión.
+
+        Con `reabrir=True` abre los archivos que ya existen (de una sesión
+        anterior) en vez de exigir que no existan, y no vuelve a guardarla en
+        el catálogo en disco.
+        """
         if statement.name in self.catalog.tables:
             raise ValueError(f"La tabla {statement.name!r} ya existe")
         fields = [column.name for column in statement.columns]
@@ -333,7 +339,7 @@ class Motor:
 
         path = os.path.join(self.directorio, f"{statement.name}.db")
         existentes = [ruta for ruta in self._archivos_tabla(statement.name) if os.path.exists(ruta)]
-        if existentes:
+        if existentes and not reabrir:
             raise ValueError(f"Ya existe el archivo de la tabla {statement.name!r}: {existentes[0]}")
         indexes = None
         primary_key = statement.primary_key
@@ -376,14 +382,17 @@ class Motor:
         try:
             self._registrar_llaves_foraneas(statement)
         except Exception:
-            # La tabla no queda a medias: se quita del catálogo y se borran sus archivos.
+            # La tabla no queda a medias: se quita del catálogo y se borran sus
+            # archivos (nunca al reabrir: serían los datos de la sesión anterior).
             del self.catalog.tables[statement.name]
             storage.close()
-            for ruta in self._archivos_tabla(statement.name):
-                if os.path.exists(ruta):
-                    os.remove(ruta)
+            if not reabrir:
+                for ruta in self._archivos_tabla(statement.name):
+                    if os.path.exists(ruta):
+                        os.remove(ruta)
             raise
-        self._guardar_en_catalogo(statement)
+        if not reabrir:
+            self._guardar_en_catalogo(statement)
         return f"Tabla {statement.name} creada"
 
     def _registrar_llaves_foraneas(self, statement: CreateTableStatement) -> None:
@@ -413,8 +422,12 @@ class Motor:
                 self.catalog.register_index(statement.name, definition.column, indice,
                                             IndexInfo(f"{nombre}_idx", definition.column, indice))
 
-    def _crear_indice(self, statement: CreateIndexStatement) -> str:
-        """Crea, carga y registra un índice SQL sobre una tabla."""
+    def _crear_indice(self, statement: CreateIndexStatement, *, reabrir: bool = False) -> str:
+        """Crea, carga y registra un índice SQL sobre una tabla.
+
+        Con `reabrir=True` acepta que su archivo exista; el catálogo lo
+        reconstruye igual desde la tabla al registrarlo.
+        """
         binding = self.catalog.table(statement.table)
         if statement.column not in binding.storage.schema.fields:
             raise ValueError(f"Columna de índice inexistente: {statement.column}")
@@ -439,7 +452,7 @@ class Motor:
         extension = {"hash": "hash", "btree": "bpt", "rtree": "rtree", "spimi": "spimi",
                      "hnsw": "hnsw", "ivf": "ivf"}[statement.method]
         index_file = f"{index_path}.{extension}"
-        if os.path.exists(index_file):
+        if os.path.exists(index_file) and not reabrir:
             raise ValueError(f"Ya existe el archivo {index_file!r}; usa otro nombre de índice")
         if statement.method == "rtree":
             index = RTree(index_file)
@@ -467,7 +480,8 @@ class Motor:
         except Exception:
             index.close()
             raise
-        self._guardar_en_catalogo(statement)
+        if not reabrir:
+            self._guardar_en_catalogo(statement)
         return f"Índice {statement.name} creado sobre {statement.table}.{statement.column}"
 
     # ------------------------------------------------------------------
@@ -486,6 +500,26 @@ class Motor:
         if datos.get("version") != VERSION_CATALOGO:
             raise RuntimeError(f"Versión de catálogo no soportada en {self.ruta_catalogo}: {datos.get('version')!r}")
         return datos["ddl"]
+
+    def _reabrir_catalogo(self) -> None:
+        """Reabre, en el orden en que se crearon, las tablas e índices guardados.
+
+        Los índices se reconstruyen desde las tablas al registrarse; los
+        vectores de IMAGE/AUDIO se leen de <tabla>.media sin volver a extraerlos.
+        Si algo falla, se cierra lo ya abierto y se informa qué entrada falló.
+        """
+        for datos in self._leer_catalogo():
+            statement = _ddl_desde_dict(datos)
+            try:
+                if isinstance(statement, CreateTableStatement):
+                    self._crear_tabla(statement, reabrir=True)
+                else:
+                    self._crear_indice(statement, reabrir=True)
+            except Exception as exc:
+                self.cerrar()
+                raise RuntimeError(
+                    f"No se pudo reabrir {datos['tipo']} {statement.name!r} de {self.ruta_catalogo}: {exc}"
+                ) from exc
 
     def _guardar_en_catalogo(self, statement) -> None:
         """Agrega un CREATE TABLE / CREATE INDEX exitoso al catálogo en disco.
