@@ -205,6 +205,22 @@ class TestMotorDDL(unittest.TestCase):
         self.motor = Motor()
         self.assertTrue(os.path.exists(notas))
 
+    def test_explicit_directory_holds_all_files(self):
+        with tempfile.TemporaryDirectory() as otro:
+            motor = Motor(directorio=otro)
+            try:
+                result = motor.ejecutar(
+                    "CREATE TABLE docs (id INT, texto TEXT);"
+                    "INSERT INTO docs VALUES (1, 'hola');"
+                    "CREATE INDEX docs_id ON docs (id) USING HASH")
+                self.assertFalse(result.tiene_error, result.error)
+                self.assertEqual(motor.directorio, os.path.abspath(otro))
+                self.assertTrue(os.path.exists(os.path.join(otro, "docs.db")))
+                self.assertTrue(os.path.exists(os.path.join(otro, "docs.text")))
+                self.assertFalse(os.path.exists(os.path.join(self.temp_dir.name, "docs.db")))
+            finally:
+                motor.cerrar()
+
     def test_ddl_rejects_duplicate_index_name(self):
         self.execute("CREATE TABLE first_table (id INT)")
         self.execute("CREATE TABLE second_table (id INT)")

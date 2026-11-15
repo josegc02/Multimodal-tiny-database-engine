@@ -93,7 +93,10 @@ class Resultado:
 class Motor:
     """Fachada del motor para el frontend."""
 
-    def __init__(self):
+    def __init__(self, directorio: str | None = None):
+        # Carpeta donde viven los archivos de tablas e índices. Se resuelve al
+        # crear el Motor (no al importar) para que DEMO_DIR pueda cambiarse.
+        self.directorio = os.path.abspath(directorio or DEMO_DIR)
         self.catalog = Catalog()
         self.lock_manager = LockManager()
         self.transaction_manager = TransactionManager(
@@ -117,17 +120,16 @@ class Motor:
     # Carga de tablas de demo
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _limpiar_directorio_demo():
+    def _limpiar_directorio_demo(self):
         """Elimina los archivos de sesiones anteriores.
 
         No ignora errores: en Windows un archivo abierto por otra instancia no
         se puede borrar, y continuar reabriría datos viejos sin avisar.
         """
-        os.makedirs(DEMO_DIR, exist_ok=True)
+        os.makedirs(self.directorio, exist_ok=True)
         errores = []
-        for nombre in os.listdir(DEMO_DIR):
-            ruta = os.path.join(DEMO_DIR, nombre)
+        for nombre in os.listdir(self.directorio):
+            ruta = os.path.join(self.directorio, nombre)
             try:
                 if os.path.isfile(ruta) and nombre.endswith(_EXTENSIONES_MOTOR):
                     os.remove(ruta)
@@ -150,7 +152,7 @@ class Motor:
                           [(1, "Laptop", 2500), (2, "Mouse", 50), (3, "Teclado", 150)]),
         }
         for nombre, (schema, filas) in tablas.items():
-            storage = HeapFile(os.path.join(DEMO_DIR, f"{nombre}.db"), schema)
+            storage = HeapFile(os.path.join(self.directorio, f"{nombre}.db"), schema)
             campos = [campo[0] for campo in schema]
             for fila in filas:
                 storage.insert(dict(zip(campos, fila)))
@@ -160,10 +162,9 @@ class Motor:
     # Ejecucion
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _archivos_tabla(nombre):
+    def _archivos_tabla(self, nombre):
         """Archivos que usaría una tabla según su método de almacenamiento."""
-        base = os.path.join(DEMO_DIR, nombre)
+        base = os.path.join(self.directorio, nombre)
         return (f"{base}.db", f"{base}.db.main", f"{base}.db.aux", f"{base}.bpt", f"{base}.text", f"{base}.media")
 
     def ejecutar(self, sql: str) -> Resultado:
@@ -277,7 +278,7 @@ class Motor:
         if len(fields) != len(set(fields)):
             raise ValueError("La tabla contiene columnas repetidas")
         schema = []
-        textos = TextStore(os.path.join(DEMO_DIR, f"{statement.name}.text"))
+        textos = TextStore(os.path.join(self.directorio, f"{statement.name}.text"))
         multimedia = None
         for column in statement.columns:
             definition = (column.name, column.type)
@@ -288,11 +289,11 @@ class Motor:
             elif column.type in TIPOS_MULTIMEDIA:
                 # Se crea solo si hay columnas multimedia; el archivo aparece con el primer INSERT.
                 if multimedia is None:
-                    multimedia = MediaStore(os.path.join(DEMO_DIR, f"{statement.name}.media"))
+                    multimedia = MediaStore(os.path.join(self.directorio, f"{statement.name}.media"))
                 definition += (multimedia,)
             schema.append(definition)
 
-        path = os.path.join(DEMO_DIR, f"{statement.name}.db")
+        path = os.path.join(self.directorio, f"{statement.name}.db")
         existentes = [ruta for ruta in self._archivos_tabla(statement.name) if os.path.exists(ruta)]
         if existentes:
             raise ValueError(f"Ya existe el archivo de la tabla {statement.name!r}: {existentes[0]}")
@@ -319,7 +320,7 @@ class Motor:
         elif statement.storage_method == "btree":
             # B+ agrupado: los registros viven en las hojas ordenados por la clave,
             # que es única y queda registrada como índice agrupado.
-            storage = ClusteredBPlusFile(os.path.join(DEMO_DIR, f"{statement.name}.bpt"), schema,
+            storage = ClusteredBPlusFile(os.path.join(self.directorio, f"{statement.name}.bpt"), schema,
                                          key_field=key_field)
             indexes = {key_field: storage.primary_index_info(constraint)}
             primary_key = key_field
@@ -395,7 +396,7 @@ class Motor:
             raise ValueError("TEXT solo admite índices SPIMI")
         if (statement.method in ("hnsw", "ivf")) != (key_type in TIPOS_MULTIMEDIA):
             raise ValueError("HNSW e IVF requieren una columna IMAGE o AUDIO; IMAGE y AUDIO solo admiten índices HNSW o IVF")
-        index_path = os.path.join(DEMO_DIR, f"{statement.table}_{statement.name}")
+        index_path = os.path.join(self.directorio, f"{statement.table}_{statement.name}")
         extension = {"hash": "hash", "btree": "bpt", "rtree": "rtree", "spimi": "spimi",
                      "hnsw": "hnsw", "ivf": "ivf"}[statement.method]
         index_file = f"{index_path}.{extension}"
