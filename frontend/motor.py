@@ -16,17 +16,21 @@ Une:
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import os
 import shutil
 
 from engine.concurrency.lock_manager import LockManager
 from engine.concurrency.transaction_manager import TransactionManager
 from engine.query.ast import (
+    ColumnDefinition,
     CopyStatement,
     CreateIndexStatement,
     CreateTableStatement,
     DeleteStatement,
     ExplainStatement,
+    ForeignKeyDefinition,
     InsertStatement,
     SelectStatement,
     TransactionStatement,
@@ -60,6 +64,30 @@ TIPOS_MULTIMEDIA = ("image", "audio")
 # Archivos que genera el motor y que el modo demo elimina al iniciar.
 _EXTENSIONES_MOTOR = (".db", ".main", ".aux", ".bpt", ".hash", ".idx", ".rtree", ".reorg", ".tmp", ".text", ".spimi", ".delta", ".media", ".hnsw", ".ivf")
 _DIRECTORIOS_TEMPORALES = (".bplus-build-",)
+
+# Fuera del modo demo, las tablas e índices creados se guardan aquí (en el
+# directorio del Motor) para reabrirlos al iniciar.
+ARCHIVO_CATALOGO = "catalogo.json"
+VERSION_CATALOGO = 1
+
+
+def _ddl_a_dict(statement) -> dict:
+    """CREATE TABLE / CREATE INDEX como diccionario serializable en JSON."""
+    tipo = "tabla" if isinstance(statement, CreateTableStatement) else "indice"
+    return {"tipo": tipo, **dataclasses.asdict(statement)}
+
+
+def _ddl_desde_dict(datos: dict):
+    """Inverso de _ddl_a_dict."""
+    datos = dict(datos)
+    tipo = datos.pop("tipo")
+    if tipo == "indice":
+        return CreateIndexStatement(**datos)
+    if tipo != "tabla":
+        raise ValueError(f"Entrada de catálogo desconocida: {tipo!r}")
+    datos["columns"] = tuple(ColumnDefinition(**c) for c in datos["columns"])
+    datos["foreign_keys"] = tuple(ForeignKeyDefinition(**f) for f in datos["foreign_keys"])
+    return CreateTableStatement(**datos)
 
 
 class Resultado:
@@ -355,6 +383,7 @@ class Motor:
                 if os.path.exists(ruta):
                     os.remove(ruta)
             raise
+        self._guardar_en_catalogo(statement)
         return f"Tabla {statement.name} creada"
 
     def _registrar_llaves_foraneas(self, statement: CreateTableStatement) -> None:
@@ -438,7 +467,39 @@ class Motor:
         except Exception:
             index.close()
             raise
+        self._guardar_en_catalogo(statement)
         return f"Índice {statement.name} creado sobre {statement.table}.{statement.column}"
+
+    # ------------------------------------------------------------------
+    # Catálogo en disco (solo fuera del modo demo)
+    # ------------------------------------------------------------------
+
+    @property
+    def ruta_catalogo(self) -> str:
+        return os.path.join(self.directorio, ARCHIVO_CATALOGO)
+
+    def _leer_catalogo(self) -> list:
+        if not os.path.exists(self.ruta_catalogo):
+            return []
+        with open(self.ruta_catalogo, encoding="utf-8") as fh:
+            datos = json.load(fh)
+        if datos.get("version") != VERSION_CATALOGO:
+            raise RuntimeError(f"Versión de catálogo no soportada en {self.ruta_catalogo}: {datos.get('version')!r}")
+        return datos["ddl"]
+
+    def _guardar_en_catalogo(self, statement) -> None:
+        """Agrega un CREATE TABLE / CREATE INDEX exitoso al catálogo en disco.
+
+        Se escribe en un archivo temporal y se reemplaza de forma atómica, para
+        que un corte nunca deje el catálogo a medias.
+        """
+        if self.modo_demo:
+            return
+        ddl = self._leer_catalogo() + [_ddl_a_dict(statement)]
+        temporal = self.ruta_catalogo + ".tmp"
+        with open(temporal, "w", encoding="utf-8") as fh:
+            json.dump({"version": VERSION_CATALOGO, "ddl": ddl}, fh, ensure_ascii=False, indent=2)
+        os.replace(temporal, self.ruta_catalogo)
 
     def _columnas_del_plan(self, plan):
         """Intenta extraer los nombres de columna del plan (para SELECT vacio)."""
