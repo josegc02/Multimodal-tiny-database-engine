@@ -59,4 +59,4 @@ def leer_csv(path, campos):
         reader = csv.DictReader(stream)
         if tuple(reader.fieldnames or ()) != tuple(campos):
             raise ValueError(f"Cabecera incorrecta en {path}; se esperaba {tuple(campos)}")
-        return list(reader)
+        return list(reader) 
