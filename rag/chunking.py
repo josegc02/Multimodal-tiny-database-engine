@@ -11,6 +11,7 @@ puede producir un fragmento pequeño.
 
 import re
 import unicodedata
+import logging
 
 MINIMO, OBJETIVO, MAXIMO = 200, 350, 500
 
@@ -22,7 +23,8 @@ _REFERENCIAS = re.compile(r"^\s*(?:[0-9IVX]+\.?\s+)?(?:references|bibliography|r
 
 def limpiar(texto):
     """Normaliza ligaduras (NFKC), une palabras partidas por guion y quita controles."""
-    texto = unicodedata.normalize("NFKC", texto or "")
+    texto = (texto or "").encode("utf-16", "surrogatepass").decode("utf-16", "replace").replace("\ufffd", "")
+    texto = unicodedata.normalize("NFKC", texto)
     texto = _CONTROL.sub(" ", texto.replace("\r\n", "\n").replace("\r", "\n"))
     return _GUION_FIN_LINEA.sub(r"\1\2", texto)
 
@@ -92,6 +94,7 @@ def extraer_paginas(pdf_path):
     """[(numero_pagina, texto)] con numeración desde 1, usando pypdf."""
     from pypdf import PdfReader
 
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
     reader = PdfReader(str(pdf_path))
     paginas = []
     for numero, page in enumerate(reader.pages, 1):
