@@ -9,9 +9,13 @@ extrae el texto por página, lo fragmenta y escribe en
 - ``cargar_motor.sql``: CREATE TABLE + COPY + índice SPIMI en inglés;
 - ``metadata.json``: parámetros, conteos y SHA-256 de los CSV.
 
+``cargar`` ejecuta ese SQL sobre un motor persistente (por defecto
+``data/app``, la carpeta de la API) sin abrir la GUI.
+
 Uso::
 
     python -m rag.corpus construir
+    python -m rag.corpus cargar --datos data/app
 """
 
 import argparse
@@ -158,6 +162,24 @@ def construir(seleccion=SELECCION, pdf_dir=PDF_DIR, curso_dir=CURSO_DIR, salida=
     return metadata
 
 
+def cargar(salida=SALIDA, datos=ROOT / "data" / "app"):
+    """Ejecuta cargar_motor.sql sobre un motor persistente (el que usa la API)."""
+    from frontend.motor import Motor
+
+    sql = (Path(salida) / "cargar_motor.sql").read_text(encoding="utf-8")
+    motor = Motor(directorio=str(datos), modo_demo=False)
+    try:
+        if "papers" in motor.catalog.tables or "fragmentos" in motor.catalog.tables:
+            raise ValueError(f"{datos} ya tiene las tablas papers/fragmentos; use otra carpeta")
+        resultado = motor.ejecutar(sql)
+        if resultado.tiene_error:
+            raise ValueError(resultado.error)
+        conteo = motor.ejecutar("SELECT COUNT(*) FROM fragmentos")
+        return {"datos": str(Path(datos).resolve()), "fragmentos": conteo.filas[0][0]}
+    finally:
+        motor.cerrar()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Corpus de papers para RAG (issue #97)")
     sub = parser.add_subparsers(dest="comando", required=True)
@@ -170,10 +192,16 @@ def main(argv=None):
     con.add_argument("--objetivo", type=int, default=OBJETIVO)
     con.add_argument("--maximo", type=int, default=MAXIMO)
     con.add_argument("--con-referencias", action="store_true", help="no recortar la bibliografía")
+    car = sub.add_parser("cargar", help="ejecuta cargar_motor.sql en un motor persistente")
+    car.add_argument("--salida", type=Path, default=SALIDA)
+    car.add_argument("--datos", type=Path, default=ROOT / "data" / "app")
     args = parser.parse_args(argv)
     try:
-        resultado = construir(args.seleccion, args.pdf, args.curso, args.salida, args.minimo,
-                              args.objetivo, args.maximo, args.con_referencias)
+        if args.comando == "construir":
+            resultado = construir(args.seleccion, args.pdf, args.curso, args.salida, args.minimo,
+                                  args.objetivo, args.maximo, args.con_referencias)
+        else:
+            resultado = cargar(args.salida, args.datos)
     except (ValueError, OSError) as exc:
         parser.exit(1, f"Error: {exc}\n")
     print(json.dumps(resultado, ensure_ascii=False, indent=2))
