@@ -7,11 +7,13 @@ orden de sus resultados con el tiempo:
    ``datasets/papers/seleccion.csv`` con la metadata (título, autores, año,
    abstract, categoría), la **versión** exacta del PDF y su licencia.
    Ese CSV es la lista congelada: se versiona en Git.
-2. ``descargar`` baja los PDFs de esa lista.
+2. ``descargar`` baja los PDFs de esa lista a ``datasets/papers/pdf/``
+   (ignorado por Git) y verifica que existan y sean PDF.
 
 Uso, desde la raíz del repositorio::
 
     python -m rag.arxiv seleccionar --maximo 250
+    python -m rag.arxiv descargar
 
 Se respeta la política de la API: una petición cada 3 segundos y un
 User-Agent identificable. Solo usa la biblioteca estándar.
@@ -20,6 +22,7 @@ User-Agent identificable. Solo usa la biblioteca estándar.
 import argparse
 import csv
 import re
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -30,6 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DATASET_DIR = ROOT / "datasets" / "papers"
 SELECCION = DATASET_DIR / "seleccion.csv"
+PDF_DIR = DATASET_DIR / "pdf"
 
 API_URL = "https://export.arxiv.org/api/query"
 OAI_URL = "https://export.arxiv.org/oai2"
@@ -113,7 +117,7 @@ class ClienteArxiv:
             except urllib.error.HTTPError as exc:
                 if exc.code not in (429, 500, 502, 503) or intento == self.reintentos:
                     raise
-            except urllib.error.URLError:
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
                 if intento == self.reintentos:
                     raise
             time.sleep(self.pausa * 2 ** (intento + 1))
@@ -243,6 +247,38 @@ def leer_seleccion(path=SELECCION):
     return filas
 
 
+def nombre_pdf(arxiv_id):
+    """IDs antiguos tienen '/': cs/0101001 -> cs_0101001.pdf."""
+    return arxiv_id.replace("/", "_") + ".pdf"
+
+
+def descargar(cliente, filas, destino=PDF_DIR, log=print):
+    """Descarga solo lo que falta; un PDF ya presente y válido no se vuelve a pedir."""
+    destino = Path(destino)
+    destino.mkdir(parents=True, exist_ok=True)
+    nuevos = fallidos = 0
+    for numero, fila in enumerate(filas, 1):
+        path = destino / nombre_pdf(fila["arxiv_id"])
+        if path.is_file() and path.read_bytes()[:5] == b"%PDF-":
+            continue
+        try:
+            datos = cliente.get(fila["url_pdf"])
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            log(f"[{numero}/{len(filas)}] Error {fila['arxiv_id']}: {exc}")
+            fallidos += 1
+            continue
+        if datos[:5] != b"%PDF-":
+            log(f"[{numero}/{len(filas)}] {fila['arxiv_id']}: la respuesta no es un PDF")
+            fallidos += 1
+            continue
+        temporal = path.with_suffix(".part")
+        temporal.write_bytes(datos)
+        temporal.replace(path)
+        nuevos += 1
+        log(f"[{numero}/{len(filas)}] {fila['arxiv_id']} ({len(datos) // 1024} KB)")
+    return {"nuevos": nuevos, "fallidos": fallidos, "total": len(filas)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Corpus de papers de arXiv (issue #97)")
     sub = parser.add_subparsers(dest="comando", required=True)
@@ -251,6 +287,9 @@ def main(argv=None):
     sel.add_argument("--salida", type=Path, default=SELECCION)
     sel.add_argument("--sin-licencias", action="store_true", help="no consultar OAI-PMH")
     sel.add_argument("--forzar", action="store_true", help="sobrescribir una selección existente")
+    des = sub.add_parser("descargar", help="descarga los PDFs de seleccion.csv")
+    des.add_argument("--seleccion", type=Path, default=SELECCION)
+    des.add_argument("--destino", type=Path, default=PDF_DIR)
     args = parser.parse_args(argv)
     cliente = ClienteArxiv()
 
@@ -262,6 +301,11 @@ def main(argv=None):
         filas = seleccionar(cliente, args.maximo, licencias=not args.sin_licencias)
         escribir_seleccion(filas, args.salida)
         print(f"{len(filas)} papers en {args.salida}")
+    else:
+        resultado = descargar(cliente, leer_seleccion(args.seleccion), args.destino)
+        print(resultado)
+        if resultado["fallidos"]:
+            sys.exit(1)
 
 
 if __name__ == "__main__":
