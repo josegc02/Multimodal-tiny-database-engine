@@ -1,13 +1,19 @@
-"""Productos desde Amazon Reviews 2023 (McAuley Lab, UCSD), issue #100.
+"""Productos y compras desde Amazon Reviews 2023 (McAuley Lab, UCSD), issue #100.
 
 Pasos, desde la raíz del repositorio::
 
     python -m tienda.amazon seleccionar            # productos_candidatos.csv
+    python -m tienda.amazon compras                # compras.csv (después de tienda.imagenes)
 
 ``seleccionar`` descarga la metadata de una categoría (por defecto
 Video_Games) y se queda con los productos que tienen precio, descripción e
 imagen; de ellos toma los ``--cantidad`` con más reseñas. El archivo de
 origen es una instantánea fija (2023), así que la selección es determinista.
+
+``compras`` recorre las reseñas de la misma categoría: cada reseña con
+``verified_purchase`` es una compra real de un usuario. Se conservan los
+usuarios con al menos dos compras dentro del catálogo (los que aportan
+pares "también compraron") hasta un máximo de filas.
 """
 
 import argparse
@@ -17,17 +23,20 @@ import heapq
 import html
 import json
 import re
+from collections import defaultdict
 from pathlib import Path
 
-from tienda.comun import GENERATED_DIR, RAW_DIR, descargar, escribir_csv
+from tienda.comun import GENERATED_DIR, RAW_DIR, descargar, escribir_csv, leer_csv
 
 BASE_URL = "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_2023/raw"
 CATEGORIA = "Video_Games"
 CANDIDATOS = GENERATED_DIR / "productos_candidatos.csv"
-PRODUCTOS = GENERATED_DIR / "productos.csv"  # lo escribe tienda.imagenes
+PRODUCTOS = GENERATED_DIR / "productos.csv"
+COMPRAS = GENERATED_DIR / "compras.csv"
 
 CAMPOS_CANDIDATOS = ("id", "asin", "titulo", "descripcion", "precio", "rating", "num_resenas",
                      "marca", "categoria", "url_imagen")
+CAMPOS_COMPRAS = ("id", "usuario", "producto_id", "rating", "fecha")
 MIN_PALABRAS = 15
 
 _HTML = re.compile(r"<[^>]+>")
@@ -36,6 +45,10 @@ _ESPACIOS = re.compile(r"\s+")
 
 def url_meta(categoria):
     return f"{BASE_URL}/meta_categories/meta_{categoria}.jsonl.gz"
+
+
+def url_resenas(categoria):
+    return f"{BASE_URL}/review_categories/{categoria}.jsonl.gz"
 
 
 def leer_jsonl(path):
@@ -115,13 +128,49 @@ def seleccionar(meta_path, cantidad):
     return [{"id": numero, **fila} for numero, fila in enumerate(elegidos, 1)]
 
 
+def compras(resenas_path, productos, min_compras=2, maximo=100_000):
+    """Compras verificadas de los productos del catálogo.
+
+    Una compra repetida del mismo usuario y producto cuenta una vez (la más
+    antigua). Si hay más de ``maximo`` filas, se priorizan los usuarios con
+    más compras, que son los que más informan a la recomendación.
+    """
+    id_por_asin = {fila["asin"]: int(fila["id"]) for fila in productos}
+    por_usuario = defaultdict(dict)  # usuario -> {producto_id: (fecha, rating)}
+    for resena in leer_jsonl(resenas_path):
+        producto_id = id_por_asin.get(resena.get("parent_asin"))
+        usuario = resena.get("user_id")
+        if producto_id is None or not usuario or resena.get("verified_purchase") is not True:
+            continue
+        fecha = int(resena.get("timestamp") or 0) // 1000  # milisegundos -> segundos Unix
+        anterior = por_usuario[usuario].get(producto_id)
+        if anterior is None or fecha < anterior[0]:
+            por_usuario[usuario][producto_id] = (fecha, float(resena.get("rating") or 0))
+
+    usuarios = sorted((u for u, c in por_usuario.items() if len(c) >= min_compras),
+                      key=lambda u: (-len(por_usuario[u]), u))
+    filas = []
+    for usuario in usuarios:
+        if len(filas) + len(por_usuario[usuario]) > maximo:
+            break
+        filas += [(fecha, usuario, producto_id, rating)
+                  for producto_id, (fecha, rating) in por_usuario[usuario].items()]
+    filas.sort()
+    return [{"id": numero, "usuario": usuario, "producto_id": producto_id, "rating": rating, "fecha": fecha}
+            for numero, (fecha, usuario, producto_id, rating) in enumerate(filas, 1)]
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Productos de Amazon Reviews 2023 (issue #100)")
+    parser = argparse.ArgumentParser(description="Productos y compras de Amazon Reviews 2023 (issue #100)")
     sub = parser.add_subparsers(dest="comando", required=True)
     sel = sub.add_parser("seleccionar", help="descarga la metadata y elige los productos")
     sel.add_argument("--categoria", default=CATEGORIA)
     sel.add_argument("--cantidad", type=int, default=8000,
                      help="candidatos; tras descartar imágenes inválidas deben quedar 5 000-10 000")
+    com = sub.add_parser("compras", help="descarga las reseñas y genera compras.csv")
+    com.add_argument("--categoria", default=CATEGORIA)
+    com.add_argument("--min-compras", type=int, default=2)
+    com.add_argument("--maximo", type=int, default=100_000)
     args = parser.parse_args(argv)
 
     if args.comando == "seleccionar":
@@ -133,6 +182,14 @@ def main(argv=None):
         print(f"{len(filas)} candidatos en {CANDIDATOS} (sha256 del origen: {sha256(meta)[:16]}…)")
         if len(filas) < args.cantidad:
             print(f"Aviso: solo {len(filas)} productos cumplen los filtros")
+    else:
+        from tienda.imagenes import CAMPOS_PRODUCTOS
+        productos = leer_csv(PRODUCTOS, CAMPOS_PRODUCTOS)
+        resenas = descargar(url_resenas(args.categoria), RAW_DIR / f"{args.categoria}.jsonl.gz")
+        filas = compras(resenas, productos, args.min_compras, args.maximo)
+        escribir_csv(COMPRAS, CAMPOS_COMPRAS, filas)
+        usuarios = len({fila["usuario"] for fila in filas})
+        print(f"{len(filas)} compras de {usuarios} usuarios en {COMPRAS}")
 
 
 if __name__ == "__main__":
