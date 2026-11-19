@@ -438,7 +438,10 @@ class LogicalPlanner:
         optimizador use índices de esa tabla y estime bien el lado izquierdo. El WHERE
         completo se sigue evaluando después del join, así que el resultado no cambia.
         """
-        if where is None:
+        # Solo es válido si ningún join puede rellenar con NULL el lado izquierdo (RIGHT o
+        # FULL). Hoy el parser solo acepta INNER JOIN; la guarda evita que un tipo nuevo
+        # herede el pushdown sin revisarlo.
+        if where is None or any(join.kind != "INNER" for join in statement.joins):
             return None
         qualifier = statement.from_table.alias or statement.from_table.name
         terms, pending = [], [where]
