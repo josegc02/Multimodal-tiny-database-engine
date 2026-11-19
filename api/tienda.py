@@ -5,7 +5,14 @@ from tienda.indice_imagen import ImageIndex
 
 from fastapi import APIRouter, HTTPException, Query
 
-from tienda.recomendaciones import cercanas, compras, consultar, fusionar, literal, texto, visual
+from tienda.recomendaciones import (cercanas, compras, consultar, fusionar, literal, misma_categoria,
+                                    texto, visual)
+
+# Pesos medidos en benchmarks/tienda (505 consultas de prueba, pesos elegidos en validación):
+# la imagen a 0.25 y la categoría a 0.25 suben el acierto de tipo de 49.9 % a 74.2 %.
+# Compras sigue en 1 hasta medirla con una métrica de comportamiento.
+PESOS = "1,0.25,1"
+PESO_CATEGORIA = 0.25
 
 
 def rutas_tienda(estado, lock):
@@ -52,8 +59,10 @@ def rutas_tienda(estado, lock):
             return fila
 
     @router.get("/recomendaciones/{id}")
-    def recomendaciones(id: int, pesos: str = Query("1,1,1", description="Compras, imagen, texto"),
-                        vector_imagen: Literal["sift", "mobilenet"] = "sift"):
+    def recomendaciones(id: int, pesos: str = Query(PESOS, description="Compras, imagen, texto"),
+                        vector_imagen: Literal["sift", "mobilenet"] | None = Query(
+                            None, description="Por defecto mobilenet; si falta el modelo, sift"),
+                        peso_categoria: float = Query(PESO_CATEGORIA, ge=0, allow_inf_nan=False)):
         try:
             valores = [float(p) for p in pesos.split(",")]
         except ValueError:
@@ -61,27 +70,36 @@ def rutas_tienda(estado, lock):
         if (len(valores) != 3 or any(p < 0 for p in valores)
                 or not math.isfinite(sum(valores)) or sum(valores) <= 0):
             raise HTTPException(422, "Indique tres pesos no negativos con suma positiva y finita")
+        usar_mobilenet = vector_imagen != "sift"
         with lock:
             motor = estado["motor"]
             origen = producto(motor, id)
-            catalogo_imagenes = (consultar(motor, "SELECT id, imagen FROM productos")
-                                 if vector_imagen == "mobilenet" else None)
-        if vector_imagen == "mobilenet":
+            catalogo_imagenes = consultar(motor, "SELECT id, imagen FROM productos") if usar_mobilenet else None
+        if usar_mobilenet:
             # Fuera del lock del motor: extraer el catálogo tarda minutos la primera vez y
             # no debe congelar el resto de la API. El índice tiene su propio lock.
             indice = estado.setdefault("indice_mobilenet", ImageIndex(estado["motor"].directorio))
             try:
                 indice.actualizar(catalogo_imagenes)
+                imagen = indice.buscar(id)  # vacío si el producto no tiene vector: quedan compras y texto
             except (OSError, ValueError) as exc:  # falta el modelo: afecta a todo el índice
-                raise HTTPException(503, str(exc)) from exc
-            imagen = indice.buscar(id)  # vacío si el producto no tiene vector: quedan compras y texto
+                if vector_imagen == "mobilenet":
+                    raise HTTPException(503, str(exc)) from exc
+                usar_mobilenet = False  # por defecto: se recomienda con SIFT
         with lock:
             motor = estado["motor"]
-            if vector_imagen != "mobilenet":
+            if not usar_mobilenet:
                 imagen = visual(motor, origen["imagen"])
             senales = {"compras": compras(motor, id), "imagen": imagen,
                        "texto": texto(motor, origen["descripcion"])}
-            filas = fusionar(id, senales, dict(zip(senales, valores)))
+            pesos_senales = dict(zip(senales, valores))
+            if peso_categoria > 0:
+                # Solo los candidatos de señales con peso: una señal apagada no aporta productos.
+                candidatos = {i for nombre, puntos in senales.items() if pesos_senales[nombre] > 0
+                              for i, valor in puntos.items() if valor > 0} - {id}
+                senales["categoria"] = misma_categoria(motor, origen.get("categoria"), candidatos)
+                pesos_senales["categoria"] = peso_categoria
+            filas = fusionar(id, senales, pesos_senales)
             return [{**producto(motor, fila["id"]), **fila} for fila in filas]
 
     @router.get("/tiendas/cercanas")
