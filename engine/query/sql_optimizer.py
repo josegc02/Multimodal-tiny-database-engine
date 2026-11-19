@@ -29,6 +29,17 @@ class SQLOptimizer:
             return TableStats(rows, math.ceil(rows / self.costs.config.records_per_page))
         return left
 
+    def _join_input(self, plan):
+        """Filas del lado izquierdo de un join, contando el filtro bajado a su Scan."""
+        if plan.operation == "Filter" and plan.children[0].operation == "Scan":
+            scan = plan.children[0]
+            if scan.get("predicate") is not None:
+                table = scan.get("table")
+                stats = self.estimates(scan)
+                rows = math.ceil(self.scan_rows(stats, scan.get("predicate"), table.alias or table.name))
+                return TableStats(rows, max(1, math.ceil(rows / self.costs.config.records_per_page)))
+        return self.estimates(plan)
+
     def scan_rows(self, stats, predicate, qualifier):
         """Filas estimadas tras el WHERE de un Scan."""
         rows = stats.rows
@@ -222,7 +233,7 @@ class SQLOptimizer:
             right = plan.children[1]
             binding = self.catalog.table(right.get("table").name)
             pairs = plan.get("pairs")
-            return self.costs.plan_join(self.estimates(plan.children[0]), binding.statistics,
+            return self.costs.plan_join(self._join_input(plan.children[0]), binding.statistics,
                                         tuple(l.name for l, _ in pairs), tuple(r.name for _, r in pairs),
                                         binding.index_info())
         if plan.operation not in ("Sort", "Aggregate"):
