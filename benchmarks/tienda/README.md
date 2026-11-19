@@ -84,7 +84,8 @@ compras y solo pares a 30 días o menos.
 ## Latencia de la señal de compras
 
 Con las 714 mil compras filtradas (antes eran 100 mil), la consulta de "también
-compraron" es un self-JOIN en nuestro motor. Hubo que corregir el optimizador:
+compraron" es un self-JOIN en nuestro motor. Necesita las dos correcciones al
+optimizador del PR #118 (en un PR aparte porque afectan a todas las consultas):
 
 | Versión del motor | Plan | Mediana | Máximo (producto más comprado) |
 |---|---|---:|---:|
@@ -92,7 +93,7 @@ compraron" es un self-JOIN en nuestro motor. Hubo que corregir el optimizador:
 | **Pushdown de selección + valores distintos con KMV** | Index scan en `a.producto_id`, *index nested loop* en `usuario` | **18 ms** | **632 ms** |
 
 El JOIN del motor devuelve los mismos pares que el cálculo en Python en 20 de 20
-productos. Ver `docs/sql_parser.md`.
+productos. Sin #118, estas recomendaciones son correctas pero lentas.
 
 ## Solo la métrica de tipo (exploración previa)
 
