@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { entero, partirRespuesta } from '../formato.js';
+import { entero } from '../formato.js';
 import { IconoError } from '../Iconos.jsx';
 import { enlace, ir } from '../ruta.js';
 import Fuentes from './Fuentes.jsx';
+import Respuesta from './Respuesta.jsx';
 import Traza from './Traza.jsx';
 
 // Preguntas que el corpus responde bien (benchmarks/asistente/preguntas.json).
@@ -113,26 +114,28 @@ export default function Preguntar({ reciente, auto, estado, borrador, limpiarBor
 
           {fase === 'listo' && datos && (
             <>
-              <section className="panel respuesta" aria-label="Respuesta">
-                {datos.modo === 'sin_llm' && (
-                  <p style={{ fontSize: 14, color: 'var(--tinta-2)' }}>
-                    Sin LLM: estos son los fragmentos que encontró BM25, sin redactar una respuesta.
-                  </p>
-                )}
-                {datos.respuesta && partirRespuesta(datos.respuesta).map((parrafo, i) => (
-                  <p key={i}>
-                    {parrafo.map((trozo, j) => (trozo.cita ? (
-                      <button key={j} className="cita" aria-pressed={trozo.cita === cita}
-                              aria-label={`Ver la fuente ${trozo.cita}`} onClick={() => elegirCita(trozo.cita)}>{trozo.cita}</button>
-                    ) : <span key={j}>{trozo.texto}</span>))}
-                  </p>
-                ))}
-                {!fragmentos.length && (
-                  <div className="sugerencias">
-                    {SUGERENCIAS.slice(0, 3).map((s) => <button key={s} className="sugerencia" onClick={() => enviar(s)}>{s}</button>)}
-                  </div>
-                )}
-              </section>
+              {datos.respuesta && fragmentos.length > 0 && <Respuesta datos={datos} cita={cita} elegir={elegirCita} />}
+              {(!datos.respuesta || !fragmentos.length) && (
+                <section className="panel respuesta" aria-label="Respuesta">
+                  {datos.modo === 'sin_llm' && fragmentos.length > 0 && (
+                    <p style={{ fontSize: 15, color: 'var(--tinta-2)' }}>
+                      Sin LLM: a la derecha están los {fragmentos.length} fragmentos que encontró BM25, sin redactar una respuesta.
+                    </p>
+                  )}
+                  {!fragmentos.length && (
+                    <>
+                      <p>No encontré fragmentos de los papers ni de las clases sobre esto.</p>
+                      <p style={{ fontSize: 14, color: 'var(--tinta-2)' }}>
+                        El asistente solo responde con los documentos cargados: papers de bases de datos y recuperación de
+                        información, y las clases del curso. Puedes subir un PDF para ampliarlo, o probar con:
+                      </p>
+                      <div className="sugerencias">
+                        {SUGERENCIAS.slice(0, 3).map((s) => <button key={s} className="sugerencia" onClick={() => enviar(s)}>{s}</button>)}
+                      </div>
+                    </>
+                  )}
+                </section>
+              )}
               {datos.traza && <Traza datos={datos} />}
             </>
           )}

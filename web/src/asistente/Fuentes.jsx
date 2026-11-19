@@ -5,6 +5,7 @@ import { esClase, paginas, referencia, sinCorreos } from '../formato.js';
 const CORTE = 320; // caracteres del fragmento que se ven antes de "Ver completo"
 
 export default function Fuentes({ fase, datos, cita, elegir }) {
+  const terminos = (datos?.consulta ?? '').split(/\s+/).filter((t) => t.length > 2);
   const fragmentos = datos?.fragmentos ?? [];
   const citadas = new Set(datos?.citas ?? []);
   const maximo = Math.max(...fragmentos.map((f) => f.puntaje), 1);
@@ -30,14 +31,14 @@ export default function Fuentes({ fase, datos, cita, elegir }) {
         <div className="aviso">BM25 no encontró fragmentos con estas palabras clave: {datos?.consulta || '—'}.</div>
       )}
       {fase === 'listo' && fragmentos.map((f) => (
-        <Fuente key={f.id} f={f} activa={f.n === cita} citada={citadas.has(f.n)}
+        <Fuente key={f.id} f={f} activa={f.n === cita} citada={citadas.has(f.n)} terminos={terminos}
                 sinLlm={datos.modo === 'sin_llm'} ancho={(f.puntaje / maximo) * 100} elegir={elegir} />
       ))}
     </aside>
   );
 }
 
-function Fuente({ f, activa, citada, sinLlm, ancho, elegir }) {
+function Fuente({ f, activa, citada, sinLlm, ancho, elegir, terminos }) {
   const [completo, setCompleto] = useState(false);
   const clase = esClase(f);
   const texto = sinCorreos(f.texto);
@@ -54,7 +55,7 @@ function Fuente({ f, activa, citada, sinLlm, ancho, elegir }) {
       </button>
       <div className="pista"><div style={{ width: `${Math.round(ancho)}%` }} /></div>
       <span className="fuente-titulo">{f.titulo}</span>
-      <p className="fuente-texto">“{corto}”</p>
+      <p className="fuente-texto">“{resaltar(corto, terminos)}”</p>
       <div className="fuente-pie">
         <span className="sub">{uso}</span>
         <span className="enlaces">
@@ -71,4 +72,21 @@ function Fuente({ f, activa, citada, sinLlm, ancho, elegir }) {
       </div>
     </article>
   );
+}
+
+// Marca en el fragmento las palabras clave de la consulta (y sus variantes: index, indexing).
+function resaltar(texto, terminos) {
+  if (!terminos.length) return texto;
+  const raices = terminos.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, Math.max(4, t.length - 2))).filter(Boolean);
+  if (!raices.length) return texto;
+  const patron = new RegExp(`\\b(${raices.join('|')})[a-z0-9-]*`, 'gi');
+  const partes = [];
+  let ultimo = 0;
+  for (const m of texto.matchAll(patron)) {
+    if (m.index > ultimo) partes.push(texto.slice(ultimo, m.index));
+    partes.push(<mark key={m.index}>{m[0]}</mark>);
+    ultimo = m.index + m[0].length;
+  }
+  partes.push(texto.slice(ultimo));
+  return partes;
 }
