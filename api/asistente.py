@@ -37,13 +37,16 @@ MAX_PALABRAS_CLAVE = 16  # modo sin LLM: todas las traducidas de la pregunta
 MAX_PALABRAS_LLM = 5     # con LLM: solo las más específicas (benchmarks/asistente)
 MAX_POR_PAPER = 2      # fragmentos de un mismo documento en la respuesta, para variar las fuentes
 CANDIDATOS_POR_K = 5   # se piden k * 5 fragmentos a BM25 y luego se aplica MAX_POR_PAPER
-UMBRAL_RELATIVO = 0.6  # se descarta un fragmento con menos del 60 % del puntaje del primero
+METODO_RANKING = "BM25"  # o "TF_IDF" (coseno); comparados en benchmarks/asistente
+UMBRAL_RELATIVO = 0.7  # se descarta un fragmento con menos del 70 % del puntaje del primero
+PREFIJO_COGNADO = 5    # letras iniciales que comparten un cognado y su palabra en inglés
+MAX_COGNADOS = 2
 SIN_FRAGMENTOS = "No encontré fragmentos de los papers relacionados con la pregunta."
 
 # Pocas palabras y en inglés, medido en benchmarks/asistente: cada término de
-# más (y cada término en español) suma puntaje a fragmentos que no tratan el
-# tema. Las diapositivas del curso igual aparecen, porque usan los términos
-# técnicos en inglés (buffer manager, write-ahead log, B+ tree...).
+# más (y cada término general en español) suma puntaje a fragmentos que no
+# tratan el tema. Para las diapositivas del curso, en español, se agregan los
+# cognados de la propia pregunta (ver ``cognados``).
 PROMPT_PALABRAS_CLAVE = (
     "Eres parte de un buscador BM25 sobre papers académicos y clases de bases de datos y "
     "recuperación de información. Convierte la pregunta del usuario en 5 palabras clave en "
@@ -52,11 +55,9 @@ PROMPT_PALABRAS_CLAVE = (
     "y sigue con términos técnicos o sinónimos útiles. No incluyas palabras vacías. Responde "
     "solo con las palabras separadas por espacios, sin explicación ni puntuación."
 )
-# Pendiente de medir con el LLM (se acabó la cuota del día): agregar al prompt una
-# línea "ES: <término técnico en español>". Con las palabras en caché, inglés más
-# ese término dio precisión 0.929 (contra 0.919) y más diapositivas del curso,
-# porque BM25 compara raíces: 'fragmentation' (fragment) no encuentra
-# 'fragmentación'. _palabras_del_llm ya lee esa línea si viene.
+# Pedirle al LLM una línea "ES:" con el término en español trajo más clases, pero
+# le hizo cambiar las palabras en inglés y bajó la precisión a 0.895: por eso los
+# términos en español salen de la pregunta (cognados) y no del LLM.
 MAX_PALABRAS_ES = 2
 
 PROMPT_RESPUESTA = (
@@ -265,8 +266,28 @@ def palabras_clave(pregunta: str, llm: LLM | None) -> str:
     if llm is not None:
         consulta = _palabras_del_llm(llm.completar(PROMPT_PALABRAS_CLAVE, pregunta, 4000))
         if consulta:
-            return consulta
+            return " ".join([consulta] + cognados(pregunta, consulta.split()))
     return palabras_clave_locales(pregunta)
+
+
+def cognados(pregunta: str, ingles: list[str]) -> list[str]:
+    """Palabras de la pregunta que comparten raíz con las palabras clave en inglés.
+
+    Las diapositivas del curso están en español y BM25 compara raíces exactas:
+    'fragmentation' (fragment) no encuentra 'fragmentación' (fragmentacion). Se
+    agregan solo los cognados (fragmentación ~ fragmentation, extensible ~
+    extendible, producto ~ product): salen de lo que escribió el estudiante, no del
+    LLM, y no arrastran palabras generales. En benchmarks/asistente subieron la
+    precisión de 0.949 a 0.962 y las clases relevantes de 6 a 11.
+    """
+    partes = {p for termino in ingles for p in termino.split("-")}
+    salida: list[str] = []
+    for palabra in _terminos(_sin_tildes(pregunta).lower()):
+        if palabra in PALABRAS_VACIAS or len(palabra) < 4 or palabra in partes or palabra in salida:
+            continue
+        if any(len(p) >= PREFIJO_COGNADO and p[:PREFIJO_COGNADO] == palabra[:PREFIJO_COGNADO] for p in partes):
+            salida.append(palabra)
+    return salida[:MAX_COGNADOS]
 
 
 def _palabras_del_llm(texto: str) -> str:
@@ -314,7 +335,7 @@ def recuperar(ejecutar: Callable, consulta: str, k: int, detalle: dict | None = 
         return []
     candidatos = _consultar(ejecutar, (
         "SELECT id, paper_id, pagina, pagina_fin, texto, SCORE() AS puntaje FROM fragmentos "
-        f"WHERE MATCH(texto, '{consulta}') USING BM25 ORDER BY puntaje DESC "
+        f"WHERE MATCH(texto, '{consulta}') USING {METODO_RANKING} ORDER BY puntaje DESC "
         f"LIMIT {int(k) * CANDIDATOS_POR_K}"))
     minimo = UMBRAL_RELATIVO * float(candidatos[0]["puntaje"]) if candidatos else 0.0
     fragmentos, por_paper, estados = [], {}, []

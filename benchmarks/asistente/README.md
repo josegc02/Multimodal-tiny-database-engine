@@ -35,17 +35,35 @@ cada vez (18 llamadas).
 
 ## Resultados (2026-11-19, 259 documentos, 5,714 fragmentos, Gemini 3.1 Flash-Lite)
 
-| Versión | Precisión | Relevantes | Acierto@1 |
-| --- | ---: | ---: | ---: |
-| Con LLM, antes: hasta 16 palabras en inglés y español | 0.767 | 69 de 90 | 0.778 |
-| Con LLM, ahora: 5 palabras en inglés y umbral del 60 % | **0.919** | **79 de 86** | **1.000** |
-| Sin LLM, antes: glosario más las palabras en español | 0.644 | 58 de 90 | 0.611 |
-| Sin LLM, ahora: solo las traducidas y umbral del 60 % | **0.877** | 71 de 81 | 0.833 |
+| Versión | Precisión | Relevantes | Acierto@1 | Clases del tema |
+| --- | ---: | ---: | ---: | ---: |
+| Con LLM, al inicio: hasta 16 palabras en inglés y español | 0.767 | 69 de 90 | 0.778 | 20 de 35 |
+| Con LLM: 5 palabras en inglés, umbral del 60 % (#111) | 0.919 | 79 de 86 | 1.000 | 8 de 8 |
+| **Con LLM, ahora: 5 en inglés + cognados, umbral del 70 %** | **0.962** | 76 de 79 | **1.000** | **11 de 12** |
+| Sin LLM, al inicio: glosario más las palabras en español | 0.644 | 58 de 90 | 0.611 | — |
+| **Sin LLM, ahora: solo las traducidas, umbral del 70 %** | **0.875** | 70 de 80 | 0.833 | — |
 
-Precisión de las citas con la recuperación nueva: **0.943** (50 de 53 citas
-del tema). Un prompt de respuesta más estricto dio 0.940, así que no se cambió.
+Precisión de las citas que escribe el LLM: **0.962** (51 de 53 citas del tema,
+ninguna respuesta sin citas). Era 0.943 antes de los cognados. Un prompt de
+respuesta más estricto no la mejoró (0.940), así que no se cambió.
 
-Qué se probó y qué decidió cada valor:
+### BM25 contra TF-IDF (coseno)
+
+El motor tiene los dos métodos de la Parte 3 (`USING BM25` y `USING TF_IDF`).
+Con las mismas palabras clave:
+
+| Umbral | BM25 | TF-IDF coseno |
+| --- | ---: | ---: |
+| Sin umbral | 0.878 (79/90) | 0.844 (76/90) |
+| 60 % | 0.919 (79/86) | 0.852 (75/88) |
+| 70 % | 0.949 (75/79) | 0.886 (70/79) |
+
+BM25 gana en todos los casos: la saturación de la frecuencia (k1) evita que un
+fragmento que repite un término general le gane a uno que nombra el tema, y la
+normalización por largo (b) no castiga a las diapositivas, que son cortas. Se
+deja `METODO_RANKING = "BM25"`.
+
+### Qué se probó y qué decidió cada valor
 
 - **Cuántas palabras clave.** Con las 16 que daba el LLM, los términos
   generales (`algorithm`, `memory`, `database`) sumaban puntaje a fragmentos de
@@ -53,19 +71,31 @@ Qué se probó y qué decidió cada valor:
   3, 4, 5, 6, 7, 8 y 16 sobre las mismas palabras: 3 y 5 quedaron casi iguales
   en precisión (0.856 y 0.844, de 5 fragmentos fijos), y con 5 el primer
   fragmento fue del tema en las 18 preguntas (con 3, en 17).
-- **Español.** Agregar términos en español traía diapositivas de relleno: 35
-  fragmentos de clases, de los que solo 20 eran del tema. Con 5 términos en
-  inglés salen 8 y los 8 son del tema, porque las clases usan los términos
-  técnicos en inglés. Buscar en inglés y en español por separado y fusionar
-  los resultados (RRF) dio 0.633.
 - **El prompt.** Pedir "solo términos específicos" hizo que el LLM reformulara
   el término de la pregunta (`buffer manager` pasó a `buffer-pool`) y bajó a
   0.851. Pedir que empiece por el término de la pregunta traducido literalmente
   dio 0.919.
-- **Umbral relativo.** Descartar los fragmentos bajo el 60 % del puntaje del
-  primero subió la precisión sin perder ningún fragmento relevante; con 70 %
-  se empezaba a perder alguno.
+- **Las clases del curso, en español.** BM25 compara raíces exactas:
+  `fragmentation` (raíz `fragment`) no encuentra `fragmentación`
+  (`fragmentacion`), así que con palabras solo en inglés la Clase 12 no salía
+  para "fragmentación horizontal". Se probaron cuatro formas de agregar español:
+  - todas las palabras de la pregunta en español: 0.633 a 0.644, porque traen
+    diapositivas de relleno ("recuperación" trae la clase de recuperación ante
+    fallos en una pregunta de RAG);
+  - buscar en inglés y en español por separado y fusionar (RRF): 0.633;
+  - pedirle al LLM una línea `ES:` con el término en español: 0.895, porque el
+    LLM también cambió las palabras en inglés;
+  - **cognados de la propia pregunta** (palabras que comparten las primeras 5
+    letras con una palabra clave en inglés: fragmentación ~ fragmentation,
+    extensible ~ extendible, producto ~ product): **0.962**. Salen de lo que
+    escribió el estudiante, no del LLM, no cuestan llamadas y no arrastran
+    palabras generales.
+- **Umbral relativo.** Descartar los fragmentos bajo el 70 % del puntaje del
+  primero: con los cognados sube la precisión de 0.941 (80/85, umbral 60 %) a
+  0.962 (76/79). Se pierden 4 fragmentos relevantes a cambio de que el 96 % de
+  las fuentes sean del tema, que es lo que se priorizó.
 
 **Límites:** son 18 preguntas y los valores se eligieron sobre ellas, así que
 la cifra real con preguntas nuevas puede ser algo menor. La salida del LLM
-también varía entre llamadas; la caché fija una de ellas.
+también varía entre llamadas; la caché fija una de ellas (para medir otra,
+borra `cache_palabras.json`).

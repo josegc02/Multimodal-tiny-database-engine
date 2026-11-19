@@ -134,8 +134,8 @@ Respuesta `200`:
 
 Cómo se arma:
 
-1. La pregunta pasa a **5 palabras clave en inglés** (`consulta`), empezando por el término técnico de la pregunta, porque BM25 compara términos y los papers están en inglés. Las clases del curso también aparecen, porque usan los términos técnicos en inglés (buffer manager, write-ahead log). Con LLM se le pide al modelo; sin LLM, o con `BD2_PALABRAS_CLAVE=local`, se traduce con un glosario pequeño.
-2. `SELECT ... FROM fragmentos WHERE MATCH(texto, consulta) USING BM25 ORDER BY puntaje DESC LIMIT 5k`. De esos candidatos se toman los `k` mejores con **a lo más 2 fragmentos por documento**, y se descartan los que no llegan al **60 % del puntaje del primero** (coinciden solo en un término general). Por eso puede haber menos de `k` fuentes. Después, `SELECT ... FROM papers WHERE id IN (...)` trae la metadata, porque el motor no admite `MATCH` con `JOIN`.
+1. La pregunta pasa a **5 palabras clave en inglés** (`consulta`), empezando por el término técnico de la pregunta, porque BM25 compara términos y los papers están en inglés. Se les suman los **cognados de la pregunta** (fragmentación ~ fragmentation, extensible ~ extendible), para encontrar las diapositivas del curso, que están en español. Con LLM las palabras las elige el modelo; sin LLM, o con `BD2_PALABRAS_CLAVE=local`, se traduce con un glosario pequeño.
+2. `SELECT ... FROM fragmentos WHERE MATCH(texto, consulta) USING BM25 ORDER BY puntaje DESC LIMIT 5k`. De esos candidatos se toman los `k` mejores con **a lo más 2 fragmentos por documento**, y se descartan los que no llegan al **70 % del puntaje del primero** (coinciden solo en un término general). Por eso puede haber menos de `k` fuentes. Después, `SELECT ... FROM papers WHERE id IN (...)` trae la metadata, porque el motor no admite `MATCH` con `JOIN`.
 
 Las cifras de precisión que justifican estos valores están en `benchmarks/asistente/README.md`.
 3. El LLM recibe los fragmentos numerados y debe responder solo con ellos, citando `[n]`. Si no le sirven, lo dice.
