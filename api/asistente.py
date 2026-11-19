@@ -32,15 +32,20 @@ from typing import Callable, Protocol
 MODELO_CLAUDE = "claude-haiku-5-5"
 MODELO_GEMINI = "gemini-3.1-flash-lite"  # el más rápido de la capa gratuita (~2-3 s)
 PROVEEDORES = ("gemini", "claude", "ninguno")
-MAX_PALABRAS_CLAVE = 12
+MAX_PALABRAS_CLAVE = 16
+MAX_POR_PAPER = 2      # fragmentos de un mismo documento en la respuesta, para variar las fuentes
+CANDIDATOS_POR_K = 5   # se piden k * 5 fragmentos a BM25 y luego se aplica MAX_POR_PAPER
 SIN_FRAGMENTOS = "No encontré fragmentos de los papers relacionados con la pregunta."
 
+# Bilingüe a propósito: los papers están en inglés y las clases del curso, en español.
 PROMPT_PALABRAS_CLAVE = (
-    "Eres parte de un buscador BM25 sobre papers académicos en inglés de bases de datos y "
-    "recuperación de información. Convierte la pregunta del usuario en 3 a 8 palabras clave "
-    "en inglés que probablemente aparezcan en esos papers (términos técnicos, siglas como "
-    "HNSW o BM25, sinónimos útiles). Responde solo con las palabras separadas por espacios, "
-    "sin explicación ni puntuación."
+    "Eres parte de un buscador BM25 sobre bases de datos y recuperación de información. "
+    "El corpus mezcla papers académicos en inglés y diapositivas de clase en español. "
+    "Convierte la pregunta del usuario en palabras clave para ese buscador: primero 4 a 8 "
+    "en inglés (términos técnicos, siglas como HNSW o BM25, sinónimos útiles) y luego 3 a 6 "
+    "en español como aparecerían en una clase (por ejemplo: fragmentacion, pagina, indice). "
+    "No incluyas palabras vacías como 'de', 'the' o 'como'. Responde solo con las palabras "
+    "separadas por espacios, sin explicación ni puntuación."
 )
 
 PROMPT_RESPUESTA = (
@@ -226,20 +231,26 @@ def _terminos(texto: str) -> list[str]:
 def palabras_clave_locales(pregunta: str) -> str:
     """Modo sin LLM: quita palabras vacías y traduce con el glosario.
 
-    Las palabras que no están en el glosario se conservan: suelen ser siglas o
+    Primero van los términos en inglés (para los papers) y después las palabras
+    originales en español que se tradujeron (para las clases del curso). Las
+    palabras que no están en el glosario se conservan una vez: suelen ser siglas o
     términos que ya están en inglés (HNSW, BM25, B+tree, LSM...).
     """
     texto = _sin_tildes(pregunta).lower()
+    originales = [p for p in _terminos(texto) if p not in PALABRAS_VACIAS and len(p) >= 2]
     for patron, reemplazo in FRASES:
         texto = re.sub(patron, reemplazo, texto)
-    terminos = []
+    ingles, espanol = [], []
     for palabra in _terminos(texto):
         if palabra in PALABRAS_VACIAS or len(palabra) < 2:
             continue
         traducida = GLOSARIO.get(palabra, palabra)
-        if traducida not in terminos:
-            terminos.append(traducida)
-    return " ".join(terminos[:MAX_PALABRAS_CLAVE])
+        if traducida not in ingles:
+            ingles.append(traducida)
+    for palabra in originales:
+        if palabra not in ingles and palabra not in espanol:
+            espanol.append(palabra)
+    return " ".join((ingles + espanol)[:MAX_PALABRAS_CLAVE])
 
 
 def palabras_clave(pregunta: str, llm: LLM | None) -> str:
@@ -263,12 +274,25 @@ def _consultar(ejecutar: Callable, sql: str):
 
 
 def recuperar(ejecutar: Callable, consulta: str, k: int) -> list[dict]:
-    """Top-k fragmentos por BM25, cada uno con el título, autores, año y URL de su paper."""
+    """Top-k fragmentos por BM25, cada uno con el título, autores, año y URL de su paper.
+
+    Se toman a lo más MAX_POR_PAPER fragmentos de cada documento, para que un paper
+    largo que repite los términos no ocupe todo el top-k.
+    """
     if not consulta:
         return []
-    fragmentos = _consultar(ejecutar, (
+    candidatos = _consultar(ejecutar, (
         "SELECT id, paper_id, pagina, pagina_fin, texto, SCORE() AS puntaje FROM fragmentos "
-        f"WHERE MATCH(texto, '{consulta}') USING BM25 ORDER BY puntaje DESC LIMIT {int(k)}"))
+        f"WHERE MATCH(texto, '{consulta}') USING BM25 ORDER BY puntaje DESC "
+        f"LIMIT {int(k) * CANDIDATOS_POR_K}"))
+    fragmentos, por_paper = [], {}
+    for fragmento in candidatos:
+        usados = por_paper.get(fragmento["paper_id"], 0)
+        if usados < MAX_POR_PAPER:
+            por_paper[fragmento["paper_id"]] = usados + 1
+            fragmentos.append(fragmento)
+            if len(fragmentos) == k:
+                break
     if not fragmentos:
         return []
     ids = ", ".join(str(int(f["paper_id"])) for f in fragmentos)
