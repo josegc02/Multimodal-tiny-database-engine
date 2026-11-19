@@ -26,14 +26,25 @@ SIFT es el valor predeterminado y utiliza la columna IMAGE e índice SQL existen
 MobileNet usa el mismo HNSW del motor mediante un índice auxiliar sobre los IDs y
 rutas de productos. Sus vectores se guardan en la subcarpeta mobilenet de la base.
 El índice se construye en la primera consulta, que puede tardar varios minutos
-con el catálogo completo. Las siguientes consultas reutilizan el grafo. Al
-reiniciar la API se reconstruye desde los vectores guardados.
+con el catálogo completo. Para no esperar en la demo, precalcule los vectores
+antes de levantar la API:
+
+```bash
+python -m tienda.indice_imagen --datos data/app
+```
+
+Las siguientes consultas reutilizan el grafo. Al reiniciar la API se reconstruye
+desde los vectores guardados.
 
 Se detectan cambios en IDs, rutas, tamaño y fecha de modificación de las imágenes.
-Un cambio reconstruye el índice, reutilizando los vectores vigentes. El lock del
-motor protege la actualización y búsqueda. Si la extracción falla se devuelve
-503 y la siguiente petición puede reintentar. Una representación desconocida da
-422. La selección permite alternar ambas representaciones en la misma API.
+Un cambio reconstruye el índice, reutilizando los vectores vigentes. El índice
+tiene su propio lock y la extracción se hace **fuera del lock del motor**, así que
+construirlo no congela el resto de la API (el asistente y la tienda siguen
+respondiendo). Una imagen ilegible o ausente se omite y queda en
+`ImageIndex.omitidos`; un producto sin vector recibe la señal de imagen vacía y se
+recomienda con compras y texto. Solo si falta el modelo se devuelve 503. Una
+representación desconocida da 422. La selección permite alternar ambas
+representaciones en la misma API.
 
 La comparación reutiliza la métrica P@10 por categoría de la Parte 4 sobre COCO
 1K, con coseno y los mismos parámetros HNSW. Excluye la propia imagen antes de
