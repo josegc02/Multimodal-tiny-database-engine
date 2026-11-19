@@ -18,7 +18,7 @@ bajo Apache-2.0. La inferencia usa los pesos existentes.
 La API admite elegir representación en cada consulta.
 
 ```text
-GET /recomendaciones/1                       # MobileNet, pesos 1,0.25,1 y categoría 0.25
+GET /recomendaciones/1                       # MobileNet, pesos 1,0.5,1, categoría 0.25 y RRF
 GET /recomendaciones/1?vector_imagen=sift
 ```
 

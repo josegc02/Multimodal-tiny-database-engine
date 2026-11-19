@@ -162,16 +162,19 @@ Las cifras de precisión que justifican estos valores están en `benchmarks/asis
 
 ### `GET /recomendaciones/{id}`
 
-Combina compras conjuntas, similitud de imagen y texto. `pesos=1,0.25,1` (el valor
-predeterminado) controla esas tres señales en ese orden. `vector_imagen=mobilenet` es
-el valor predeterminado (si falta el modelo se usa SIFT); `vector_imagen=sift` elige
-SIFT + BoVW. `peso_categoria=0.25` suma la señal "categoría similar": los candidatos
-de la misma categoría que el producto suben, sin agregar productos nuevos; `0` la
-apaga. Los pesos se midieron en [benchmarks/tienda](../benchmarks/tienda/README.md).
+Combina tres señales: compras (usuarios que compraron también otro producto a 30
+días o menos), imagen y texto. Cada una trae 101 candidatos y se fusionan por
+posición con RRF (`fusion=rrf`, el valor predeterminado); `fusion=max` divide cada
+señal por su máximo, como antes. `pesos=1,0.5,1` (el valor predeterminado) controla
+compras, imagen y texto en ese orden. `vector_imagen=mobilenet` es el valor
+predeterminado (si falta el modelo se usa SIFT); `vector_imagen=sift` elige SIFT +
+BoVW. `peso_categoria=0.25` suma la señal "categoría similar": los candidatos de la
+misma categoría que el producto suben, sin agregar productos nuevos; `0` la apaga.
+Los valores se midieron en [benchmarks/tienda](../benchmarks/tienda/README.md).
 
 ```text
 GET /recomendaciones/1
-GET /recomendaciones/1?pesos=0,1,0&vector_imagen=sift&peso_categoria=0
+GET /recomendaciones/1?pesos=0,1,0&vector_imagen=sift&peso_categoria=0&fusion=max
 ```
 
 Devuelve hasta diez productos, excluyendo el producto consultado, con `puntaje`
