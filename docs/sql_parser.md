@@ -147,12 +147,23 @@ operador elegible; no recorre las tablas. La decisión se vuelve a calcular al
 ejecutar para respetar índices invalidados.
 
 El catálogo calcula filas, páginas y cardinalidades al registrar o refrescar una
-tabla. Conserva hasta 1024 valores distintos por columna; las cardinalidades
-mayores se subestiman. Se pueden proporcionar estimaciones con
+tabla. Los valores distintos son exactos hasta 1024 por columna; más allá se
+estiman con KMV (*k minimum values*: los 1024 hashes más pequeños, error cercano
+al 3 %) sin guardar todos los valores. Antes se cortaba en 1024, y eso hacía creer
+que cada usuario de `compras` tenía cientos de filas: el optimizador descartaba el
+índice en el join. Se pueden proporcionar estimaciones con
 `register_table(..., statistics=TableStats(rows, pages, distinct_values))`.
 Las escrituras SQL refrescan estas estadísticas. Los costos son aproximaciones:
 los filtros intermedios conservan la estimación de entrada y los joins encadenados
 usan una cota conservadora, sin materializar datos durante la planificación.
+
+**Pushdown de selección en JOIN.** Los términos del `WHERE` (unidos con `AND`) que
+solo usan la primera tabla del join se bajan a su `Scan`: se filtra antes del
+join, se puede usar un índice de esa tabla y el lado izquierdo se estima con el
+filtro. El `WHERE` completo se sigue evaluando después del join, así que el
+resultado no cambia. Con la consulta de "también compraron" de la tienda (714 mil
+compras), el plan pasa de un hash join de toda la tabla consigo misma a un
+*index nested loop*: la mediana baja de 27.7 s a 18 ms.
 
 Para índices ordenados se registra un `IndexInfo` con `ordered=True` y un índice
 que implemente `iter_ordered(reverse=False)`, además de búsqueda y reconstrucción.
