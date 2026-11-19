@@ -12,9 +12,15 @@ def test_top_diez_y_desempate():
 
 
 def test_tienda_http(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for archivo in ("a", "b", "c"):
+        (tmp_path / archivo).write_bytes(b"imagen")
     vectores = {"a": [1, 0], "b": [0, 1], "c": [1, 0.1]}
     monkeypatch.setattr("engine.storage.media_store.extract_features",
                         lambda tipo, ruta: np.array(vectores[ruta]))
+    from pathlib import Path
+    monkeypatch.setattr("tienda.indice_imagen.extract_features",
+                        lambda tipo, ruta, nombre: np.array(vectores[Path(ruta).name]))
     with TestClient(create_app(str(tmp_path), llm=None)) as cliente:
         sql = """
         CREATE TABLE productos(id INT PRIMARY KEY, descripcion TEXT, imagen IMAGE, precio FLOAT, categoria TEXT);
@@ -39,6 +45,14 @@ def test_tienda_http(tmp_path, monkeypatch):
             assert set(filas[0]["senales"]) == {"texto", "imagen", "compras"}
             assert all(f["id"] != 1 for f in filas)
         assert cliente.get("/recomendaciones/1?pesos=0,0,0").status_code == 422
+        cnn = cliente.get("/recomendaciones/1?pesos=0,1,0&vector_imagen=mobilenet")
+        assert cnn.status_code == 200, cnn.text
+        assert cnn.json()[0]["id"] == 3
+        (tmp_path / "b").unlink()
+        assert cliente.get("/recomendaciones/1?vector_imagen=mobilenet").status_code == 503
+        # La indisponibilidad de una representación no altera el índice SIFT.
+        assert cliente.get("/recomendaciones/1?vector_imagen=sift").status_code == 200
+        assert cliente.get("/recomendaciones/1?vector_imagen=desconocido").status_code == 422
         assert cliente.get("/recomendaciones/999").status_code == 404
         assert cliente.get("/productos/1?lat=0&lon=0").json()["tienda_cercana"]["id"] == 2
         assert [t["id"] for t in cliente.get("/tiendas/cercanas?lat=0&lon=0&radio=100").json()] == [1]

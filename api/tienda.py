@@ -1,5 +1,7 @@
 """API de catálogo, recomendaciones y tiendas."""
 import math
+from typing import Literal
+from tienda.indice_imagen import ImageIndex
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -50,7 +52,8 @@ def rutas_tienda(estado, lock):
             return fila
 
     @router.get("/recomendaciones/{id}")
-    def recomendaciones(id: int, pesos: str = Query("1,1,1", description="Compras, imagen, texto")):
+    def recomendaciones(id: int, pesos: str = Query("1,1,1", description="Compras, imagen, texto"),
+                        vector_imagen: Literal["sift", "mobilenet"] = "sift"):
         try:
             valores = [float(p) for p in pesos.split(",")]
         except ValueError:
@@ -61,7 +64,16 @@ def rutas_tienda(estado, lock):
         with lock:
             motor = estado["motor"]
             origen = producto(motor, id)
-            senales = {"compras": compras(motor, id), "imagen": visual(motor, origen["imagen"]),
+            if vector_imagen == "mobilenet":
+                indice = estado.setdefault("indice_mobilenet", ImageIndex(motor.directorio))
+                try:
+                    indice.actualizar(consultar(motor, "SELECT id, imagen FROM productos"))
+                    imagen = indice.buscar(id)
+                except (OSError, ValueError) as exc:
+                    raise HTTPException(503, str(exc)) from exc
+            else:
+                imagen = visual(motor, origen["imagen"])
+            senales = {"compras": compras(motor, id), "imagen": imagen,
                        "texto": texto(motor, origen["descripcion"])}
             filas = fusionar(id, senales, dict(zip(senales, valores)))
             return [{**producto(motor, fila["id"]), **fila} for fila in filas]

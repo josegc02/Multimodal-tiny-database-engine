@@ -138,10 +138,23 @@ Cómo se arma:
 - Si BM25 no encuentra nada, no se llama al LLM para redactar y `respuesta` lo dice.
 - Errores: `400` si falta el corpus o la pregunta está vacía; `422` si `k` no está entre 1 y 20; `502` si falla el LLM (falta la API key, no hay conexión o se alcanzó el límite).
 
+### `GET /recomendaciones/{id}`
+
+Combina compras conjuntas, similitud de imagen y texto. `pesos=1,1,1` controla
+esas tres señales en ese orden. `vector_imagen=sift` es el valor predeterminado;
+`vector_imagen=mobilenet` elige el modelo CNN preentrenado del issue #102.
+
+```text
+GET /recomendaciones/1?pesos=0,1,0&vector_imagen=mobilenet
+```
+
+Devuelve hasta diez productos, excluyendo el producto consultado, con `puntaje`
+y `senales`. MobileNet requiere descargar sus pesos y construye su índice en
+la primera petición. Consulte [instalación, caché y evaluación](extractor_mobilenet.md).
+
 ## Límites
 
 - Atiende **una petición a la vez**, porque el motor tiene una sola sesión SQL. Alcanza para la demo; una consulta lenta hace esperar a las demás.
 - Al iniciar, los índices se reconstruyen desde las tablas. Con miles de imágenes, el HNSW puede tardar alrededor de un minuto en estar listo.
 - El asistente tarda lo que tarde el LLM: con `gemini-3.1-flash-lite`, de 3 a 5 segundos por pregunta. Mientras espera al LLM no bloquea las demás peticiones; solo las consultas SQL van de a una.
 - **Cuota gratuita de Gemini**: Google la muestra por proyecto en AI Studio y la renueva cada minuto y cada día (a medianoche del Pacífico). Cada pregunta gasta 2 llamadas, o 1 con `BD2_PALABRAS_CLAVE=local`. Si se acaba, el endpoint responde `502` con un mensaje claro; si Google está saturado (`503`), se reintenta solo hasta 3 veces.
-- El endpoint de la opción B (`/recomendaciones/{id}`, #101) se agrega sobre esta base.
