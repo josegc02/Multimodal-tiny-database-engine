@@ -28,3 +28,12 @@ def visual(motor, imagen):
         WHERE SIMILAR_TO(imagen, {literal(imagen)}, k=51) USING HNSW
     """)
     return {fila["id"]: fila["puntos"] for fila in filas}
+
+
+def texto(motor, descripcion):
+    filas = consultar(motor, f"""
+        SELECT id, SCORE() AS puntos FROM productos
+        WHERE MATCH(descripcion, {literal(descripcion)}) USING BM25
+        ORDER BY puntos DESC LIMIT 51
+    """)
+    return {fila["id"]: fila["puntos"] for fila in filas}
