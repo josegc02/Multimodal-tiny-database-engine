@@ -298,3 +298,17 @@ tbody tr:hover { background: #faf7fe; }
   .redactor { flex-direction: column; align-items: stretch; }
   .redactor .btn { align-self: end; }
 }
+
+/* Biblioteca */
+.filtro-biblioteca { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--tinta-2); }
+.filtro-biblioteca .selector { max-width: 100%; min-width: 0; }
+.tabla-biblioteca th:first-child { width: 48%; }
+.tabla-biblioteca .ficha-movil { display: none; }
+.tabla-biblioteca td:first-child a:hover { color: var(--dato) !important; }
+
+@media (max-width: 760px) {
+  .tabla-biblioteca th:first-child { width: auto; }
+  .tabla-biblioteca :is(th, td):not(:first-child) { display: none; }
+  .tabla-biblioteca .ficha-movil { display: block; }
+  .tabla-biblioteca .celda-sub { font-size: 13px; line-height: 1.4; }
+}
