@@ -182,3 +182,22 @@ def test_sin_duplicados_por_titulo_y_por_imagen():
     elegidos = sin_duplicados(origen, ordenados, lambda i: vectores.get(i), limite=3)
     assert [f["id"] for f in elegidos] == [3, 5, 7]  # se rellena con el siguiente candidato
     assert [f["id"] for f in sin_duplicados(origen, ordenados)] == [3, 4, 5, 7]  # sin vectores: solo título
+
+
+def test_cache_de_compras_se_invalida_al_cambiar_la_tabla(tmp_path, monkeypatch):
+    from frontend.motor import Motor
+    from api import tienda as api_tienda
+    motor = Motor(directorio=str(tmp_path), modo_demo=False)
+    motor.ejecutar("CREATE TABLE compras (id INT PRIMARY KEY, usuario VARCHAR(20), producto_id INT, fecha INT)")
+    motor.ejecutar("INSERT INTO compras VALUES (1,'ana',1,0),(2,'ana',2,10)")
+    llamadas = []
+    original = api_tienda.compras
+    monkeypatch.setattr(api_tienda, "compras", lambda m, i: llamadas.append(i) or original(m, i))
+    estado = {}
+    assert api_tienda.compras_en_cache(estado, motor, 1) == {2: 1}
+    assert api_tienda.compras_en_cache(estado, motor, 1) == {2: 1}
+    assert llamadas == [1]  # la segunda vez sale de la caché
+    motor.ejecutar("INSERT INTO compras VALUES (3,'ana',3,20)")
+    assert api_tienda.compras_en_cache(estado, motor, 1) == {2: 1, 3: 1}  # cambió la tabla: se recalcula
+    assert llamadas == [1, 1]
+    motor.cerrar()

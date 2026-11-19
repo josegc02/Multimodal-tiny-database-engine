@@ -18,6 +18,23 @@ PESO_CATEGORIA = 0.25
 PESO_PLATAFORMA = 1.0  # sube la misma consola de 75 % a 98 % de los recomendados
 
 
+def compras_en_cache(estado, motor, producto_id):
+    """"También compraron" de un producto, calculado una sola vez.
+
+    El producto más comprado tarda ~0.6 s; el resultado solo cambia si cambian las
+    compras. El motor reemplaza las estadísticas de la tabla en cada INSERT, DELETE o
+    UPDATE, así que un objeto de estadísticas distinto invalida la caché. Llamar con el
+    lock del motor tomado.
+    """
+    stats = motor.catalog.table("compras").statistics
+    cache = estado.get("cache_compras")
+    if cache is None or cache["stats"] is not stats:
+        cache = estado["cache_compras"] = {"stats": stats, "datos": {}}
+    if producto_id not in cache["datos"]:
+        cache["datos"][producto_id] = compras(motor, producto_id)
+    return cache["datos"][producto_id]
+
+
 def indice_mobilenet(estado):
     return estado.setdefault("indice_mobilenet", ImageIndex(estado["motor"].directorio))
 
@@ -124,7 +141,7 @@ def rutas_tienda(estado, lock):
             motor = estado["motor"]
             if not usar_mobilenet:
                 imagen = visual(motor, origen["imagen"])
-            senales = {"compras": compras(motor, id), "imagen": imagen,
+            senales = {"compras": compras_en_cache(estado, motor, id), "imagen": imagen,
                        "texto": texto(motor, origen["descripcion"])}
             pesos_senales = dict(zip(senales, valores))
             if peso_categoria > 0 or peso_plataforma > 0:
