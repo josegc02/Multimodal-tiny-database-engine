@@ -3,13 +3,18 @@
 Flujo de ``preguntar``:
 
 1. La pregunta (en español) pasa a palabras clave en inglés, porque BM25
-   compara términos y los papers están en inglés. Con LLM se le pide a
-   Claude; sin LLM se usa un glosario pequeño (``palabras_clave_locales``).
+   compara términos y los papers están en inglés. Con LLM se le pide al
+   modelo; sin LLM (o con BD2_PALABRAS_CLAVE=local) se usa un glosario
+   pequeño (``palabras_clave_locales``) y cada pregunta gasta una sola petición.
 2. Top-k fragmentos con ``MATCH(texto, ...) USING BM25`` sobre ``fragmentos``
    y su metadata con una segunda consulta a ``papers``: el motor no admite
    ``MATCH`` junto con ``JOIN``.
 3. Prompt que obliga a responder solo con esos fragmentos y a citar con
    ``[n]``; si no ayudan, el modelo debe decirlo.
+
+El LLM se elige con BD2_LLM: ``gemini`` (por defecto, capa gratuita, key en
+GEMINI_API_KEY), ``claude`` (ANTHROPIC_API_KEY) o ``ninguno``. BD2_LLM_MODELO
+cambia el modelo del proveedor elegido.
 
 Las tablas son las del corpus del #97 (``rag/corpus.py``)::
 
@@ -24,7 +29,9 @@ import re
 import unicodedata
 from typing import Callable, Protocol
 
-MODELO_DEFECTO = "claude-haiku-5-5"
+MODELO_CLAUDE = "claude-haiku-5-5"
+MODELO_GEMINI = "gemini-3.1-flash-lite"  # el más rápido de la capa gratuita (~2-3 s)
+PROVEEDORES = ("gemini", "claude", "ninguno")
 MAX_PALABRAS_CLAVE = 12
 SIN_FRAGMENTOS = "No encontré fragmentos de los papers relacionados con la pregunta."
 
@@ -42,8 +49,9 @@ PROMPT_RESPUESTA = (
     "- Después de cada afirmación cita el fragmento que la respalda con su número entre "
     "corchetes, por ejemplo [1] o [2][3].\n"
     "- Si los fragmentos no contienen información suficiente para responder, dilo "
-    "claramente y no inventes nada.\n"
-    "- Sé breve: uno a tres párrafos."
+    "claramente, no inventes nada y no pongas ninguna cita.\n"
+    "- Sé breve: como máximo 150 palabras, en uno o dos párrafos.\n"
+    "- Escribe texto simple: sin LaTeX ni signos $, sin tablas ni encabezados."
 )
 
 # Modo sin LLM. Primero se reemplazan frases de varias palabras y luego cada
@@ -114,7 +122,7 @@ class ClienteClaude:
     """
 
     def __init__(self, modelo: str | None = None, cliente=None):
-        self.modelo = modelo or os.environ.get("BD2_LLM_MODELO") or MODELO_DEFECTO
+        self.modelo = modelo or os.environ.get("BD2_LLM_MODELO") or MODELO_CLAUDE
         self._cliente = cliente
 
     def completar(self, sistema: str, mensaje: str, max_tokens: int) -> str:
@@ -144,6 +152,63 @@ class ClienteClaude:
         if respuesta.stop_reason == "refusal":
             raise ErrorLLM("El LLM se negó a responder esta pregunta")
         return "".join(b.text for b in respuesta.content if b.type == "text").strip()
+
+
+class ClienteGemini:
+    """LLM con la API de Gemini (Google AI Studio). La key se lee de ``GEMINI_API_KEY``.
+
+    Por defecto usa Flash-Lite, que entra en la capa gratuita. El modelo se cambia
+    con ``BD2_LLM_MODELO``. Como el de Claude, el cliente se crea en la primera llamada.
+    """
+
+    def __init__(self, modelo: str | None = None, cliente=None):
+        self.modelo = modelo or os.environ.get("BD2_LLM_MODELO") or MODELO_GEMINI
+        self._cliente = cliente
+
+    def completar(self, sistema: str, mensaje: str, max_tokens: int) -> str:
+        from google import genai
+        from google.genai import errors, types
+
+        try:
+            if self._cliente is None:
+                # Reintenta solo si Google está saturado (500/503), no si se acabó la cuota.
+                reintentos = types.HttpRetryOptions(attempts=3, initial_delay=2.0,
+                                                    http_status_codes=[500, 502, 503, 504])
+                self._cliente = genai.Client(http_options=types.HttpOptions(retry_options=reintentos))
+            respuesta = self._cliente.models.generate_content(
+                model=self.modelo,
+                contents=mensaje,
+                config=types.GenerateContentConfig(system_instruction=sistema,
+                                                   max_output_tokens=max_tokens),
+            )
+        except errors.ClientError as exc:
+            if exc.code == 429:
+                raise ErrorLLM("Se acabó la cuota gratuita de Gemini por ahora (se renueva cada "
+                               "minuto y cada día); intente luego o use usar_llm=false") from exc
+            if exc.code in (400, 401, 403) and "key" in str(exc).lower():
+                raise ErrorLLM("API key de Gemini inválida: revise GEMINI_API_KEY") from exc
+            raise ErrorLLM(f"Gemini respondió con error {exc.code}: {exc.message}") from exc
+        except errors.APIError as exc:
+            raise ErrorLLM(f"Gemini respondió con error {exc.code}: {exc.message}") from exc
+        except ValueError as exc:  # el SDK no encontró ninguna API key
+            raise ErrorLLM("Falta la API key: configure GEMINI_API_KEY "
+                           "o pregunte con usar_llm=false") from exc
+        except OSError as exc:
+            raise ErrorLLM("No hay conexión con el LLM; pregunte con usar_llm=false") from exc
+        bloqueo = getattr(respuesta.prompt_feedback, "block_reason", None)
+        if bloqueo:
+            raise ErrorLLM(f"Gemini bloqueó la pregunta ({bloqueo})")
+        return (respuesta.text or "").strip()
+
+
+def crear_llm(proveedor: str | None = None) -> LLM | None:
+    """El LLM según BD2_LLM (``gemini`` por defecto). ``ninguno`` lo apaga."""
+    proveedor = (proveedor or os.environ.get("BD2_LLM") or "gemini").strip().lower()
+    if proveedor not in PROVEEDORES:
+        raise ValueError(f"BD2_LLM debe ser uno de {', '.join(PROVEEDORES)}; se recibió {proveedor!r}")
+    if proveedor == "ninguno":
+        return None
+    return ClienteGemini() if proveedor == "gemini" else ClienteClaude()
 
 
 def _sin_tildes(texto: str) -> str:
@@ -249,15 +314,18 @@ def citas(texto: str, total: int) -> list[int]:
     return encontradas
 
 
-def preguntar(ejecutar: Callable, pregunta: str, k: int = 5, llm: LLM | None = None) -> dict:
+def preguntar(ejecutar: Callable, pregunta: str, k: int = 5, llm: LLM | None = None,
+              palabras_con_llm: bool = True) -> dict:
     """Responde una pregunta. ``ejecutar`` corre SQL en el motor y devuelve su ``Resultado``.
 
     Sin ``llm`` (modo sin LLM) solo se devuelven los fragmentos, sin redactar respuesta.
+    Con ``palabras_con_llm=False`` las palabras clave salen del glosario local y el
+    LLM se llama una sola vez (útil con la cuota gratuita de Gemini).
     """
     pregunta = pregunta.strip()
     if not pregunta:
         raise ErrorAsistente("La pregunta está vacía")
-    consulta = palabras_clave(pregunta, llm)
+    consulta = palabras_clave(pregunta, llm if palabras_con_llm else None)
     fragmentos = recuperar(ejecutar, consulta, k)
     respuesta = None
     if llm is not None:

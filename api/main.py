@@ -10,8 +10,10 @@ Variables de entorno (opcionales):
   puede servir imágenes y audios (por defecto datasets, fotos y BD2_DATA_DIR).
 - BD2_CORS_ORIGINS: orígenes del front web, separados por comas
   (por defecto http://localhost:5173 y http://127.0.0.1:5173).
-- ANTHROPIC_API_KEY: API key del LLM de POST /asistente/preguntar.
-- BD2_LLM_MODELO: modelo de Claude del asistente (por defecto claude-haiku-5-5).
+- BD2_LLM: LLM de POST /asistente/preguntar: gemini (por defecto), claude o ninguno.
+- GEMINI_API_KEY / ANTHROPIC_API_KEY: la key del proveedor elegido.
+- BD2_LLM_MODELO: cambia el modelo (por defecto gemini-flash-lite-latest o claude-haiku-5-5).
+- BD2_PALABRAS_CLAVE=local: palabras clave con el glosario y una sola llamada al LLM.
 - BD2_SIN_LLM=1: el asistente solo devuelve fragmentos (demo sin internet).
 
 El motor guarda una sola sesión SQL, así que la API atiende una petición a la
@@ -30,7 +32,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from api.asistente import ClienteClaude, ErrorAsistente, ErrorLLM, preguntar
+from api.asistente import ErrorAsistente, ErrorLLM, crear_llm, preguntar
 
 from engine.indexes.extendible_hash import ExtendibleHash
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
@@ -110,7 +112,7 @@ def _dentro_de(ruta: str, carpeta: str) -> bool:
 def _llm_desde_entorno():
     if os.environ.get("BD2_SIN_LLM", "").strip().lower() in ("1", "true", "si", "sí", "yes"):
         return None
-    return ClienteClaude()
+    return crear_llm()
 
 
 def create_app(directorio: str | None = None, carpetas_archivos: list[str] | None = None,
@@ -118,9 +120,11 @@ def create_app(directorio: str | None = None, carpetas_archivos: list[str] | Non
     """Crea la aplicación. Los argumentos tienen prioridad sobre las variables de entorno.
 
     ``llm`` es el modelo del asistente (cualquier objeto con ``completar``);
-    ``None`` lo apaga. Por defecto se usa Claude, salvo con BD2_SIN_LLM=1.
+    ``None`` lo apaga. Por defecto sale de BD2_LLM (Gemini), salvo con BD2_SIN_LLM=1.
     """
-    estado: dict = {"llm": _llm_desde_entorno() if llm is _LLM_DESDE_ENTORNO else llm}
+    palabras = os.environ.get("BD2_PALABRAS_CLAVE", "llm").strip().lower()
+    estado: dict = {"llm": _llm_desde_entorno() if llm is _LLM_DESDE_ENTORNO else llm,
+                    "palabras_con_llm": palabras != "local"}
     lock = threading.Lock()
 
     @asynccontextmanager
@@ -211,7 +215,8 @@ def create_app(directorio: str | None = None, carpetas_archivos: list[str] | Non
         """
         llm = estado["llm"] if cuerpo.usar_llm else None
         try:
-            return preguntar(_sql_con_lock, cuerpo.pregunta, cuerpo.k, llm)
+            return preguntar(_sql_con_lock, cuerpo.pregunta, cuerpo.k, llm,
+                             palabras_con_llm=estado["palabras_con_llm"])
         except ErrorAsistente as exc:
             return _error(400, str(exc))
         except ErrorLLM as exc:
