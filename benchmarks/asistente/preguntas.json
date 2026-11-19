@@ -1,0 +1,20 @@
+[
+  {"pregunta": "¿Cómo funciona la búsqueda de vecinos cercanos en HNSW?", "evidencia": ["hnsw", "hierarchical navigable"]},
+  {"pregunta": "¿Cómo se construye un índice invertido con SPIMI?", "evidencia": ["spimi", "single-pass", "single pass"]},
+  {"pregunta": "¿Qué hace el buffer manager de un SGBD?", "evidencia": ["buffer manager", "buffer pool", "gestor de buffer"]},
+  {"pregunta": "¿Cómo funciona la recuperación ante fallos con el log WAL?", "evidencia": ["write-ahead", "write ahead", "\\bwal\\b", "\\bredo\\b"]},
+  {"pregunta": "¿Cómo funciona el hashing extensible?", "evidencia": ["extendible", "extensible", "global depth", "local depth", "profundidad global", "profundidad local"]},
+  {"pregunta": "¿Qué es la fragmentación horizontal en bases de datos distribuidas?", "evidencia": ["fragmentacion horizontal", "horizontal fragmentation", "horizontal partitioning", "particionamiento horizontal"]},
+  {"pregunta": "¿Cómo calcula BM25 el puntaje de un documento?", "evidencia": ["bm25", "okapi"]},
+  {"pregunta": "¿Cómo funciona un R-tree para datos espaciales?", "evidencia": ["r-tree", "r-trees", "\\brtree", "minimum bounding", "\\bmbr\\b"]},
+  {"pregunta": "¿Qué es LSH y para qué sirve?", "evidencia": ["locality sensitive", "locality-sensitive", "\\blsh\\b"]},
+  {"pregunta": "¿Cómo funciona la cuantización de producto en un índice IVF?", "evidencia": ["product quantization", "cuantizacion de producto", "\\bivf\\b", "inverted file"]},
+  {"pregunta": "¿Qué ventajas tiene un índice aprendido frente a un árbol B?", "evidencia": ["learned index", "learned indexes", "indice aprendido", "indices aprendidos"]},
+  {"pregunta": "¿Qué es la generación aumentada por recuperación?", "evidencia": ["retrieval-augmented", "retrieval augmented", "\\brag\\b", "generacion aumentada"]},
+  {"pregunta": "¿Qué es SPLADE y cómo se diferencia de BM25?", "evidencia": ["splade", "learned sparse"]},
+  {"pregunta": "¿Cómo se estima la cardinalidad de una consulta?", "evidencia": ["cardinality", "cardinalidad"]},
+  {"pregunta": "¿Qué es un LSM-tree y cómo funciona la compactación?", "evidencia": ["\\blsm"]},
+  {"pregunta": "¿Cómo se divide un nodo al insertar en un árbol B+?", "evidencia": ["b\\+", "arbol b", "arboles b", "b-tree"]},
+  {"pregunta": "¿Qué es la recuperación densa de pasajes (DPR)?", "evidencia": ["dense passage", "dense retrieval", "\\bdpr\\b"]},
+  {"pregunta": "¿Qué caracteriza a MongoDB como base de datos NoSQL?", "evidencia": ["mongodb", "nosql"]}
+]

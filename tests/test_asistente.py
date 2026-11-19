@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
-from api.asistente import (MAX_POR_PAPER, SIN_FRAGMENTOS, ClienteClaude, ClienteGemini, ErrorLLM,
-                           citas, crear_llm, palabras_clave, palabras_clave_locales, recuperar)
+from api.asistente import (MAX_POR_PAPER, SIN_FRAGMENTOS, UMBRAL_RELATIVO, ClienteClaude, ClienteGemini,
+                           ErrorLLM, citas, crear_llm, palabras_clave, palabras_clave_locales, recuperar)
 
 try:
     from fastapi.testclient import TestClient
@@ -57,24 +57,25 @@ class LLMCaido:
 class TestFunciones(unittest.TestCase):
     def test_palabras_clave_locales_traduce_y_quita_vacias(self):
         consulta = palabras_clave_locales("¿Cómo funciona la búsqueda de vecinos cercanos en HNSW?")
-        # Primero en inglés (papers) y luego las originales en español (clases del curso).
-        self.assertEqual(consulta, "search neighbors nearest hnsw busqueda vecinos cercanos")
+        self.assertEqual(consulta, "search neighbors nearest hnsw")
 
     def test_palabras_clave_locales_reconoce_frases(self):
         self.assertEqual(palabras_clave_locales("¿Índice aprendido frente a un árbol B+?"),
-                         "index learned b-tree indice aprendido arbol")
-        self.assertEqual(palabras_clave_locales("bases de datos vectoriales"),
-                         "database vector bases datos vectoriales")
+                         "index learned b-tree")
+        self.assertEqual(palabras_clave_locales("bases de datos vectoriales"), "database vector")
         self.assertEqual(palabras_clave_locales("¿Cómo se estima la cardinalidad?"),
-                         "estimation cardinality estima cardinalidad")
+                         "estimation cardinality")
 
     def test_palabras_clave_limpia_la_salida_del_llm(self):
         llm = LLMFalso(palabras="HNSW, graph; 'search'\nnearest-neighbor.")
         self.assertEqual(palabras_clave("pregunta", llm), "hnsw graph search nearest-neighbor")
 
     def test_palabras_clave_vacias_del_llm_usan_el_glosario(self):
-        self.assertEqual(palabras_clave("índice invertido", LLMFalso(palabras="...")),
-                         "index inverted indice invertido")
+        self.assertEqual(palabras_clave("índice invertido", LLMFalso(palabras="...")), "index inverted")
+
+    def test_palabras_del_llm_se_recortan_a_las_mas_especificas(self):
+        llm = LLMFalso(palabras="spimi inverted index construction block memory algorithm sorting")
+        self.assertEqual(palabras_clave("pregunta", llm), "spimi inverted index construction block")
 
     def test_recuperar_limita_fragmentos_por_paper(self):
         # BM25 devuelve 4 fragmentos del paper 1 antes que los de los papers 2 y 3.
@@ -94,6 +95,21 @@ class TestFunciones(unittest.TestCase):
         self.assertEqual([f["id"] for f in fragmentos], [1, 2, 5, 6])  # el 3.º y 4.º del paper 1 se saltan
         self.assertEqual(MAX_POR_PAPER, 2)
         self.assertIn("LIMIT 20", consultas[0])  # se piden más candidatos que k
+
+    def test_recuperar_descarta_puntajes_bajos(self):
+        # Con el primero en 10.0, todo lo que quede bajo el 60 % (6.0) se descarta.
+        candidatos = [(1, 1, 10.0), (2, 2, 7.5), (3, 3, 6.0), (4, 4, 5.9), (5, 5, 2.0)]
+
+        def ejecutar(sql):
+            if "FROM fragmentos" in sql:
+                return SimpleNamespace(tiene_error=False, error=None,
+                                       columnas=["id", "paper_id", "pagina", "pagina_fin", "texto", "puntaje"],
+                                       filas=[(i, pid, 1, 1, f"t{i}", s) for i, pid, s in candidatos])
+            return SimpleNamespace(tiene_error=False, error=None, columnas=["id", "titulo", "autores", "anio", "url"],
+                                   filas=[(pid, f"P{pid}", "", 2020, "") for pid in range(1, 6)])
+
+        self.assertEqual(UMBRAL_RELATIVO, 0.6)
+        self.assertEqual([f["id"] for f in recuperar(ejecutar, "hnsw", 5)], [1, 2, 3])
 
     def test_citas_validas_sin_repetir_y_en_orden(self):
         self.assertEqual(citas("a [2] b [1, 3] c [2] d [7] e [0]", total=3), [2, 1, 3])
