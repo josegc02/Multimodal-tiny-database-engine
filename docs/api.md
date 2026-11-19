@@ -32,6 +32,10 @@ Los datos **se conservan entre reinicios**: las tablas se crean una vez (con los
 | `GET /tablas` | Lista las tablas con sus columnas e índices |
 | `GET /archivos?ruta=...` | Devuelve una imagen o audio guardado en una columna `IMAGE` / `AUDIO` |
 | `POST /asistente/preguntar` | Responde una pregunta con los papers, citando las fuentes (opción A) |
+| `GET /asistente/documentos` | La biblioteca: papers y clases con su número de fragmentos |
+| `GET /asistente/documentos/{id}` | Un documento con su abstract y sus fragmentos |
+| `GET /asistente/documentos/{id}/pdf` | Su PDF, si está en esta máquina (ábralo con `#page=N`) |
+| `POST /asistente/documentos` | Sube un PDF: lo fragmenta y lo indexa |
 
 ### `POST /sql`
 
@@ -139,6 +143,21 @@ Las cifras de precisión que justifican estos valores están en `benchmarks/asis
 - `modo` es `"sin_llm"` con `usar_llm: false` o `BD2_SIN_LLM=1`. En ese modo `respuesta` es `null` y `citas` es `[]`, y solo se usan los fragmentos.
 - Si BM25 no encuentra nada, no se llama al LLM para redactar y `respuesta` lo dice.
 - Errores: `400` si falta el corpus o la pregunta está vacía; `422` si `k` no está entre 1 y 20; `502` si falla el LLM (falta la API key, no hay conexión o se alcanzó el límite).
+
+`traza` describe lo que hizo el motor, para mostrarlo en el front:
+
+```json
+"traza": {"sql": ["SELECT id, paper_id, ... USING BM25 ...", "SELECT id, titulo, ... WHERE id IN (254, 250)"],
+          "ms_motor": 52.3, "documentos": 3, "palabras_con_llm": true, "s_palabras": 0.9,
+          "s_redaccion": 2.4, "s_total": 3.4, "modelo": "gemini-3.1-flash-lite"}
+```
+
+### Biblioteca y subida
+
+- `GET /asistente/documentos` devuelve `[{"id", "arxiv_id", "titulo", "autores", "anio", "fuente", "url", "tema", "fragmentos"}]`. `fuente` es `arxiv`, `curso` o `subido`.
+- `GET /asistente/documentos/{id}` devuelve además `abstract`, `categoria`, `licencia` y `fragmentos` como lista `[{"id", "orden", "pagina", "pagina_fin", "palabras", "texto"}]`. Responde `404` si no existe.
+- `GET /asistente/documentos/{id}/pdf` busca el PDF en `datasets/papers/` (o en `BD2_PAPERS_DIR`): `pdf/` para arXiv, `curso/` según `curso.csv` y `subidos/` para los subidos. Responde `404` si no está descargado.
+- `POST /asistente/documentos` recibe `multipart/form-data` con `archivo` (PDF de hasta 20 MB), `titulo`, `autores`, `anio` y `tipo` (`paper` o `clase`). Extrae el texto por página, lo corta en fragmentos de 200–500 palabras y lo inserta en `papers` y `fragmentos`; el índice SPIMI se actualiza con el `INSERT`, así que el documento se puede preguntar al instante. Responde `{"id", "paginas", "fragmentos", "palabras", "ms_extraccion", "ms_insercion"}`, o `400` si no es un PDF o no tiene texto extraíble.
 
 ## Límites
 
