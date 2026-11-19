@@ -97,6 +97,27 @@ class TestFunciones(unittest.TestCase):
         self.assertEqual(MAX_POR_PAPER, 2)
         self.assertIn("LIMIT 20", consultas[0])  # se piden más candidatos que k
 
+    def test_recuperar_anota_que_paso_con_cada_candidato(self):
+        candidatos = [(i, pid, 30.0 - i) for i, pid in enumerate([1, 1, 1, 2, 3, 2, 4], start=1)]
+        candidatos.append((8, 5, 10.0))  # bajo el 60 % del primero (29 * 0.6 = 17.4)
+
+        def ejecutar(sql):
+            if "FROM fragmentos" in sql:
+                return SimpleNamespace(tiene_error=False, error=None,
+                                       columnas=["id", "paper_id", "pagina", "pagina_fin", "texto", "puntaje"],
+                                       filas=[(i, pid, 1, 1, f"t{i}", s) for i, pid, s in candidatos])
+            return SimpleNamespace(tiene_error=False, error=None, columnas=["id", "titulo", "autores", "anio", "url", "fuente"],
+                                   filas=[(pid, f"P{pid}", "", 2020, "", "arxiv") for pid in range(1, 6)])
+
+        detalle = {}
+        elegidos = recuperar(ejecutar, "hnsw", 4, detalle)
+        self.assertEqual([f["id"] for f in elegidos], [1, 2, 4, 5])
+        self.assertEqual([c["estado"] for c in detalle["candidatos"]],
+                         ["elegido", "elegido", "por_documento", "elegido", "elegido", "sobra", "sobra", "umbral"])
+        self.assertEqual([c["n"] for c in detalle["candidatos"]], [1, 2, None, 3, 4, None, None, None])
+        self.assertEqual(detalle["umbral"], 17.4)
+        self.assertEqual(detalle["candidatos"][0]["titulo"], "P1")
+
     def test_recuperar_descarta_puntajes_bajos(self):
         # Con el primero en 10.0, todo lo que quede bajo el 60 % (6.0) se descarta.
         candidatos = [(1, 1, 10.0), (2, 2, 7.5), (3, 3, 6.0), (4, 4, 5.9), (5, 5, 2.0)]

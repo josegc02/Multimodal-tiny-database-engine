@@ -274,13 +274,16 @@ def _consultar(ejecutar: Callable, sql: str):
     return [dict(zip(resultado.columnas, fila)) for fila in resultado.filas]
 
 
-def recuperar(ejecutar: Callable, consulta: str, k: int) -> list[dict]:
+def recuperar(ejecutar: Callable, consulta: str, k: int, detalle: dict | None = None) -> list[dict]:
     """Top-k fragmentos por BM25, cada uno con el título, autores, año y URL de su paper.
 
     Se toman a lo más MAX_POR_PAPER fragmentos de cada documento, para que un paper
     largo que repite los términos no ocupe todo el top-k, y se descartan los que
     no llegan a UMBRAL_RELATIVO del puntaje del primero: suelen coincidir solo en
     un término general.
+
+    Con ``detalle`` (un dict) se anota qué pasó con cada candidato de BM25, para
+    dibujarlo en el front: ``detalle["candidatos"]`` y ``detalle["umbral"]``.
     """
     if not consulta:
         return []
@@ -289,21 +292,39 @@ def recuperar(ejecutar: Callable, consulta: str, k: int) -> list[dict]:
         f"WHERE MATCH(texto, '{consulta}') USING BM25 ORDER BY puntaje DESC "
         f"LIMIT {int(k) * CANDIDATOS_POR_K}"))
     minimo = UMBRAL_RELATIVO * float(candidatos[0]["puntaje"]) if candidatos else 0.0
-    fragmentos, por_paper = [], {}
+    fragmentos, por_paper, estados = [], {}, []
     for fragmento in candidatos:
         if float(fragmento["puntaje"]) < minimo:
-            break  # vienen ordenados: los siguientes tampoco llegan
-        usados = por_paper.get(fragmento["paper_id"], 0)
-        if usados < MAX_POR_PAPER:
-            por_paper[fragmento["paper_id"]] = usados + 1
+            estados.append("umbral")
+        elif len(fragmentos) == k:
+            estados.append("sobra")
+        elif por_paper.get(fragmento["paper_id"], 0) >= MAX_POR_PAPER:
+            estados.append("por_documento")
+        else:
+            por_paper[fragmento["paper_id"]] = por_paper.get(fragmento["paper_id"], 0) + 1
             fragmentos.append(fragmento)
-            if len(fragmentos) == k:
-                break
-    if not fragmentos:
+            estados.append("elegido")
+    if not candidatos:
+        if detalle is not None:
+            detalle.update(candidatos=[], umbral=0.0)
         return []
-    ids = ", ".join(str(int(f["paper_id"])) for f in fragmentos)
+    # Metadata de todos los documentos candidatos: los elegidos y los que se vieron.
+    ids = ", ".join(dict.fromkeys(str(int(f["paper_id"])) for f in candidatos))
     papers = {p["id"]: p for p in _consultar(
         ejecutar, f"SELECT id, titulo, autores, anio, url, fuente FROM papers WHERE id IN ({ids})")}
+    if detalle is not None:
+        numero = {f["id"]: n for n, f in enumerate(fragmentos, start=1)}
+        detalle["umbral"] = round(minimo, 4)
+        detalle["candidatos"] = [{
+            "id": f["id"], "paper_id": f["paper_id"], "n": numero.get(f["id"]),
+            "titulo": papers.get(f["paper_id"], {}).get("titulo"),
+            "autores": papers.get(f["paper_id"], {}).get("autores"),
+            "anio": papers.get(f["paper_id"], {}).get("anio"),
+            "fuente": papers.get(f["paper_id"], {}).get("fuente"),
+            "pagina": f["pagina"], "puntaje": round(float(f["puntaje"]), 4), "estado": estado,
+        } for f, estado in zip(candidatos, estados)]
+    if not fragmentos:
+        return []
     salida = []
     for n, fragmento in enumerate(fragmentos, start=1):
         paper = papers.get(fragmento["paper_id"], {})
@@ -371,7 +392,8 @@ def preguntar(ejecutar: Callable, pregunta: str, k: int = 5, llm: LLM | None = N
     t = time.perf_counter()
     consulta = palabras_clave(pregunta, llm if palabras_con_llm else None)
     s_palabras = time.perf_counter() - t
-    fragmentos = recuperar(ejecutar_y_medir, consulta, k)
+    detalle: dict = {}
+    fragmentos = recuperar(ejecutar_y_medir, consulta, k, detalle)
     respuesta, s_redaccion = None, None
     if llm is not None:
         t = time.perf_counter()
@@ -395,6 +417,11 @@ def preguntar(ejecutar: Callable, pregunta: str, k: int = 5, llm: LLM | None = N
             "s_redaccion": s_redaccion,
             "s_total": round(time.perf_counter() - inicio, 2),
             "modelo": getattr(llm, "modelo", None),
+            # Cada candidato de BM25 y qué pasó con él: elegido, umbral, por_documento o sobra.
+            "candidatos": detalle.get("candidatos", []),
+            "umbral": detalle.get("umbral", 0.0),
+            "umbral_relativo": UMBRAL_RELATIVO,
+            "max_por_documento": MAX_POR_PAPER,
         },
     }
 
