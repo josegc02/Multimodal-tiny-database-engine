@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 
 from api.asistente import (ErrorAsistente, ErrorLLM, crear_llm, indexar_pdf, listar_documentos,
                            obtener_documento, preguntar)
+from api.tienda import rutas_tienda
 
 from engine.indexes.extendible_hash import ExtendibleHash
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
@@ -331,6 +332,7 @@ def create_app(directorio: str | None = None, carpetas_archivos: list[str] | Non
             temporal.replace(carpeta / f"{resultado['id']}.pdf")
         return {**resultado, "ms_extraccion": ms_extraccion}
 
+    app.include_router(rutas_tienda(estado, lock))
     return app
 
 
