@@ -50,15 +50,30 @@ de comportamiento. La métrica de comportamiento no está midiendo popularidad.
 
 ## Resultados (prueba)
 
-| Configuración | Tipo | Comportamiento |
-|---|---:|---:|
-| Antes: texto + SIFT, pesos 1,1,1, compras de antes | 47.1 % [44.3, 49.9] | 6.2 % [5.3, 7.2] |
-| #117 inicial: MobileNet 0.25 + categoría 0.25 | 64.7 % [61.9, 67.6] | 8.9 % [7.7, 10.1] |
-| **Elegida: RRF, 101 candidatos, compras filtradas, pesos 1/0.5/1, categoría 0.25** | **70.9 %** [68.1, 73.5] | **10.2 %** [8.9, 11.5] |
-| Elegida − #117 inicial | +6.1 [+4.6, +7.7] | +1.3 [+0.5, +2.2] |
+| Configuración | Tipo | Comportamiento | Misma consola | Listas con duplicados |
+|---|---:|---:|---:|---:|
+| Antes: texto + SIFT, pesos 1,1,1, compras de antes | 47.1 % [44.3, 49.9] | 6.2 % [5.3, 7.2] | 53.5 % | 41 % |
+| #117 inicial: MobileNet 0.25 + categoría 0.25 | 64.7 % [61.9, 67.6] | 8.9 % [7.7, 10.1] | 72.1 % | 41 % |
+| Elegida: RRF, 101 candidatos, compras filtradas, pesos 1/0.5/1, categoría 0.25 | 70.9 % [68.1, 73.5] | 10.2 % [8.9, 11.5] | 75.0 % | 42 % |
+| Elegida + sin duplicados | 69.9 % [67.2, 72.6] | 10.3 % [9.1, 11.7] | 74.4 % | **0 %** |
+| **Final: + sin duplicados + misma plataforma 1.0** | **69.4 %** [66.6, 72.2] | **10.2 %** [8.9, 11.5] | **97.8 %** [97.2, 98.4] | **0 %** |
 
-La elegida gana en las dos métricas. Compras filtradas: solo usuarios con 2 a 20
-compras y solo pares a 30 días o menos.
+Compras filtradas: solo usuarios con 2 a 20 compras y solo pares a 30 días o menos.
+
+- **Duplicados**: el 42 % de las listas traía el mismo producto con otro id (otro
+  color, otra edición, otro vendedor, el mismo juego en otra consola). Se descartan
+  los recomendados con la misma clave de título (primeras 6 palabras) o con imagen
+  casi idéntica (coseno MobileNet > 0.98), frente al consultado o a uno ya elegido,
+  y se rellena con el siguiente candidato. El tipo baja un punto porque los
+  duplicados siempre eran del mismo tipo; el comportamiento no cambia.
+- **Misma plataforma**: la consola sale de la categoría y del título (PS5, PS4,
+  Xbox One, Series, Switch, 3DS, Wii, PC, VR, Sega...). Es un bono como el de la
+  categoría: solo si el consultado tiene una sola consola, y un producto
+  multiplataforma o sin consola no se castiga. El peso se eligió en validación con
+  el promedio de las tres métricas (regla fijada antes de medir): con 1.0, la misma
+  consola pasa de 74 % a 98 % y el tipo baja medio punto (n. s.).
+- "Misma consola" se mide sobre las consultas con una sola plataforma (74 % del
+  catálogo).
 
 ### Qué aporta cada cambio (sobre #117 inicial)
 

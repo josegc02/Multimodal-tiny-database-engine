@@ -170,6 +170,11 @@ compras, imagen y texto en ese orden. `vector_imagen=mobilenet` es el valor
 predeterminado (si falta el modelo se usa SIFT); `vector_imagen=sift` elige SIFT +
 BoVW. `peso_categoria=0.25` suma la señal "categoría similar": los candidatos de la
 misma categoría que el producto suben, sin agregar productos nuevos; `0` la apaga.
+`peso_plataforma=1` hace lo mismo con la consola (PS4, Switch, Xbox One...), solo si
+el producto es de una sola consola. Se quitan los duplicados (misma clave de título o
+imagen casi idéntica: otro color, otra edición, relistados); `duplicados=true` los
+deja. "También compraron" se guarda en caché por producto y se recalcula si cambia la
+tabla `compras`.
 Los valores se midieron en [benchmarks/tienda](../benchmarks/tienda/README.md).
 
 ```text
