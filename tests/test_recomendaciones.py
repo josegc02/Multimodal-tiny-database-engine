@@ -54,8 +54,10 @@ def test_tienda_http(tmp_path, monkeypatch):
                                      (3,'racing console','c',30,'games');
         CREATE INDEX img ON productos(imagen) USING HNSW WITH (METRIC=cosine);
         CREATE INDEX txt ON productos(descripcion) USING SPIMI WITH (LANGUAGE='en');
-        CREATE TABLE compras(id INT, usuario VARCHAR(20), producto_id INT);
-        INSERT INTO compras VALUES (1,'ana',1),(2,'ana',2);
+        CREATE TABLE compras(id INT, usuario VARCHAR(20), producto_id INT, fecha INT);
+        INSERT INTO compras VALUES (1,'ana',1,0),(2,'ana',2,86400),(3,'ana',3,10000000);
+        CREATE INDEX compras_usuario ON compras(usuario) USING HASH;
+        CREATE INDEX compras_producto ON compras(producto_id) USING HASH;
         CREATE TABLE tiendas(id INT, nombre TEXT, ubicacion POINT);
         INSERT INTO tiendas VALUES (1,'A',POINT(0,0)),(2,'B',POINT(0,1));
         CREATE INDEX geo ON tiendas(ubicacion) USING RTREE;
@@ -71,6 +73,9 @@ def test_tienda_http(tmp_path, monkeypatch):
             assert filas[0]["puntaje"] == 1
             assert set(filas[0]["senales"]) == {"texto", "imagen", "compras"}
             assert all(f["id"] != 1 for f in filas)
+        # El producto 3 lo compró la misma persona 115 días después: fuera de la ventana de 30 días.
+        solo_compras = cliente.get("/recomendaciones/1?pesos=1,0,0&peso_categoria=0&vector_imagen=sift").json()
+        assert [f["id"] for f in solo_compras] == [2]
         assert cliente.get("/recomendaciones/1?pesos=0,0,0").status_code == 422
         cnn = cliente.get("/recomendaciones/1?pesos=0,1,0&vector_imagen=mobilenet")
         assert cnn.status_code == 200, cnn.text

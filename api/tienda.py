@@ -5,13 +5,12 @@ from tienda.indice_imagen import ImageIndex
 
 from fastapi import APIRouter, HTTPException, Query
 
-from tienda.recomendaciones import (cercanas, compras, consultar, fusionar, literal, misma_categoria,
-                                    texto, visual)
+from tienda.recomendaciones import (CANDIDATOS, cercanas, compras, consultar, fusionar, literal,
+                                    misma_categoria, texto, visual)
 
-# Pesos medidos en benchmarks/tienda (505 consultas de prueba, pesos elegidos en validación):
-# la imagen a 0.25 y la categoría a 0.25 suben el acierto de tipo de 49.9 % a 74.2 %.
-# Compras sigue en 1 hasta medirla con una métrica de comportamiento.
-PESOS = "1,0.25,1"
+# Pesos medidos en benchmarks/tienda con dos métricas (tipo de producto y co-compras
+# posteriores), elegidos en validación y reportados en prueba con fusión RRF.
+PESOS = "1,0.5,1"
 PESO_CATEGORIA = 0.25
 
 
@@ -62,7 +61,8 @@ def rutas_tienda(estado, lock):
     def recomendaciones(id: int, pesos: str = Query(PESOS, description="Compras, imagen, texto"),
                         vector_imagen: Literal["sift", "mobilenet"] | None = Query(
                             None, description="Por defecto mobilenet; si falta el modelo, sift"),
-                        peso_categoria: float = Query(PESO_CATEGORIA, ge=0, allow_inf_nan=False)):
+                        peso_categoria: float = Query(PESO_CATEGORIA, ge=0, allow_inf_nan=False),
+                        fusion: Literal["rrf", "max"] = "rrf"):
         try:
             valores = [float(p) for p in pesos.split(",")]
         except ValueError:
@@ -81,7 +81,7 @@ def rutas_tienda(estado, lock):
             indice = estado.setdefault("indice_mobilenet", ImageIndex(estado["motor"].directorio))
             try:
                 indice.actualizar(catalogo_imagenes)
-                imagen = indice.buscar(id)  # vacío si el producto no tiene vector: quedan compras y texto
+                imagen = indice.buscar(id, k=CANDIDATOS + 1)  # vacío si el producto no tiene vector: quedan compras y texto
             except (OSError, ValueError) as exc:  # falta el modelo: afecta a todo el índice
                 if vector_imagen == "mobilenet":
                     raise HTTPException(503, str(exc)) from exc
@@ -99,7 +99,7 @@ def rutas_tienda(estado, lock):
                               for i, valor in puntos.items() if valor > 0} - {id}
                 senales["categoria"] = misma_categoria(motor, origen.get("categoria"), candidatos)
                 pesos_senales["categoria"] = peso_categoria
-            filas = fusionar(id, senales, pesos_senales)
+            filas = fusionar(id, senales, pesos_senales, fusion)
             return [{**producto(motor, fila["id"]), **fila} for fila in filas]
 
     @router.get("/tiendas/cercanas")
