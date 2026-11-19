@@ -312,3 +312,15 @@ tbody tr:hover { background: #faf7fe; }
   .tabla-biblioteca .ficha-movil { display: block; }
   .tabla-biblioteca .celda-sub { font-size: 13px; line-height: 1.4; }
 }
+
+/* Ingestión */
+.zona { background: #fbf8ff; border-color: var(--control); }
+.zona[data-encima="true"], .zona:focus-within { outline: 2px solid var(--dato); outline-offset: 3px; }
+.zona[data-bloqueado="true"] { cursor: default; }
+.zona > svg { width: 24px; height: 24px; color: var(--dato); }
+.formulario { margin: 0; min-width: 0; }
+.resumen-pdf { padding: 20px; overflow-wrap: anywhere; }
+.resumen-pdf .texto-btn { align-self: start; }
+.metricas-pdf { display: grid; gap: 8px; margin: 0; }
+.metricas-pdf > div { display: flex; justify-content: space-between; gap: 12px; }
+.metricas-pdf dd { margin: 0; font-weight: 600; }
