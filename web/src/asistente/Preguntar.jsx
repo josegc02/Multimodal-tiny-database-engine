@@ -62,7 +62,10 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
   };
   const elegirCita = (n) => {
     setCita(n);
-    document.getElementById(`fuente-${n}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const fuente = document.getElementById(`fuente-${n}`);
+    if (!fuente) return;
+    fuente.focus({ preventScroll: true });
+    fuente.scrollIntoView({ block: 'nearest' });
   };
 
   const fragmentos = datos?.fragmentos ?? [];

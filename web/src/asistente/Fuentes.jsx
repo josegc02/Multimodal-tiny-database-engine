@@ -33,20 +33,20 @@ function Fuente({ f, activa, citada, sinLlm, ancho, elegir, terminos }) {
   if (sinLlm) uso = clase ? 'Clase del curso' : 'Paper';
 
   return (
-    <article id={`fuente-${f.n}`} className="fuente" data-activa={activa}>
-      <button className="fuente-cabeza" onClick={() => elegir(f.n)} aria-label={`Resaltar la fuente ${f.n}`}>
-        <span className="cita" aria-pressed={activa}>{f.n}</span>
+    <article id={`fuente-${f.n}`} className="fuente" data-activa={activa} tabIndex={-1} aria-labelledby={`titulo-fuente-${f.n}`}>
+      <button className="fuente-cabeza" onClick={() => elegir(f.n)} aria-label={`Resaltar la fuente ${f.n}`} aria-pressed={activa}>
+        <span className="numero-fuente">{f.n}</span>
         <span className="fuente-lugar">{referencia(f)} · {clase ? '' : `${f.anio} · `}{paginas(f, clase)}</span>
         <span className="fuente-puntaje num">BM25 {f.puntaje.toFixed(2)}</span>
       </button>
       <div className="pista"><div style={{ width: `${Math.round(ancho)}%` }} /></div>
-      <span className="fuente-titulo">{f.titulo}</span>
+      <h3 id={`titulo-fuente-${f.n}`} className="fuente-titulo">{f.titulo}</h3>
       <p className="fuente-texto">“{resaltar(corto, terminos)}”</p>
       <div className="fuente-pie">
         <span className="sub">{uso}</span>
         <span className="enlaces">
           {texto.length > CORTE && (
-            <button className="texto-btn" style={{ fontSize: 12 }} onClick={() => setCompleto(!completo)}>
+            <button className="texto-btn" style={{ fontSize: 12 }} aria-expanded={completo} onClick={() => setCompleto(!completo)}>
               {completo ? 'Ver menos' : 'Ver completo'}
             </button>
           )}

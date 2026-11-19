@@ -54,9 +54,9 @@ export default function Respuesta({ datos, cita, elegir }) {
               return (
                 <span key={j} className="cita-ancla"
                       onMouseEnter={() => setVista(`${i}-${j}`)} onMouseLeave={() => setVista(null)}>
-                  <button className="cita" aria-pressed={trozo.cita === cita} aria-describedby={f ? `previa-${i}-${j}` : undefined}
+                  <button className="cita" aria-label={`Ir al fragmento de la cita ${trozo.cita}`} aria-pressed={trozo.cita === cita} aria-describedby={f ? `previa-${i}-${j}` : undefined}
                           onFocus={() => setVista(`${i}-${j}`)} onBlur={() => setVista(null)}
-                          onClick={() => elegir(trozo.cita)}>{trozo.cita}</button>
+                          onClick={() => elegir(trozo.cita)}>[{trozo.cita}]</button>
                   {f && vista === `${i}-${j}` && (
                     <span role="tooltip" id={`previa-${i}-${j}`} className="previa">
                       <span className="previa-lugar">{referencia(f)} · {paginas(f, esClase(f))}</span>
