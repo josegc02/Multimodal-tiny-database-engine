@@ -16,3 +16,15 @@ def compras(motor, producto_id):
         GROUP BY b.producto_id
     """)
     return {fila["id"]: fila["puntos"] for fila in filas}
+
+
+def literal(texto):
+    return "'" + texto.replace("'", "''") + "'"
+
+
+def visual(motor, imagen):
+    filas = consultar(motor, f"""
+        SELECT id, SIMILARITY_SCORE() AS puntos FROM productos
+        WHERE SIMILAR_TO(imagen, {literal(imagen)}, k=51) USING HNSW
+    """)
+    return {fila["id"]: fila["puntos"] for fila in filas}
