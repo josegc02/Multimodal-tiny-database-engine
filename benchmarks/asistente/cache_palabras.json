@@ -1,0 +1,20 @@
+{
+ "59588a520e|¿Cómo funciona la búsqueda de vecinos cercanos en HNSW?": "hnsw proximity search graph indexing",
+ "59588a520e|¿Cómo se construye un índice invertido con SPIMI?": "spimi inverted index construction algorithm",
+ "59588a520e|¿Qué hace el buffer manager de un SGBD?": "buffer manager dbms page replacement",
+ "59588a520e|¿Cómo funciona la recuperación ante fallos con el log WAL?": "wal recovery logging database durability",
+ "59588a520e|¿Cómo funciona el hashing extensible?": "extendible hashing dynamic directory bucket",
+ "59588a520e|¿Qué es la fragmentación horizontal en bases de datos distribuidas?": "horizontal fragmentation distributed databases partitioning",
+ "59588a520e|¿Cómo calcula BM25 el puntaje de un documento?": "bm25 ranking retrieval score algorithm",
+ "59588a520e|¿Cómo funciona un R-tree para datos espaciales?": "r-tree spatial indexing mbr geometry",
+ "59588a520e|¿Qué es LSH y para qué sirve?": "lsh hashing similarity locality dimensionality",
+ "59588a520e|¿Cómo funciona la cuantización de producto en un índice IVF?": "productquantization ivf indexing vector quantization",
+ "59588a520e|¿Qué ventajas tiene un índice aprendido frente a un árbol B?": "learned index b-tree optimization",
+ "59588a520e|¿Qué es la generación aumentada por recuperación?": "rag retrieval augmented generation llm",
+ "59588a520e|¿Qué es SPLADE y cómo se diferencia de BM25?": "splade bm25 sparse representation expansion",
+ "59588a520e|¿Cómo se estima la cardinalidad de una consulta?": "cardinality estimation query optimizer selectivity",
+ "59588a520e|¿Qué es un LSM-tree y cómo funciona la compactación?": "lsm-tree compaction indexing log-structured storage",
+ "59588a520e|¿Cómo se divide un nodo al insertar en un árbol B+?": "b tree split insertion node",
+ "59588a520e|¿Qué es la recuperación densa de pasajes (DPR)?": "dpr dense retrieval embeddings neural",
+ "59588a520e|¿Qué caracteriza a MongoDB como base de datos NoSQL?": "mongodb nosql document-oriented sharding schema-less"
+}
