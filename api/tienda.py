@@ -6,13 +6,16 @@ from tienda.indice_imagen import ImageIndex
 
 from fastapi import APIRouter, HTTPException, Query
 
-from tienda.recomendaciones import (CANDIDATOS, cercanas, compras, consultar, fusionar, literal,
-                                    misma_categoria, texto, visual)
+import numpy as np
+
+from tienda.recomendaciones import (CANDIDATOS, cercanas, compras, consultar, filas_por_id, fusionar, literal,
+                                    misma_categoria, misma_plataforma, sin_duplicados, texto, visual)
 
 # Pesos medidos en benchmarks/tienda con dos métricas (tipo de producto y co-compras
 # posteriores), elegidos en validación y reportados en prueba con fusión RRF.
 PESOS = "1,0.5,1"
 PESO_CATEGORIA = 0.25
+PESO_PLATAFORMA = 1.0  # sube la misma consola de 75 % a 98 % de los recomendados
 
 
 def indice_mobilenet(estado):
@@ -89,6 +92,8 @@ def rutas_tienda(estado, lock):
                         vector_imagen: Literal["sift", "mobilenet"] | None = Query(
                             None, description="Por defecto mobilenet; si falta el modelo, sift"),
                         peso_categoria: float = Query(PESO_CATEGORIA, ge=0, allow_inf_nan=False),
+                        peso_plataforma: float = Query(PESO_PLATAFORMA, ge=0, allow_inf_nan=False),
+                        duplicados: bool = Query(False, description="True deja los duplicados (otro color, relistado)"),
                         fusion: Literal["rrf", "max"] = "rrf"):
         try:
             valores = [float(p) for p in pesos.split(",")]
@@ -122,14 +127,26 @@ def rutas_tienda(estado, lock):
             senales = {"compras": compras(motor, id), "imagen": imagen,
                        "texto": texto(motor, origen["descripcion"])}
             pesos_senales = dict(zip(senales, valores))
-            if peso_categoria > 0:
+            if peso_categoria > 0 or peso_plataforma > 0:
                 # Solo los candidatos de señales con peso: una señal apagada no aporta productos.
-                candidatos = {i for nombre, puntos in senales.items() if pesos_senales[nombre] > 0
-                              for i, valor in puntos.items() if valor > 0} - {id}
-                senales["categoria"] = misma_categoria(motor, origen.get("categoria"), candidatos)
-                pesos_senales["categoria"] = peso_categoria
-            filas = fusionar(id, senales, pesos_senales, fusion)
-            return [{**producto(motor, fila["id"]), **fila} for fila in filas]
+                candidatos = filas_por_id(motor, {i for nombre, puntos in senales.items() if pesos_senales[nombre] > 0
+                                                  for i, valor in puntos.items() if valor > 0} - {id})
+                if peso_categoria > 0:
+                    senales["categoria"] = misma_categoria(origen.get("categoria"), candidatos)
+                    pesos_senales["categoria"] = peso_categoria
+                if peso_plataforma > 0:
+                    senales["plataforma"] = misma_plataforma(origen, candidatos)
+                    pesos_senales["plataforma"] = peso_plataforma
+            filas = fusionar(id, senales, pesos_senales, fusion, limite=10 if duplicados else 60)
+            filas = [{**producto(motor, fila["id"]), **fila} for fila in filas]
+        if not duplicados:
+            vectores = indice.index.vectors if usar_mobilenet and indice.index is not None else {}
+
+            def vector(i):
+                v = vectores.get(i)
+                return None if v is None else v / (np.linalg.norm(v) or 1)
+            filas = sin_duplicados(origen, filas, vector)
+        return filas
 
     @router.get("/tiendas/cercanas")
     def tiendas(lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180),
