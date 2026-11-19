@@ -25,14 +25,18 @@ from __future__ import annotations
 
 import os
 import threading
+import time
+import csv
+from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, File, Form, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from api.asistente import ErrorAsistente, ErrorLLM, crear_llm, preguntar
+from api.asistente import (ErrorAsistente, ErrorLLM, crear_llm, indexar_pdf, listar_documentos,
+                           obtener_documento, preguntar)
 from api.tienda import rutas_tienda
 
 from engine.indexes.extendible_hash import ExtendibleHash
@@ -43,6 +47,8 @@ from engine.indexes.vector_index import VectorIndex
 from engine.storage.clustered_file import ClusteredBPlusFile, PrimaryClusteredIndex
 from engine.storage.sequential_file import SequentialFile, SequentialKeyIndex
 from frontend.motor import PROJECT_DIR, Motor
+from rag.arxiv import DATASET_DIR, nombre_pdf
+from rag.chunking import extraer_paginas
 
 DATA_DIR_DEFECTO = os.path.join(PROJECT_DIR, "data", "app")
 ORIGENES_DEFECTO = ("http://localhost:5173", "http://127.0.0.1:5173")
@@ -50,6 +56,27 @@ EXTENSIONES_ARCHIVOS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
                         ".wav", ".mp3", ".ogg", ".flac")
 TIPOS_SQL = {"int": "INT", "float": "FLOAT", "str": "VARCHAR", "point": "POINT",
              "text": "TEXT", "image": "IMAGE", "audio": "AUDIO"}
+
+
+MAX_PDF = 20 * 1024 * 1024
+
+
+def _ruta_pdf(documento: dict, carpeta: Path) -> Path | None:
+    """Dónde está el PDF de un documento: arXiv, clase del curso o subido desde la web."""
+    if documento.get("arxiv_id"):
+        return carpeta / "pdf" / nombre_pdf(documento["arxiv_id"])
+    if documento.get("fuente") == "curso":
+        subido = carpeta / "subidos" / f"{documento['id']}.pdf"
+        if subido.is_file():
+            return subido
+        manifiesto = carpeta / "curso" / "curso.csv"
+        if manifiesto.is_file():
+            with manifiesto.open(encoding="utf-8", newline="") as stream:
+                for fila in csv.DictReader(stream):
+                    if fila.get("titulo") == documento.get("titulo"):
+                        return carpeta / "curso" / fila["archivo"]
+        return None
+    return carpeta / "subidos" / f"{documento['id']}.pdf"
 
 
 class ConsultaSQL(BaseModel):
@@ -117,7 +144,8 @@ def _llm_desde_entorno():
 
 
 def create_app(directorio: str | None = None, carpetas_archivos: list[str] | None = None,
-               origenes: list[str] | None = None, llm=_LLM_DESDE_ENTORNO) -> FastAPI:
+               origenes: list[str] | None = None, llm=_LLM_DESDE_ENTORNO,
+               carpeta_papers: str | None = None) -> FastAPI:
     """Crea la aplicación. Los argumentos tienen prioridad sobre las variables de entorno.
 
     ``llm`` es el modelo del asistente (cualquier objeto con ``completar``);
@@ -127,6 +155,8 @@ def create_app(directorio: str | None = None, carpetas_archivos: list[str] | Non
     estado: dict = {"llm": _llm_desde_entorno() if llm is _LLM_DESDE_ENTORNO else llm,
                     "palabras_con_llm": palabras != "local"}
     lock = threading.Lock()
+    subida = threading.Lock()
+    estado["papers"] = Path(carpeta_papers or os.environ.get("BD2_PAPERS_DIR") or DATASET_DIR)
 
     @asynccontextmanager
     async def ciclo_de_vida(app: FastAPI):
@@ -222,6 +252,85 @@ def create_app(directorio: str | None = None, carpetas_archivos: list[str] | Non
             return _error(400, str(exc))
         except ErrorLLM as exc:
             return _error(502, str(exc))
+
+    @app.get("/asistente/estado")
+    def asistente_estado():
+        """Qué hay cargado y con qué LLM se responde (la barra lateral del front)."""
+        llm = estado["llm"]
+        conteos = {}
+        for tabla in ("papers", "fragmentos"):
+            resultado = _sql_con_lock(f"SELECT COUNT(*) AS n FROM {tabla}")
+            conteos[tabla] = None if resultado.tiene_error else resultado.filas[0][0]
+        return {"corpus": conteos["fragmentos"] is not None, "documentos": conteos["papers"],
+                "fragmentos": conteos["fragmentos"], "llm": getattr(llm, "modelo", None) if llm else None,
+                "palabras_con_llm": estado["palabras_con_llm"]}
+
+    @app.get("/asistente/documentos")
+    def asistente_documentos():
+        """La biblioteca: papers y clases con su número de fragmentos."""
+        try:
+            return listar_documentos(_sql_con_lock)
+        except ErrorAsistente as exc:
+            return _error(400, str(exc))
+
+    @app.get("/asistente/documentos/{paper_id}")
+    def asistente_documento(paper_id: int):
+        """Un documento con su abstract y sus fragmentos en orden."""
+        try:
+            documento = obtener_documento(_sql_con_lock, paper_id)
+        except ErrorAsistente as exc:
+            return _error(400, str(exc))
+        if documento is None:
+            return _error(404, f"No existe el documento {paper_id}")
+        return documento
+
+    @app.get("/asistente/documentos/{paper_id}/pdf")
+    def asistente_pdf(paper_id: int):
+        """El PDF del documento, si está en esta máquina (no se versiona por licencia).
+
+        El front lo abre en una página con ``#page=N``.
+        """
+        try:
+            filas = _sql_con_lock(f"SELECT id, arxiv_id, titulo, fuente FROM papers WHERE id = {paper_id}")
+        except ErrorAsistente as exc:
+            return _error(400, str(exc))
+        if filas.tiene_error or not filas.filas:
+            return _error(404, f"No existe el documento {paper_id}")
+        ruta = _ruta_pdf(dict(zip(filas.columnas, filas.filas[0])), estado["papers"])
+        if ruta is None or not ruta.is_file():
+            return _error(404, "El PDF no está en esta máquina: descárguelo con 'python -m rag.arxiv descargar'")
+        return FileResponse(ruta, media_type="application/pdf")
+
+    @app.post("/asistente/documentos")
+    def asistente_subir(archivo: UploadFile = File(...), titulo: str = Form(...), autores: str = Form(""),
+                        anio: int = Form(...), tipo: str = Form("paper")):
+        """Sube un PDF: extrae el texto por página, lo fragmenta y lo inserta (SPIMI incluido)."""
+        datos = archivo.file.read(MAX_PDF + 1)
+        if len(datos) > MAX_PDF:
+            return _error(413, "El PDF pasa de 20 MB")
+        if not datos.startswith(b"%PDF-"):
+            return _error(400, "El archivo no es un PDF")
+        if tipo not in ("paper", "clase"):
+            return _error(400, "tipo debe ser 'paper' o 'clase'")
+        carpeta = estado["papers"] / "subidos"
+        carpeta.mkdir(parents=True, exist_ok=True)
+        with subida:  # una subida a la vez: los ids nuevos salen de MAX(id)
+            temporal = carpeta / "subiendo.pdf"
+            temporal.write_bytes(datos)
+            try:
+                t = time.perf_counter()
+                paginas = extraer_paginas(temporal)
+                ms_extraccion = round((time.perf_counter() - t) * 1000, 1)
+                fuente = "curso" if tipo == "clase" else "subido"
+                resultado = indexar_pdf(_sql_con_lock, paginas, titulo, autores, anio, fuente, fuente)
+            except ErrorAsistente as exc:
+                temporal.unlink(missing_ok=True)
+                return _error(400, str(exc))
+            except Exception as exc:  # PDF corrupto o cifrado
+                temporal.unlink(missing_ok=True)
+                return _error(400, f"No se pudo leer el PDF: {exc}")
+            temporal.replace(carpeta / f"{resultado['id']}.pdf")
+        return {**resultado, "ms_extraccion": ms_extraccion}
 
     app.include_router(rutas_tienda(estado, lock))
     return app

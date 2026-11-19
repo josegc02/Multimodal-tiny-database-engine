@@ -25,6 +25,7 @@ Las tablas son las del corpus del #97 (``rag/corpus.py``)::
 from __future__ import annotations
 
 import os
+import time
 import re
 import unicodedata
 from typing import Callable, Protocol
@@ -51,6 +52,12 @@ PROMPT_PALABRAS_CLAVE = (
     "y sigue con términos técnicos o sinónimos útiles. No incluyas palabras vacías. Responde "
     "solo con las palabras separadas por espacios, sin explicación ni puntuación."
 )
+# Pendiente de medir con el LLM (se acabó la cuota del día): agregar al prompt una
+# línea "ES: <término técnico en español>". Con las palabras en caché, inglés más
+# ese término dio precisión 0.929 (contra 0.919) y más diapositivas del curso,
+# porque BM25 compara raíces: 'fragmentation' (fragment) no encuentra
+# 'fragmentación'. _palabras_del_llm ya lee esa línea si viene.
+MAX_PALABRAS_ES = 2
 
 PROMPT_RESPUESTA = (
     "Eres un asistente académico. Responde en español a la pregunta usando SOLO la "
@@ -256,11 +263,30 @@ def palabras_clave_locales(pregunta: str) -> str:
 def palabras_clave(pregunta: str, llm: LLM | None) -> str:
     """Palabras clave en inglés para MATCH. Siempre devuelve solo [a-z0-9-] y espacios."""
     if llm is not None:
-        consulta = " ".join(_terminos(llm.completar(PROMPT_PALABRAS_CLAVE, pregunta, 4000))
-                            [:MAX_PALABRAS_LLM])
+        consulta = _palabras_del_llm(llm.completar(PROMPT_PALABRAS_CLAVE, pregunta, 4000))
         if consulta:
             return consulta
     return palabras_clave_locales(pregunta)
+
+
+def _palabras_del_llm(texto: str) -> str:
+    """5 términos en inglés más el término técnico en español (sin repetir).
+
+    Las diapositivas del curso están en español y BM25 compara raíces exactas:
+    'fragmentation' (fragment) no encuentra 'fragmentación' (fragmentacion).
+    Solo se agrega el término técnico: las palabras generales en español traían
+    diapositivas de otro tema (benchmarks/asistente).
+    """
+    ingles, espanol = [], []
+    for linea in texto.splitlines():
+        etiqueta, separador, resto = linea.partition(":")
+        if separador and etiqueta.strip().upper() == "ES":
+            espanol += _terminos(resto)
+        else:
+            ingles += _terminos(resto if separador and etiqueta.strip().upper() == "EN" else linea)
+    ingles = ingles[:MAX_PALABRAS_LLM]
+    extra = [t for t in espanol if t not in PALABRAS_VACIAS and len(t) > 2 and t not in ingles]
+    return " ".join(ingles + extra[:MAX_PALABRAS_ES])
 
 
 def _consultar(ejecutar: Callable, sql: str):
@@ -273,13 +299,16 @@ def _consultar(ejecutar: Callable, sql: str):
     return [dict(zip(resultado.columnas, fila)) for fila in resultado.filas]
 
 
-def recuperar(ejecutar: Callable, consulta: str, k: int) -> list[dict]:
+def recuperar(ejecutar: Callable, consulta: str, k: int, detalle: dict | None = None) -> list[dict]:
     """Top-k fragmentos por BM25, cada uno con el título, autores, año y URL de su paper.
 
     Se toman a lo más MAX_POR_PAPER fragmentos de cada documento, para que un paper
     largo que repite los términos no ocupe todo el top-k, y se descartan los que
     no llegan a UMBRAL_RELATIVO del puntaje del primero: suelen coincidir solo en
     un término general.
+
+    Con ``detalle`` (un dict) se anota qué pasó con cada candidato de BM25, para
+    dibujarlo en el front: ``detalle["candidatos"]`` y ``detalle["umbral"]``.
     """
     if not consulta:
         return []
@@ -288,21 +317,39 @@ def recuperar(ejecutar: Callable, consulta: str, k: int) -> list[dict]:
         f"WHERE MATCH(texto, '{consulta}') USING BM25 ORDER BY puntaje DESC "
         f"LIMIT {int(k) * CANDIDATOS_POR_K}"))
     minimo = UMBRAL_RELATIVO * float(candidatos[0]["puntaje"]) if candidatos else 0.0
-    fragmentos, por_paper = [], {}
+    fragmentos, por_paper, estados = [], {}, []
     for fragmento in candidatos:
         if float(fragmento["puntaje"]) < minimo:
-            break  # vienen ordenados: los siguientes tampoco llegan
-        usados = por_paper.get(fragmento["paper_id"], 0)
-        if usados < MAX_POR_PAPER:
-            por_paper[fragmento["paper_id"]] = usados + 1
+            estados.append("umbral")
+        elif len(fragmentos) == k:
+            estados.append("sobra")
+        elif por_paper.get(fragmento["paper_id"], 0) >= MAX_POR_PAPER:
+            estados.append("por_documento")
+        else:
+            por_paper[fragmento["paper_id"]] = por_paper.get(fragmento["paper_id"], 0) + 1
             fragmentos.append(fragmento)
-            if len(fragmentos) == k:
-                break
+            estados.append("elegido")
+    if not candidatos:
+        if detalle is not None:
+            detalle.update(candidatos=[], umbral=0.0)
+        return []
+    # Metadata de todos los documentos candidatos: los elegidos y los que se vieron.
+    ids = ", ".join(dict.fromkeys(str(int(f["paper_id"])) for f in candidatos))
+    papers = {p["id"]: p for p in _consultar(
+        ejecutar, f"SELECT id, titulo, autores, anio, url, fuente FROM papers WHERE id IN ({ids})")}
+    if detalle is not None:
+        numero = {f["id"]: n for n, f in enumerate(fragmentos, start=1)}
+        detalle["umbral"] = round(minimo, 4)
+        detalle["candidatos"] = [{
+            "id": f["id"], "paper_id": f["paper_id"], "n": numero.get(f["id"]),
+            "titulo": papers.get(f["paper_id"], {}).get("titulo"),
+            "autores": papers.get(f["paper_id"], {}).get("autores"),
+            "anio": papers.get(f["paper_id"], {}).get("anio"),
+            "fuente": papers.get(f["paper_id"], {}).get("fuente"),
+            "pagina": f["pagina"], "puntaje": round(float(f["puntaje"]), 4), "estado": estado,
+        } for f, estado in zip(candidatos, estados)]
     if not fragmentos:
         return []
-    ids = ", ".join(str(int(f["paper_id"])) for f in fragmentos)
-    papers = {p["id"]: p for p in _consultar(
-        ejecutar, f"SELECT id, titulo, autores, anio, url FROM papers WHERE id IN ({ids})")}
     salida = []
     for n, fragmento in enumerate(fragmentos, start=1):
         paper = papers.get(fragmento["paper_id"], {})
@@ -314,6 +361,7 @@ def recuperar(ejecutar: Callable, consulta: str, k: int) -> list[dict]:
             "autores": paper.get("autores"),
             "anio": paper.get("anio"),
             "url": paper.get("url"),
+            "fuente": paper.get("fuente"),
             "pagina": fragmento["pagina"],
             "pagina_fin": fragmento["pagina_fin"],
             "puntaje": round(float(fragmento["puntaje"]), 4),
@@ -354,12 +402,29 @@ def preguntar(ejecutar: Callable, pregunta: str, k: int = 5, llm: LLM | None = N
     pregunta = pregunta.strip()
     if not pregunta:
         raise ErrorAsistente("La pregunta está vacía")
+    inicio = time.perf_counter()
+    sentencias: list[str] = []
+    ms_motor = 0.0
+
+    def ejecutar_y_medir(sql: str):
+        nonlocal ms_motor
+        t = time.perf_counter()
+        resultado = ejecutar(sql)
+        ms_motor += (time.perf_counter() - t) * 1000
+        sentencias.append(sql)
+        return resultado
+
+    t = time.perf_counter()
     consulta = palabras_clave(pregunta, llm if palabras_con_llm else None)
-    fragmentos = recuperar(ejecutar, consulta, k)
-    respuesta = None
+    s_palabras = time.perf_counter() - t
+    detalle: dict = {}
+    fragmentos = recuperar(ejecutar_y_medir, consulta, k, detalle)
+    respuesta, s_redaccion = None, None
     if llm is not None:
+        t = time.perf_counter()
         respuesta = (llm.completar(PROMPT_RESPUESTA, mensaje_respuesta(pregunta, fragmentos), 16000)
                      if fragmentos else SIN_FRAGMENTOS)
+        s_redaccion = round(time.perf_counter() - t, 2) if fragmentos else None
     return {
         "pregunta": pregunta,
         "consulta": consulta,
@@ -367,4 +432,86 @@ def preguntar(ejecutar: Callable, pregunta: str, k: int = 5, llm: LLM | None = N
         "respuesta": respuesta,
         "citas": citas(respuesta, len(fragmentos)) if respuesta else [],
         "fragmentos": fragmentos,
+        # Lo que hizo el motor, para mostrarlo en el front ("Cómo se respondió").
+        "traza": {
+            "sql": sentencias,
+            "ms_motor": round(ms_motor, 1),
+            "documentos": len({f["paper_id"] for f in fragmentos}),
+            "palabras_con_llm": llm is not None and palabras_con_llm,
+            "s_palabras": round(s_palabras, 2) if llm is not None and palabras_con_llm else None,
+            "s_redaccion": s_redaccion,
+            "s_total": round(time.perf_counter() - inicio, 2),
+            "modelo": getattr(llm, "modelo", None),
+            # Cada candidato de BM25 y qué pasó con él: elegido, umbral, por_documento o sobra.
+            "candidatos": detalle.get("candidatos", []),
+            "umbral": detalle.get("umbral", 0.0),
+            "umbral_relativo": UMBRAL_RELATIVO,
+            "max_por_documento": MAX_POR_PAPER,
+        },
+    }
+
+
+# --- Biblioteca y subida de PDF (front del asistente, #99) -------------------
+
+COLUMNAS_PAPER = "id, arxiv_id, titulo, autores, anio, abstract, categoria, fuente, url, licencia, tema"
+
+
+def _literal(valor) -> str:
+    return "'" + str(valor).replace("'", "''") + "'"
+
+
+def listar_documentos(ejecutar: Callable) -> list[dict]:
+    """Todos los documentos (sin abstract) con su número de fragmentos."""
+    conteos = {f["paper_id"]: f["n"] for f in _consultar(
+        ejecutar, "SELECT paper_id, COUNT(*) AS n FROM fragmentos GROUP BY paper_id")}
+    documentos = _consultar(ejecutar, "SELECT id, arxiv_id, titulo, autores, anio, fuente, url, tema FROM papers")
+    for documento in documentos:
+        documento["fragmentos"] = conteos.get(documento["id"], 0)
+    return sorted(documentos, key=lambda d: d["id"])
+
+
+def obtener_documento(ejecutar: Callable, paper_id: int) -> dict | None:
+    """Un documento con su abstract y todos sus fragmentos en orden."""
+    filas = _consultar(ejecutar, f"SELECT {COLUMNAS_PAPER} FROM papers WHERE id = {int(paper_id)}")
+    if not filas:
+        return None
+    documento = filas[0]
+    documento["fragmentos"] = _consultar(ejecutar, (
+        "SELECT id, orden, pagina, pagina_fin, palabras, texto FROM fragmentos "
+        f"WHERE paper_id = {int(paper_id)} ORDER BY orden"))
+    return documento
+
+
+def indexar_pdf(ejecutar: Callable, paginas: list[tuple[int, str]], titulo: str, autores: str,
+                anio: int, tema: str, fuente: str) -> dict:
+    """Fragmenta un PDF ya extraído y lo inserta en papers y fragmentos.
+
+    El índice SPIMI de fragmentos.texto se actualiza con el INSERT. Devuelve el
+    id nuevo y lo que hizo cada paso, para mostrar el avance.
+    """
+    from rag.chunking import fragmentar, quitar_referencias
+
+    titulo = titulo.strip()
+    if not titulo:
+        raise ErrorAsistente("El documento necesita un título")
+    fragmentos = fragmentar(quitar_referencias(paginas))
+    if not fragmentos:
+        raise ErrorAsistente("El PDF no tiene texto extraíble (¿es un escaneo?)")
+    paper_id = int(_consultar(ejecutar, "SELECT MAX(id) AS m FROM papers")[0]["m"] or 0) + 1
+    primer_fragmento = int(_consultar(ejecutar, "SELECT MAX(id) AS m FROM fragmentos")[0]["m"] or 0) + 1
+    t = time.perf_counter()
+    _consultar(ejecutar, (
+        f"INSERT INTO papers ({COLUMNAS_PAPER}) VALUES ({paper_id}, '', {_literal(titulo)}, "
+        f"{_literal(autores.strip())}, {int(anio)}, '', {_literal(fuente)}, {_literal(fuente)}, '', "
+        f"'Subido por el usuario', {_literal(tema)})"))
+    filas = ", ".join(
+        f"({primer_fragmento + i}, {paper_id}, {f['orden']}, {f['pagina']}, {f['pagina_fin']}, "
+        f"{f['palabras']}, {_literal(f['texto'])})" for i, f in enumerate(fragmentos))
+    _consultar(ejecutar, f"INSERT INTO fragmentos (id, paper_id, orden, pagina, pagina_fin, palabras, texto) VALUES {filas}")
+    return {
+        "id": paper_id,
+        "paginas": len(paginas),
+        "fragmentos": len(fragmentos),
+        "palabras": sum(f["palabras"] for f in fragmentos),
+        "ms_insercion": round((time.perf_counter() - t) * 1000, 1),
     }
