@@ -74,6 +74,13 @@ class TestFunciones(unittest.TestCase):
     def test_palabras_clave_vacias_del_llm_usan_el_glosario(self):
         self.assertEqual(palabras_clave("índice invertido", LLMFalso(palabras="...")), "index inverted")
 
+    def test_palabras_del_llm_con_termino_en_espanol(self):
+        llm = LLMFalso(palabras="horizontal fragmentation distributed databases partitioning sharding
+"
+                                "ES: fragmentacion horizontal de")
+        self.assertEqual(palabras_clave("pregunta", llm),
+                         "horizontal fragmentation distributed databases partitioning fragmentacion")
+
     def test_palabras_del_llm_se_recortan_a_las_mas_especificas(self):
         llm = LLMFalso(palabras="spimi inverted index construction block memory algorithm sorting")
         self.assertEqual(palabras_clave("pregunta", llm), "spimi inverted index construction block")

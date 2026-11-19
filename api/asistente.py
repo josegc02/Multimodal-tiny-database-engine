@@ -52,6 +52,12 @@ PROMPT_PALABRAS_CLAVE = (
     "y sigue con términos técnicos o sinónimos útiles. No incluyas palabras vacías. Responde "
     "solo con las palabras separadas por espacios, sin explicación ni puntuación."
 )
+# Pendiente de medir con el LLM (se acabó la cuota del día): agregar al prompt una
+# línea "ES: <término técnico en español>". Con las palabras en caché, inglés más
+# ese término dio precisión 0.929 (contra 0.919) y más diapositivas del curso,
+# porque BM25 compara raíces: 'fragmentation' (fragment) no encuentra
+# 'fragmentación'. _palabras_del_llm ya lee esa línea si viene.
+MAX_PALABRAS_ES = 2
 
 PROMPT_RESPUESTA = (
     "Eres un asistente académico. Responde en español a la pregunta usando SOLO la "
@@ -257,11 +263,30 @@ def palabras_clave_locales(pregunta: str) -> str:
 def palabras_clave(pregunta: str, llm: LLM | None) -> str:
     """Palabras clave en inglés para MATCH. Siempre devuelve solo [a-z0-9-] y espacios."""
     if llm is not None:
-        consulta = " ".join(_terminos(llm.completar(PROMPT_PALABRAS_CLAVE, pregunta, 4000))
-                            [:MAX_PALABRAS_LLM])
+        consulta = _palabras_del_llm(llm.completar(PROMPT_PALABRAS_CLAVE, pregunta, 4000))
         if consulta:
             return consulta
     return palabras_clave_locales(pregunta)
+
+
+def _palabras_del_llm(texto: str) -> str:
+    """5 términos en inglés más el término técnico en español (sin repetir).
+
+    Las diapositivas del curso están en español y BM25 compara raíces exactas:
+    'fragmentation' (fragment) no encuentra 'fragmentación' (fragmentacion).
+    Solo se agrega el término técnico: las palabras generales en español traían
+    diapositivas de otro tema (benchmarks/asistente).
+    """
+    ingles, espanol = [], []
+    for linea in texto.splitlines():
+        etiqueta, separador, resto = linea.partition(":")
+        if separador and etiqueta.strip().upper() == "ES":
+            espanol += _terminos(resto)
+        else:
+            ingles += _terminos(resto if separador and etiqueta.strip().upper() == "EN" else linea)
+    ingles = ingles[:MAX_PALABRAS_LLM]
+    extra = [t for t in espanol if t not in PALABRAS_VACIAS and len(t) > 2 and t not in ingles]
+    return " ".join(ingles + extra[:MAX_PALABRAS_ES])
 
 
 def _consultar(ejecutar: Callable, sql: str):
