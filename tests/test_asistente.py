@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
-from api.asistente import (SIN_FRAGMENTOS, ClienteClaude, ErrorLLM, citas, palabras_clave,
-                           palabras_clave_locales)
+from api.asistente import (SIN_FRAGMENTOS, ClienteClaude, ClienteGemini, ErrorLLM, citas,
+                           crear_llm, palabras_clave, palabras_clave_locales)
 
 try:
     from fastapi.testclient import TestClient
@@ -119,6 +119,59 @@ class TestClienteClaude(unittest.TestCase):
                 os.environ["BD2_LLM_MODELO"] = anterior
 
 
+class ClienteGeminiFalso:
+    def __init__(self, texto="Hola [1]", bloqueo=None, error=None):
+        self.peticion = None
+        self.texto, self.bloqueo, self.error = texto, bloqueo, error
+        self.models = self
+
+    def generate_content(self, **peticion):
+        self.peticion = peticion
+        if self.error:
+            raise self.error
+        return SimpleNamespace(text=self.texto, prompt_feedback=SimpleNamespace(block_reason=self.bloqueo))
+
+
+class TestClienteGemini(unittest.TestCase):
+    def test_arma_la_peticion(self):
+        falso = ClienteGeminiFalso(texto="  Hola [1]\n")
+        texto = ClienteGemini(modelo="gemini-x", cliente=falso).completar("sis", "msg", 100)
+        self.assertEqual(texto, "Hola [1]")
+        self.assertEqual(falso.peticion["model"], "gemini-x")
+        self.assertEqual(falso.peticion["contents"], "msg")
+        self.assertEqual(falso.peticion["config"].system_instruction, "sis")
+        self.assertEqual(falso.peticion["config"].max_output_tokens, 100)
+
+    def test_respuesta_vacia_y_bloqueo(self):
+        self.assertEqual(ClienteGemini(cliente=ClienteGeminiFalso(texto=None)).completar("s", "m", 9), "")
+        with self.assertRaises(ErrorLLM):
+            ClienteGemini(cliente=ClienteGeminiFalso(bloqueo="SAFETY")).completar("s", "m", 9)
+
+    def test_cuota_agotada_es_error_claro(self):
+        from google.genai import errors
+
+        error = errors.ClientError(429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}})
+        with self.assertRaisesRegex(ErrorLLM, "cuota"):
+            ClienteGemini(cliente=ClienteGeminiFalso(error=error)).completar("s", "m", 9)
+
+
+class TestCrearLLM(unittest.TestCase):
+    def test_proveedores(self):
+        self.assertIsInstance(crear_llm("gemini"), ClienteGemini)
+        self.assertIsInstance(crear_llm("Claude"), ClienteClaude)
+        self.assertIsNone(crear_llm("ninguno"))
+        with self.assertRaises(ValueError):
+            crear_llm("gpt")
+
+    def test_gemini_por_defecto(self):
+        anterior = os.environ.pop("BD2_LLM", None)
+        try:
+            self.assertIsInstance(crear_llm(), ClienteGemini)
+        finally:
+            if anterior is not None:
+                os.environ["BD2_LLM"] = anterior
+
+
 @unittest.skipIf(TestClient is None, "requiere requirements-api.txt")
 class TestEndpoint(unittest.TestCase):
     def setUp(self):
@@ -190,6 +243,23 @@ class TestEndpoint(unittest.TestCase):
     def test_sin_corpus_cargado_es_400(self):
         datos = self.preguntar(self.abrir(LLMFalso(), corpus=False), estado=400)
         self.assertIn("rag.corpus", datos["error"])
+
+    def test_palabras_clave_locales_llaman_al_llm_una_vez(self):
+        llm = LLMFalso(respuesta="El ranking usa BM25 [1].")
+        anterior = os.environ.get("BD2_PALABRAS_CLAVE")
+        os.environ["BD2_PALABRAS_CLAVE"] = "local"
+        try:
+            cliente = self.abrir(llm)
+        finally:
+            if anterior is None:
+                del os.environ["BD2_PALABRAS_CLAVE"]
+            else:
+                os.environ["BD2_PALABRAS_CLAVE"] = anterior
+        llm.llamadas.append(("ya", "se usaron las palabras"))  # la siguiente llamada es la respuesta
+        datos = self.preguntar(cliente, pregunta="¿Cómo funciona el ranking BM25 por frecuencia de términos?")
+        self.assertEqual(len(llm.llamadas), 2)  # la marca de arriba + una sola llamada real
+        self.assertEqual(datos["consulta"], palabras_clave_locales(datos["pregunta"]))
+        self.assertEqual(datos["respuesta"], "El ranking usa BM25 [1].")
 
     def test_error_del_llm_es_502(self):
         datos = self.preguntar(self.abrir(LLMCaido()), estado=502)
