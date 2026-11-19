@@ -75,8 +75,7 @@ class TestFunciones(unittest.TestCase):
         self.assertEqual(palabras_clave("índice invertido", LLMFalso(palabras="...")), "index inverted")
 
     def test_palabras_del_llm_con_termino_en_espanol(self):
-        llm = LLMFalso(palabras="horizontal fragmentation distributed databases partitioning sharding
-"
+        llm = LLMFalso(palabras="horizontal fragmentation distributed databases partitioning sharding\n"
                                 "ES: fragmentacion horizontal de")
         self.assertEqual(palabras_clave("pregunta", llm),
                          "horizontal fragmentation distributed databases partitioning fragmentacion")
