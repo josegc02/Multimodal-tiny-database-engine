@@ -1,0 +1,1 @@
+"""Opción A: RAG sobre documentos académicos (corpus de papers de arXiv, issue #97)."""
