@@ -4,7 +4,7 @@ import { esClase, paginas, referencia, sinCorreos } from '../formato.js';
 
 const CORTE = 320; // caracteres del fragmento que se ven antes de "Ver completo"
 
-export default function Fuentes({ datos, cita, elegir }) {
+export default function Fuentes({ datos, cita, elegir, numeroParaVolver, volverACita }) {
   const terminos = (datos?.consulta ?? '').split(/\s+/).filter((t) => t.length > 2);
   const fragmentos = datos?.fragmentos ?? [];
   const citadas = new Set(datos?.citas ?? []);
@@ -18,13 +18,14 @@ export default function Fuentes({ datos, cita, elegir }) {
       </div>
       {fragmentos.map((f) => (
         <Fuente key={f.id} f={f} activa={f.n === cita} citada={citadas.has(f.n)} terminos={terminos}
-                sinLlm={datos.modo === 'sin_llm'} ancho={(f.puntaje / maximo) * 100} elegir={elegir} />
+                sinLlm={datos.modo === 'sin_llm'} ancho={(f.puntaje / maximo) * 100} elegir={elegir}
+                volverACita={f.n === numeroParaVolver ? volverACita : null} />
       ))}
     </aside>
   );
 }
 
-function Fuente({ f, activa, citada, sinLlm, ancho, elegir, terminos }) {
+function Fuente({ f, activa, citada, sinLlm, ancho, elegir, terminos, volverACita }) {
   const [completo, setCompleto] = useState(false);
   const clase = esClase(f);
   const texto = sinCorreos(f.texto);
@@ -34,7 +35,7 @@ function Fuente({ f, activa, citada, sinLlm, ancho, elegir, terminos }) {
 
   return (
     <article id={`fuente-${f.n}`} className="fuente" data-activa={activa} tabIndex={-1} aria-labelledby={`titulo-fuente-${f.n}`}>
-      <button className="fuente-cabeza" onClick={() => elegir(f.n)} aria-label={`Resaltar la fuente ${f.n}`} aria-pressed={activa}>
+      <button className="fuente-cabeza" onClick={() => { if (!activa) elegir(f.n); }} aria-label={`Resaltar la fuente ${f.n}`} aria-pressed={activa}>
         <span className="numero-fuente">{f.n}</span>
         <span className="fuente-lugar">{referencia(f)} · {clase ? '' : `${f.anio} · `}{paginas(f, clase)}</span>
         <span className="fuente-puntaje num">BM25 {f.puntaje.toFixed(2)}</span>
@@ -42,6 +43,9 @@ function Fuente({ f, activa, citada, sinLlm, ancho, elegir, terminos }) {
       <div className="pista"><div style={{ width: `${Math.round(ancho)}%` }} /></div>
       <h3 id={`titulo-fuente-${f.n}`} className="fuente-titulo">{f.titulo}</h3>
       <p className="fuente-texto">“{resaltar(corto, terminos)}”</p>
+      {volverACita && (
+        <button className="texto-btn volver-cita" onClick={volverACita}>Volver a la cita [{f.n}]</button>
+      )}
       <div className="fuente-pie">
         <span className="sub">{uso}</span>
         <span className="enlaces">

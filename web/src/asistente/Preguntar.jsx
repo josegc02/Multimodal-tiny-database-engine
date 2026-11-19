@@ -20,7 +20,8 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
   const [datos, setDatos] = useState(reciente?.datos ?? null);
   const [error, setError] = useState(null);
   const [pregunta, setPregunta] = useState(reciente?.pregunta ?? '');
-  const [cita, setCita] = useState(1);
+  const [cita, setCita] = useState(null);
+  const [origenCita, setOrigenCita] = useState(null);
   const [segundos, setSegundos] = useState(0);
   const campo = useRef(null);
   const autoEnviada = useRef(false); // StrictMode monta dos veces en desarrollo: una sola petición
@@ -47,7 +48,8 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
     try {
       const respuesta = await api.preguntar({ pregunta: limpia, usarLlm });
       setDatos(respuesta);
-      setCita(1);
+      setCita(null);
+      setOrigenCita(null);
       setFase('listo');
       setTexto('');
       ir(enlace.reciente(alResponder(respuesta)));
@@ -61,12 +63,18 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
   const alTeclear = (evento) => {
     if (evento.key === 'Enter' && !evento.shiftKey && !evento.nativeEvent.isComposing) { evento.preventDefault(); enviar(texto); }
   };
-  const elegirCita = (n) => {
+  const elegirCita = (n, origen) => {
     setCita(n);
+    setOrigenCita(origen ? { numero: n, elemento: origen } : null);
     const fuente = document.getElementById(`fuente-${n}`);
     if (!fuente) return;
     fuente.focus({ preventScroll: true });
     fuente.scrollIntoView({ block: 'nearest' });
+  };
+
+  const volverACita = () => {
+    origenCita.elemento.focus({ preventScroll: true });
+    origenCita.elemento.scrollIntoView({ block: 'center' });
   };
 
   const fragmentos = datos?.fragmentos ?? [];
@@ -135,7 +143,8 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
           )}
 
         </div>}
-        {conFuentes && <Fuentes datos={datos} cita={cita} elegir={elegirCita} />}
+        {conFuentes && <Fuentes datos={datos} cita={cita} elegir={elegirCita}
+                              numeroParaVolver={origenCita?.numero} volverACita={volverACita} />}
         {fase === 'listo' && datos?.traza && <Traza datos={datos} />}
 
         <form className="panel redactor" onSubmit={alEnviar}>

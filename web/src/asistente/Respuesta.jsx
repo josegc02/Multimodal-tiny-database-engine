@@ -51,12 +51,13 @@ export default function Respuesta({ datos, cita, elegir }) {
             {parrafo.map((trozo, j) => {
               if (!trozo.cita) return <span key={j}>{enfasis(trozo.texto)}</span>;
               const f = porNumero[trozo.cita];
+              if (!f) return <span key={j}>[{trozo.cita}]</span>;
               return (
                 <span key={j} className="cita-ancla"
                       onMouseEnter={() => setVista(`${i}-${j}`)} onMouseLeave={() => setVista(null)}>
                   <button className="cita" aria-label={`Ir al fragmento de la cita ${trozo.cita}`} aria-pressed={trozo.cita === cita} aria-describedby={f ? `previa-${i}-${j}` : undefined}
                           onFocus={() => setVista(`${i}-${j}`)} onBlur={() => setVista(null)}
-                          onClick={() => elegir(trozo.cita)}>[{trozo.cita}]</button>
+                          onClick={(evento) => elegir(trozo.cita, evento.currentTarget)}>[{trozo.cita}]</button>
                   {f && vista === `${i}-${j}` && (
                     <span role="tooltip" id={`previa-${i}-${j}`} className="previa">
                       <span className="previa-lugar">{referencia(f)} · {paginas(f, esClase(f))}</span>
@@ -76,7 +77,7 @@ export default function Respuesta({ datos, cita, elegir }) {
           <span className="sub" style={{ fontSize: 12 }}>Basada en</span>
           <div className="basada-lista">
             {documentos.map((d) => (
-              <button key={d.paper_id} className="documento-chip" onClick={() => elegir(d.numeros[0])}>
+              <button key={d.paper_id} className="documento-chip" onClick={(evento) => elegir(d.numeros[0], evento.currentTarget)}>
                 <span className="tipo">{esClase(d.f) ? 'Clase' : 'Paper'}</span>
                 <span className="nombre">{esClase(d.f) ? d.f.titulo : `${referencia(d.f)} · ${d.f.anio}`}</span>
                 <span className="numeros num">{[...new Set(d.numeros)].map((n) => `[${n}]`).join(' ')}</span>
