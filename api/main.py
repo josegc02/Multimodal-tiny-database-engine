@@ -10,6 +10,9 @@ Variables de entorno (opcionales):
   puede servir imágenes y audios (por defecto datasets, fotos y BD2_DATA_DIR).
 - BD2_CORS_ORIGINS: orígenes del front web, separados por comas
   (por defecto http://localhost:5173 y http://127.0.0.1:5173).
+- ANTHROPIC_API_KEY: API key del LLM de POST /asistente/preguntar.
+- BD2_LLM_MODELO: modelo de Claude del asistente (por defecto claude-haiku-5-5).
+- BD2_SIN_LLM=1: el asistente solo devuelve fragmentos (demo sin internet).
 
 El motor guarda una sola sesión SQL, así que la API atiende una petición a la
 vez y cada petición es autocommit: si un script deja una transacción abierta,
@@ -25,7 +28,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from api.asistente import ClienteClaude, ErrorAsistente, ErrorLLM, preguntar
 
 from engine.indexes.extendible_hash import ExtendibleHash
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
@@ -46,6 +51,15 @@ TIPOS_SQL = {"int": "INT", "float": "FLOAT", "str": "VARCHAR", "point": "POINT",
 
 class ConsultaSQL(BaseModel):
     sql: str
+
+
+class Pregunta(BaseModel):
+    pregunta: str = Field(min_length=1, max_length=1000)
+    k: int = Field(5, ge=1, le=20, description="Cuántos fragmentos recuperar")
+    usar_llm: bool = Field(True, description="false: solo los fragmentos, sin redactar respuesta")
+
+
+_LLM_DESDE_ENTORNO = object()
 
 
 def _error(estado: int, mensaje: str) -> JSONResponse:
@@ -93,10 +107,20 @@ def _dentro_de(ruta: str, carpeta: str) -> bool:
         return False
 
 
+def _llm_desde_entorno():
+    if os.environ.get("BD2_SIN_LLM", "").strip().lower() in ("1", "true", "si", "sí", "yes"):
+        return None
+    return ClienteClaude()
+
+
 def create_app(directorio: str | None = None, carpetas_archivos: list[str] | None = None,
-               origenes: list[str] | None = None) -> FastAPI:
-    """Crea la aplicación. Los argumentos tienen prioridad sobre las variables de entorno."""
-    estado: dict = {}
+               origenes: list[str] | None = None, llm=_LLM_DESDE_ENTORNO) -> FastAPI:
+    """Crea la aplicación. Los argumentos tienen prioridad sobre las variables de entorno.
+
+    ``llm`` es el modelo del asistente (cualquier objeto con ``completar``);
+    ``None`` lo apaga. Por defecto se usa Claude, salvo con BD2_SIN_LLM=1.
+    """
+    estado: dict = {"llm": _llm_desde_entorno() if llm is _LLM_DESDE_ENTORNO else llm}
     lock = threading.Lock()
 
     @asynccontextmanager
@@ -174,6 +198,24 @@ def create_app(directorio: str | None = None, carpetas_archivos: list[str] | Non
         if not os.path.isfile(real):
             return _error(404, f"No existe el archivo: {ruta}")
         return FileResponse(real)
+
+    def _sql_con_lock(sql: str):
+        with lock:
+            return estado["motor"].ejecutar(sql)
+
+    @app.post("/asistente/preguntar")
+    def asistente_preguntar(cuerpo: Pregunta):
+        """Responde con los papers: palabras clave en inglés, BM25 y LLM con citas [n].
+
+        Solo las consultas SQL toman el lock; la llamada al LLM no bloquea al resto.
+        """
+        llm = estado["llm"] if cuerpo.usar_llm else None
+        try:
+            return preguntar(_sql_con_lock, cuerpo.pregunta, cuerpo.k, llm)
+        except ErrorAsistente as exc:
+            return _error(400, str(exc))
+        except ErrorLLM as exc:
+            return _error(502, str(exc))
 
     return app
 
