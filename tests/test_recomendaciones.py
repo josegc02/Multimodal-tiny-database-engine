@@ -16,14 +16,14 @@ def test_top_diez_y_desempate():
 
 def test_categoria_reordena_sin_agregar(tmp_path):
     from frontend.motor import Motor
-    from tienda.recomendaciones import misma_categoria
+    from tienda.recomendaciones import filas_por_id, misma_categoria
     motor = Motor(directorio=str(tmp_path), modo_demo=False)
     motor.ejecutar("CREATE TABLE productos (id INT PRIMARY KEY, categoria TEXT)")
     motor.ejecutar("INSERT INTO productos VALUES (1,'mandos'),(2,'juegos'),(3,'mandos'),(4,'mandos'),(5,'')")
     # 4 es de la misma categoría pero no es candidato: no se agrega.
-    assert misma_categoria(motor, "mandos", {2, 3, 5}) == {3: 1}
-    assert misma_categoria(motor, "", {2, 3}) == {}  # sin categoría: ni bono ni castigo
-    senales = {"texto": {2: 1.0, 3: 0.9}, "categoria": misma_categoria(motor, "mandos", {2, 3})}
+    assert misma_categoria("mandos", filas_por_id(motor, {2, 3, 5})) == {3: 1}
+    assert misma_categoria("", filas_por_id(motor, {2, 3})) == {}  # sin categoría: ni bono ni castigo
+    senales = {"texto": {2: 1.0, 3: 0.9}, "categoria": misma_categoria("mandos", filas_por_id(motor, {2, 3}))}
     assert [f["id"] for f in fusionar(1, senales, {"texto": 1, "categoria": 0.25})] == [3, 2]
     motor.cerrar()
 
@@ -32,7 +32,7 @@ def test_tienda_http(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     for archivo in ("a", "b", "c"):
         (tmp_path / archivo).write_bytes(b"imagen")
-    vectores = {"a": [1, 0], "b": [0, 1], "c": [1, 0.1]}
+    vectores = {"a": [1, 0], "b": [0, 1], "c": [1, 0.3]}  # a y c parecidos, no duplicados (coseno 0.96)
     monkeypatch.setattr("engine.storage.media_store.extract_features",
                         lambda tipo, ruta: np.array(vectores[ruta]))
     from pathlib import Path
@@ -71,7 +71,7 @@ def test_tienda_http(tmp_path, monkeypatch):
         assert r.status_code == 200, r.text
         for pesos, esperado in [("1,0,0", 2), ("0,1,0", 3), ("0,0,1", 3)]:
             filas = cliente.get("/recomendaciones/1", params={"pesos": pesos, "vector_imagen": "sift",
-                                                              "peso_categoria": 0}).json()
+                                                              "peso_categoria": 0, "peso_plataforma": 0}).json()
             assert filas[0]["id"] == esperado
             assert filas[0]["puntaje"] == 1
             assert set(filas[0]["senales"]) == {"texto", "imagen", "compras"}
@@ -145,3 +145,40 @@ def test_compras_solo_usuarios_de_2_a_20(tmp_path):
     filas = compras(resenas, productos)
     assert {(f["usuario"], f["producto_id"]) for f in filas} == {("dos", 1), ("dos", 2)}
     assert all(f["fecha"] == 2 for f in filas)  # milisegundos -> segundos
+
+
+def test_plataformas_del_titulo_y_la_categoria():
+    from tienda.recomendaciones import plataformas
+    assert plataformas("Hello Neighbor (PS4)", "Video Games > PlayStation 4 > Games") == {"ps4"}
+    assert plataformas("Kirby's Epic Yarn", "Video Games > Legacy Systems > Nintendo Systems > Wii") == {"wii"}
+    assert plataformas("Mario Kart 8 Deluxe", "Video Games > Nintendo Switch > Games") == {"switch"}
+    assert plataformas("Racing Wheel for PS5, PS4 and PC", "Video Games > PC") == {"ps5", "ps4", "pc"}
+    assert plataformas("Sega Dreamcast Console", "Video Games > Legacy Systems > Sega Systems") == {"sega"}
+    assert plataformas("Gift card", "Video Games") == set()
+
+
+def test_misma_plataforma_sin_castigar_multiplataforma():
+    from tienda.recomendaciones import misma_plataforma
+    origen = {"titulo": "Borderlands - PlayStation 4", "categoria": "Video Games > PlayStation 4 > Games"}
+    candidatos = {2: {"titulo": "Call of Duty (PS4)", "categoria": ""},
+                  3: {"titulo": "LEGO Dimensions - Xbox One", "categoria": ""},
+                  4: {"titulo": "Volante para PS4, Xbox One y PC", "categoria": ""},
+                  5: {"titulo": "Tarjeta de regalo", "categoria": ""}}
+    assert misma_plataforma(origen, candidatos) == {2: 1, 4: 1}
+    universal = {"titulo": "Mando para PS4, Switch y PC", "categoria": ""}
+    assert misma_plataforma(universal, candidatos) == {}  # multiplataforma: no da bono
+
+
+def test_sin_duplicados_por_titulo_y_por_imagen():
+    from tienda.recomendaciones import sin_duplicados
+    origen = {"id": 1, "titulo": "DualShock 4 Wireless Controller for PlayStation 4 - Jet Black"}
+    ordenados = [{"id": 2, "titulo": "DualShock 4 Wireless Controller for PlayStation 4 - Rose Gold"},  # del origen
+                 {"id": 3, "titulo": "Call of Duty: Modern Warfare (PS4)"},
+                 {"id": 4, "titulo": "PS4 - Call of Duty: Modern Warfare - [PAL EU]"},  # misma foto que 3
+                 {"id": 5, "titulo": "Charging Station for PS4 Controller with LED"},
+                 {"id": 6, "titulo": "Charging Station for PS4 Controller with LED, 2 Pack"},  # misma clave que 5
+                 {"id": 7, "titulo": "Headset Stand"}]
+    vectores = {3: np.array([1.0, 0.0]), 4: np.array([0.999, 0.0447]), 5: np.array([0.0, 1.0])}
+    elegidos = sin_duplicados(origen, ordenados, lambda i: vectores.get(i), limite=3)
+    assert [f["id"] for f in elegidos] == [3, 5, 7]  # se rellena con el siguiente candidato
+    assert [f["id"] for f in sin_duplicados(origen, ordenados)] == [3, 4, 5, 7]  # sin vectores: solo título

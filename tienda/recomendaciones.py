@@ -4,6 +4,8 @@ Valores medidos en benchmarks/tienda: 101 candidatos por señal, compras a 30 d�
 como máximo entre una y otra, y fusión RRF.
 """
 
+import re
+
 CANDIDATOS = 101
 VENTANA_COMPRAS = 30 * 86400  # segundos: compras.fecha está en segundos Unix
 RRF_K = 60
@@ -49,26 +51,100 @@ def texto(motor, descripcion):
     return {fila["id"]: fila["puntos"] for fila in filas}
 
 
-def misma_categoria(motor, categoria, candidatos):
+_PALABRAS = re.compile(r"[a-z0-9]+")
+PALABRAS_CLAVE_TITULO = 6
+COSENO_DUPLICADO = 0.98
+# Consola o sistema; el orden importa (PS4 antes que "playstation" a secas, Wii U antes que Wii).
+PLATAFORMAS = [
+    ("ps5", r"\bps5\b|playstation 5"), ("ps4", r"\bps4\b|playstation 4"), ("ps3", r"\bps3\b|playstation 3"),
+    ("ps2", r"\bps2\b|playstation 2"), ("psvita", r"ps ?vita|playstation vita"), ("psp", r"\bpsp\b"),
+    ("xbox series", r"xbox series|series [xs]\b"), ("xbox one", r"xbox one"), ("xbox 360", r"xbox 360"),
+    ("switch", r"\bswitch\b"), ("3ds", r"\b[23]ds\b"), ("ds", r"nintendo ds\b|\bnds\b"),
+    ("wii u", r"wii u\b"), ("wii", r"\bwii\b(?! u)"), ("gamecube", r"gamecube"),
+    ("sega", r"\bsega\b|dreamcast|genesis|saturn"),
+    ("vr", r"oculus|meta quest|\bquest [23]\b|virtual reality"), ("pc", r"\bpc\b|windows|\bmac\b|steam\b(?! deck)"),
+]
+
+
+def clave_titulo(titulo):
+    """Las primeras palabras del título en minúsculas: agrupa colores, ediciones y relistados."""
+    return " ".join(_PALABRAS.findall((titulo or "").lower())[:PALABRAS_CLAVE_TITULO])
+
+
+def plataformas(titulo, categoria):
+    """Consolas o sistemas del producto. Vacío si no se sabe; varias si es multiplataforma."""
+    texto = f"{categoria or ''} {titulo or ''}".lower()
+    return {nombre for nombre, patron in PLATAFORMAS if re.search(patron, texto)}
+
+
+def misma_plataforma(origen, candidatos):
+    """Señal "misma plataforma": 1 si el candidato es de la única consola del origen.
+
+    Solo si el origen tiene exactamente una plataforma: un producto multiplataforma o
+    sin plataforma conocida no da bono, y un candidato sin plataforma no se castiga.
+    ``candidatos`` es {id: fila del producto}.
+    """
+    propias = plataformas(origen.get("titulo"), origen.get("categoria"))
+    if len(propias) != 1:
+        return {}
+    return {i: 1 for i, fila in candidatos.items()
+            if propias <= plataformas(fila.get("titulo"), fila.get("categoria"))}
+
+
+def sin_duplicados(origen, ordenados, vector=None, limite=10):
+    """Los primeros ``limite`` de ``ordenados`` ({id, titulo...} ya rankeados) sin duplicados.
+
+    Duplicado: misma clave de título, o coseno de imagen > 0.98 si hay ``vector(id)``
+    (unitario o None), con el producto consultado o con uno ya elegido. Se queda el
+    mejor rankeado de cada grupo y se rellena con el siguiente candidato.
+    """
+    elegidos, claves, vectores = [], {clave_titulo(origen.get("titulo"))}, []
+    v_origen = vector(origen["id"]) if vector else None
+    if v_origen is not None:
+        vectores.append(v_origen)
+    for fila in ordenados:
+        clave = clave_titulo(fila.get("titulo"))
+        if clave and clave in claves:
+            continue
+        v = vector(fila["id"]) if vector else None
+        if v is not None and any(float(v @ otro) > COSENO_DUPLICADO for otro in vectores):
+            continue
+        elegidos.append(fila)
+        claves.add(clave)
+        if v is not None:
+            vectores.append(v)
+        if len(elegidos) == limite:
+            break
+    return elegidos
+
+
+def filas_por_id(motor, ids):
+    """{id: fila} de los productos, una búsqueda por clave primaria por id.
+
+    TEXT solo admite índices SPIMI, así que filtrar por categoría recorrería toda la
+    tabla (~570 ms); ~300 búsquedas por clave primaria tardan ~100 ms.
+    """
+    filas = {}
+    for i in sorted(ids):
+        encontradas = consultar(motor, f"SELECT * FROM productos WHERE id = {i}")
+        if encontradas:
+            filas[i] = encontradas[0]
+    return filas
+
+
+def misma_categoria(categoria, candidatos):
     """Señal "categoría similar": 1 para los candidatos de la misma categoría que el origen.
 
-    Solo reordena lo que ya trajeron las otras señales; no agrega productos. Un
-    producto sin categoría no recibe esta señal (ni bono ni castigo).
+    ``candidatos`` es {id: fila}. Solo reordena lo que ya trajeron las otras señales;
+    no agrega productos. Un producto sin categoría no recibe esta señal (ni bono ni castigo).
     """
-    if not categoria or not candidatos:
+    if not categoria:
         return {}
-    # Una búsqueda por clave primaria por candidato (~300): TEXT solo admite índices
-    # SPIMI, así que filtrar por categoría recorrería toda la tabla (~570 ms).
-    senal = {}
-    for i in sorted(candidatos):
-        filas = consultar(motor, f"SELECT categoria FROM productos WHERE id = {i}")
-        if filas and filas[0]["categoria"] == categoria:
-            senal[i] = 1
-    return senal
+    return {i: 1 for i, fila in candidatos.items() if fila.get("categoria") == categoria}
 
 
-def fusionar(origen, senales, pesos, metodo="rrf", bonos=("categoria",)):
-    """Combina las señales en los 10 mejores productos.
+def fusionar(origen, senales, pesos, metodo="rrf", bonos=("categoria", "plataforma"), limite=10):
+    """Combina las señales en los ``limite`` mejores productos.
 
     ``rrf`` (por defecto): cada señal aporta ``peso * (K+1) / (K+1+posición)`` con K=60,
     sin depender de la escala de sus puntajes (BM25 no tiene tope; los cosenos sí).
@@ -96,7 +172,7 @@ def fusionar(origen, senales, pesos, metodo="rrf", bonos=("categoria",)):
             fila["senales"][nombre] = normalizado
             fila["puntaje"] += normalizado * (pesos[nombre] / suma)
     validos = (fila for fila in totales.values() if fila["puntaje"] > 0)
-    return sorted(validos, key=lambda fila: (-fila["puntaje"], fila["id"]))[:10]
+    return sorted(validos, key=lambda fila: (-fila["puntaje"], fila["id"]))[:limite]
 
 
 def cercanas(motor, lat, lon, producto_id=None, radio=None, limite=10):
