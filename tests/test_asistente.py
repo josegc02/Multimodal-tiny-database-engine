@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 from tests.test_papers_corpus import pdf_con_texto
 from api.asistente import (MAX_POR_PAPER, SIN_FRAGMENTOS, UMBRAL_RELATIVO, ClienteClaude, ClienteGemini,
-                           ErrorLLM, citas, crear_llm, palabras_clave, palabras_clave_locales, recuperar)
+                           ErrorLLM, citas, cognados, crear_llm, palabras_clave, palabras_clave_locales,
+                           recuperar)
 
 try:
     from fastapi.testclient import TestClient
@@ -74,6 +75,18 @@ class TestFunciones(unittest.TestCase):
     def test_palabras_clave_vacias_del_llm_usan_el_glosario(self):
         self.assertEqual(palabras_clave("índice invertido", LLMFalso(palabras="...")), "index inverted")
 
+    def test_cognados_de_la_pregunta(self):
+        ingles = "horizontal fragmentation distributed databases partitioning".split()
+        self.assertEqual(cognados("¿Qué es la fragmentación horizontal en bases de datos distribuidas?", ingles),
+                         ["fragmentacion", "distribuidas"])  # 'horizontal' ya está
+        self.assertEqual(cognados("¿Cómo funciona el hashing extensible?", ["extendible", "hashing"]), ["extensible"])
+        self.assertEqual(cognados("¿Qué hace el buffer manager?", ["buffer", "manager", "page"]), [])
+
+    def test_palabras_del_llm_mas_cognados(self):
+        llm = LLMFalso(palabras="horizontal fragmentation distributed databases partitioning")
+        self.assertEqual(palabras_clave("¿Qué es la fragmentación horizontal?", llm),
+                         "horizontal fragmentation distributed databases partitioning fragmentacion")
+
     def test_palabras_del_llm_con_termino_en_espanol(self):
         llm = LLMFalso(palabras="horizontal fragmentation distributed databases partitioning sharding\n"
                                 "ES: fragmentacion horizontal de")
@@ -105,7 +118,7 @@ class TestFunciones(unittest.TestCase):
 
     def test_recuperar_anota_que_paso_con_cada_candidato(self):
         candidatos = [(i, pid, 30.0 - i) for i, pid in enumerate([1, 1, 1, 2, 3, 2, 4], start=1)]
-        candidatos.append((8, 5, 10.0))  # bajo el 60 % del primero (29 * 0.6 = 17.4)
+        candidatos.append((8, 5, 10.0))  # bajo el 70 % del primero (29 * 0.7 = 20.3)
 
         def ejecutar(sql):
             if "FROM fragmentos" in sql:
@@ -121,12 +134,12 @@ class TestFunciones(unittest.TestCase):
         self.assertEqual([c["estado"] for c in detalle["candidatos"]],
                          ["elegido", "elegido", "por_documento", "elegido", "elegido", "sobra", "sobra", "umbral"])
         self.assertEqual([c["n"] for c in detalle["candidatos"]], [1, 2, None, 3, 4, None, None, None])
-        self.assertEqual(detalle["umbral"], 17.4)
+        self.assertEqual(detalle["umbral"], 20.3)
         self.assertEqual(detalle["candidatos"][0]["titulo"], "P1")
 
     def test_recuperar_descarta_puntajes_bajos(self):
-        # Con el primero en 10.0, todo lo que quede bajo el 60 % (6.0) se descarta.
-        candidatos = [(1, 1, 10.0), (2, 2, 7.5), (3, 3, 6.0), (4, 4, 5.9), (5, 5, 2.0)]
+        # Con el primero en 10.0, todo lo que quede bajo el 70 % (7.0) se descarta.
+        candidatos = [(1, 1, 10.0), (2, 2, 7.5), (3, 3, 7.0), (4, 4, 6.9), (5, 5, 2.0)]
 
         def ejecutar(sql):
             if "FROM fragmentos" in sql:
@@ -136,7 +149,7 @@ class TestFunciones(unittest.TestCase):
             return SimpleNamespace(tiene_error=False, error=None, columnas=["id", "titulo", "autores", "anio", "url"],
                                    filas=[(pid, f"P{pid}", "", 2020, "") for pid in range(1, 6)])
 
-        self.assertEqual(UMBRAL_RELATIVO, 0.6)
+        self.assertEqual(UMBRAL_RELATIVO, 0.7)
         self.assertEqual([f["id"] for f in recuperar(ejecutar, "hnsw", 5)], [1, 2, 3])
 
     def test_citas_validas_sin_repetir_y_en_orden(self):
