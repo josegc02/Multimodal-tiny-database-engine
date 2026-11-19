@@ -18,11 +18,14 @@ bajo Apache-2.0. La inferencia usa los pesos existentes.
 La API admite elegir representación en cada consulta.
 
 ```text
-GET /recomendaciones/1?pesos=1,1,1&vector_imagen=mobilenet
+GET /recomendaciones/1                       # MobileNet, pesos 1,0.25,1 y categoría 0.25
 GET /recomendaciones/1?vector_imagen=sift
 ```
 
-SIFT es el valor predeterminado y utiliza la columna IMAGE e índice SQL existentes.
+MobileNet es el valor predeterminado; si falta el modelo y no se pidió una
+representación, se recomienda con SIFT. SIFT utiliza la columna IMAGE e índice SQL
+existentes. Por qué cambió el valor predeterminado: ver
+[benchmarks/tienda](../benchmarks/tienda/README.md).
 MobileNet usa el mismo HNSW del motor mediante un índice auxiliar sobre los IDs y
 rutas de productos. Sus vectores se guardan en la subcarpeta mobilenet de la base.
 El índice se construye en la primera consulta, que puede tardar varios minutos
@@ -42,7 +45,7 @@ tiene su propio lock y la extracción se hace **fuera del lock del motor**, así
 construirlo no congela el resto de la API (el asistente y la tienda siguen
 respondiendo). Una imagen ilegible o ausente se omite y queda en
 `ImageIndex.omitidos`; un producto sin vector recibe la señal de imagen vacía y se
-recomienda con compras y texto. Solo si falta el modelo se devuelve 503. Una
+recomienda con compras y texto. Solo si falta el modelo y se pidió `vector_imagen=mobilenet` se devuelve 503. Una
 representación desconocida da 422. La selección permite alternar ambas
 representaciones en la misma API.
 
