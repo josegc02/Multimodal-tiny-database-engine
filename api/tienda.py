@@ -1,5 +1,6 @@
 """API de catálogo, recomendaciones y tiendas."""
 import math
+import threading
 from typing import Literal
 from tienda.indice_imagen import ImageIndex
 
@@ -12,6 +13,32 @@ from tienda.recomendaciones import (CANDIDATOS, cercanas, compras, consultar, fu
 # posteriores), elegidos en validación y reportados en prueba con fusión RRF.
 PESOS = "1,0.5,1"
 PESO_CATEGORIA = 0.25
+
+
+def indice_mobilenet(estado):
+    return estado.setdefault("indice_mobilenet", ImageIndex(estado["motor"].directorio))
+
+
+def precalentar(estado, lock):
+    """Construye el índice MobileNet en segundo plano al iniciar la API.
+
+    Así la primera recomendación no espera ~45 s a que se arme el grafo. Solo si
+    la tienda ya está cargada; si falta el modelo, la API recomienda con SIFT.
+    """
+    def trabajo():
+        try:
+            with lock:
+                motor = estado["motor"]
+                if "productos" not in motor.catalog.tables:
+                    return
+                filas = consultar(motor, "SELECT id, imagen FROM productos")
+            indice_mobilenet(estado).actualizar(filas)
+        except (OSError, ValueError, RuntimeError, KeyError):
+            pass  # sin modelo o sin tienda: la primera petición decide
+
+    hilo = threading.Thread(target=trabajo, name="precalentar-mobilenet", daemon=True)
+    hilo.start()
+    return hilo
 
 
 def rutas_tienda(estado, lock):
@@ -71,16 +98,18 @@ def rutas_tienda(estado, lock):
                 or not math.isfinite(sum(valores)) or sum(valores) <= 0):
             raise HTTPException(422, "Indique tres pesos no negativos con suma positiva y finita")
         usar_mobilenet = vector_imagen != "sift"
+        indice = indice_mobilenet(estado) if usar_mobilenet else None
+        revisar = usar_mobilenet and not indice.vigente()
         with lock:
             motor = estado["motor"]
             origen = producto(motor, id)
-            catalogo_imagenes = consultar(motor, "SELECT id, imagen FROM productos") if usar_mobilenet else None
+            catalogo_imagenes = consultar(motor, "SELECT id, imagen FROM productos") if revisar else None
         if usar_mobilenet:
             # Fuera del lock del motor: extraer el catálogo tarda minutos la primera vez y
             # no debe congelar el resto de la API. El índice tiene su propio lock.
-            indice = estado.setdefault("indice_mobilenet", ImageIndex(estado["motor"].directorio))
             try:
-                indice.actualizar(catalogo_imagenes)
+                if revisar:
+                    indice.actualizar(catalogo_imagenes)
                 imagen = indice.buscar(id, k=CANDIDATOS + 1)  # vacío si el producto no tiene vector: quedan compras y texto
             except (OSError, ValueError) as exc:  # falta el modelo: afecta a todo el índice
                 if vector_imagen == "mobilenet":
