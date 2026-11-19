@@ -14,8 +14,11 @@ uvicorn api.main:app --reload          # http://127.0.0.1:8000, documentación e
 | `BD2_DATA_DIR` | Carpeta de las tablas e índices | `data/app` |
 | `BD2_ARCHIVOS` | Carpetas desde las que `/archivos` sirve imágenes y audios (separadas por `;` en Windows y `:` en Linux) | `datasets`, `fotos` y `BD2_DATA_DIR` |
 | `BD2_CORS_ORIGINS` | Orígenes del front web, separados por comas | `http://localhost:5173`, `http://127.0.0.1:5173` |
-| `ANTHROPIC_API_KEY` | API key de Claude para `/asistente/preguntar` | — |
-| `BD2_LLM_MODELO` | Modelo de Claude del asistente | `claude-haiku-5-5` |
+| `BD2_LLM` | LLM de `/asistente/preguntar`: `gemini`, `claude` o `ninguno` | `gemini` |
+| `GEMINI_API_KEY` | Key de Gemini (gratis en [aistudio.google.com](https://aistudio.google.com)) | — |
+| `ANTHROPIC_API_KEY` | Key de Claude, si `BD2_LLM=claude` (de pago, en platform.claude.com) | — |
+| `BD2_LLM_MODELO` | Cambia el modelo del LLM elegido | `gemini-3.1-flash-lite` / `claude-haiku-5-5` |
+| `BD2_PALABRAS_CLAVE` | Con `local`, las palabras clave salen del glosario y cada pregunta usa 1 llamada al LLM en vez de 2 | `llm` |
 | `BD2_SIN_LLM` | Con `1`, el asistente solo devuelve fragmentos (demo sin internet) | apagado |
 
 Los datos **se conservan entre reinicios**: las tablas se crean una vez (con los scripts de carga) y la API las reabre al iniciar.
@@ -124,9 +127,9 @@ Respuesta `200`:
 
 Cómo se arma:
 
-1. La pregunta pasa a palabras clave en inglés (`consulta`), porque BM25 compara términos y los papers están en inglés. Con LLM se le pide a Claude; sin LLM se usa un glosario pequeño.
+1. La pregunta pasa a palabras clave en inglés (`consulta`), porque BM25 compara términos y los papers están en inglés. Con LLM se le pide al modelo; sin LLM, o con `BD2_PALABRAS_CLAVE=local`, se usa un glosario pequeño.
 2. `SELECT ... FROM fragmentos WHERE MATCH(texto, consulta) USING BM25 ORDER BY puntaje DESC LIMIT k`, y después `SELECT ... FROM papers WHERE id IN (...)` para la metadata, porque el motor no admite `MATCH` con `JOIN`.
-3. Claude recibe los fragmentos numerados y debe responder solo con ellos, citando `[n]`. Si no le sirven, lo dice.
+3. El LLM recibe los fragmentos numerados y debe responder solo con ellos, citando `[n]`. Si no le sirven, lo dice.
 
 - `[n]` en `respuesta` corresponde a `fragmentos[n-1]`. `citas` lista los números citados, sin repetir y en orden de aparición.
 - `modo` es `"sin_llm"` con `usar_llm: false` o `BD2_SIN_LLM=1`. En ese modo `respuesta` es `null` y `citas` es `[]`, y solo se usan los fragmentos.
@@ -137,5 +140,6 @@ Cómo se arma:
 
 - Atiende **una petición a la vez**, porque el motor tiene una sola sesión SQL. Alcanza para la demo; una consulta lenta hace esperar a las demás.
 - Al iniciar, los índices se reconstruyen desde las tablas. Con miles de imágenes, el HNSW puede tardar alrededor de un minuto en estar listo.
-- El asistente tarda lo que tarde Claude (unos segundos). Mientras espera al LLM no bloquea las demás peticiones; solo las consultas SQL van de a una.
+- El asistente tarda lo que tarde el LLM: con `gemini-3.1-flash-lite`, de 3 a 5 segundos por pregunta. Mientras espera al LLM no bloquea las demás peticiones; solo las consultas SQL van de a una.
+- **Cuota gratuita de Gemini**: Google la muestra por proyecto en AI Studio y la renueva cada minuto y cada día (a medianoche del Pacífico). Cada pregunta gasta 2 llamadas, o 1 con `BD2_PALABRAS_CLAVE=local`. Si se acaba, el endpoint responde `502` con un mensaje claro; si Google está saturado (`503`), se reintenta solo hasta 3 veces.
 - El endpoint de la opción B (`/recomendaciones/{id}`, #101) se agrega sobre esta base.
