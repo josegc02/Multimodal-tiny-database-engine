@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { entero } from '../formato.js';
 import { IconoError } from '../Iconos.jsx';
 import { enlace, ir } from '../ruta.js';
 import Fuentes from './Fuentes.jsx';
@@ -15,7 +14,7 @@ const SUGERENCIAS = [
   '¿Qué es la fragmentación horizontal en bases de datos distribuidas?',
 ];
 
-export default function Preguntar({ reciente, auto, estado, borrador, limpiarBorrador, alResponder }) {
+export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, alResponder }) {
   const [texto, setTexto] = useState(borrador || '');
   const [fase, setFase] = useState(reciente ? 'listo' : 'inicio'); // inicio | cargando | listo | error
   const [datos, setDatos] = useState(reciente?.datos ?? null);
@@ -68,41 +67,33 @@ export default function Preguntar({ reciente, auto, estado, borrador, limpiarBor
 
   const fragmentos = datos?.fragmentos ?? [];
   const documentos = new Set(fragmentos.map((f) => f.paper_id)).size;
-  let subtitulo = estado?.corpus
-    ? `Respuestas con los ${entero(estado.documentos)} papers y clases cargados, citando cada fuente.`
-    : 'Respuestas con los papers y clases del curso, citando cada fuente.';
-  if (fase === 'cargando') subtitulo = `Buscando en ${estado?.corpus ? entero(estado.fragmentos) : 'los'} fragmentos y redactando · ${segundos} s`;
-  if (fase === 'listo' && datos) {
-    subtitulo = fragmentos.length
-      ? `${fragmentos.length} fuente${fragmentos.length === 1 ? '' : 's'} de ${documentos} documento${documentos === 1 ? '' : 's'} · ${datos.traza ? `${datos.traza.s_total.toFixed(1)} s` : ''}`
-      : 'Sin fragmentos relacionados en el corpus';
+  const inicio = fase === 'inicio';
+  const conFuentes = fase === 'listo' && fragmentos.length > 0;
+  let subtitulo = 'Consulta las clases y los papers de Bases de Datos II.';
+  if (fase === 'cargando') subtitulo = `Buscando en la biblioteca… ${segundos} s`;
+  if (fase === 'listo') {
+    subtitulo = conFuentes
+      ? `${fragmentos.length} ${fragmentos.length === 1 ? 'fragmento' : 'fragmentos'} de ${documentos} ${documentos === 1 ? 'documento' : 'documentos'}`
+      : 'No se encontraron fuentes';
   }
-  if (fase === 'error') subtitulo = 'No se pudo responder';
+  if (fase === 'error') subtitulo = 'No se pudo completar la consulta';
 
   return (
-    <div className="pagina">
-      <div className="titulo-fila">
+    <div className={`pagina ${inicio ? 'consulta-inicio' : 'consulta'}`}>
+      <header className="titulo-fila">
         <div className="titulo-texto">
-          <h1>{fase === 'inicio' ? 'Pregunta sobre el curso' : pregunta}</h1>
-          <span className="sub num" aria-live="polite">{subtitulo}</span>
+          <h1>{inicio ? 'Investiga con tus fuentes' : pregunta}</h1>
+          <p className="sub" aria-live="polite">{subtitulo}</p>
         </div>
-        {fase !== 'inicio' && <a className="btn2" href={enlace.preguntar} onClick={() => { setFase('inicio'); setDatos(null); }}>Nueva pregunta</a>}
-      </div>
+        {!inicio && <a className="btn2" href={enlace.preguntar} onClick={() => {
+          setFase('inicio');
+          setDatos(null);
+          setTexto('');
+        }}>Nueva pregunta</a>}
+      </header>
 
-      <div className="columnas">
-        <div className="principal">
-          {fase === 'inicio' && (
-            <section className="panel respuesta" aria-label="Sugerencias">
-              <p style={{ fontSize: 15, color: 'var(--tinta-2)' }}>
-                Busca en los papers de arXiv y en las clases del curso con BM25, y responde citando cada fragmento.
-                Prueba con una de estas:
-              </p>
-              <div className="sugerencias">
-                {SUGERENCIAS.map((s) => <button key={s} className="sugerencia" onClick={() => enviar(s)}>{s}</button>)}
-              </div>
-            </section>
-          )}
-
+      <div className={`consulta-rejilla${conFuentes ? ' con-fuentes' : ''}`}>
+        {!inicio && <div className="consulta-respuesta">
           {fase === 'cargando' && (
             <section className="panel respuesta" aria-label="Cargando la respuesta" aria-busy="true">
               {[96, 92, 98, 64].map((ancho) => <div key={ancho} className="esqueleto" style={{ width: `${ancho}%` }} />)}
@@ -119,7 +110,7 @@ export default function Preguntar({ reciente, auto, estado, borrador, limpiarBor
                 <section className="panel respuesta" aria-label="Respuesta">
                   {datos.modo === 'sin_llm' && fragmentos.length > 0 && (
                     <p style={{ fontSize: 15, color: 'var(--tinta-2)' }}>
-                      Sin LLM: a la derecha están los {fragmentos.length} fragmentos que encontró BM25, sin redactar una respuesta.
+                      La generación de respuestas está desactivada para esta consulta. Puedes leer los fragmentos recuperados en Fuentes.
                     </p>
                   )}
                   {!fragmentos.length && (
@@ -136,20 +127,32 @@ export default function Preguntar({ reciente, auto, estado, borrador, limpiarBor
                   )}
                 </section>
               )}
-              {datos.traza && <Traza datos={datos} />}
             </>
           )}
 
-          <form className="panel redactor" onSubmit={alEnviar}>
+        </div>}
+        {conFuentes && <Fuentes datos={datos} cita={cita} elegir={elegirCita} />}
+        {fase === 'listo' && datos?.traza && <Traza datos={datos} />}
+
+        <form className="panel redactor" onSubmit={alEnviar}>
             <label htmlFor="pregunta" className="oculto">Tu pregunta</label>
             <textarea id="pregunta" ref={campo} rows={2} value={texto} onChange={(e) => setTexto(e.target.value)}
                       onKeyDown={alTeclear} maxLength={1000}
                       placeholder="Pregunta sobre los papers o las clases del curso" />
             <button className="btn" type="submit" disabled={fase === 'cargando' || !texto.trim()}>Preguntar</button>
-          </form>
-        </div>
-
-        <Fuentes fase={fase} datos={datos} cita={cita} elegir={elegirCita} />
+        </form>
+        {inicio && (
+          <section className="ejemplos" aria-labelledby="titulo-ejemplos">
+            <h2 id="titulo-ejemplos">Preguntas para empezar</h2>
+            <div className="ejemplos-lista">
+              {SUGERENCIAS.map((s) => (
+                <button key={s} className="ejemplo" onClick={() => enviar(s)}>
+                  {s}<span aria-hidden="true">↗</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );

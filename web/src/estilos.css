@@ -255,3 +255,41 @@ tbody tr:hover { background: #faf7fe; }
 .barra .marca > svg { flex-shrink: 0; }
 .cabecera-movil { background: #211832; color: #fff; border: 0; }
 .cabecera-movil :focus-visible { outline-color: #d8c5fa; outline-offset: -4px; }
+
+/* Consulta y lectura */
+.consulta-inicio { max-width: 850px; padding-top: clamp(24px, 8vh, 110px); gap: 36px; }
+.consulta-inicio h1 { font-size: clamp(2.65rem, 6vw, 5.1rem); }
+.consulta-inicio .titulo-texto { gap: 12px; }
+.consulta-inicio .sub { font-size: 17px; }
+.consulta-rejilla { display: grid; gap: 18px; align-items: start; grid-auto-rows: max-content; }
+.consulta-rejilla > * { min-width: 0; }
+.consulta-rejilla.con-fuentes { grid-template-columns: minmax(0, 1fr) minmax(270px, 340px); }
+.consulta-rejilla.con-fuentes > :not(.fuentes) { grid-column: 1; }
+.fuentes { grid-column: 2; grid-row: 1 / span 3; display: grid; gap: 12px; align-content: start; }
+.fuentes > div:first-child { flex-wrap: wrap; gap: 4px 12px; }
+.fuentes .sub { font-size: 12px; }
+.consulta-respuesta .respuesta { padding: clamp(18px, 3vw, 36px); border-top: 3px solid var(--dato); }
+.respuesta-cabeza { flex-wrap: wrap; }
+.consulta .traza { background: transparent; }
+.redactor { border-color: var(--control); }
+.redactor:focus-within { border-color: var(--dato); }
+.consulta-inicio .redactor { padding: 16px; box-shadow: 0 6px 24px #35215612; }
+.consulta-inicio .redactor textarea { min-height: 74px; }
+.ejemplos { display: grid; gap: 12px; margin-top: 12px; }
+.ejemplos-lista { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 26px; }
+.ejemplo {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 0;
+  text-align: left; background: transparent; border: 0; border-top: 1px solid var(--dato-suave);
+}
+.ejemplo span, .ejemplo:hover { color: var(--dato); }
+
+@media (max-width: 760px) {
+  .consulta-rejilla.con-fuentes { grid-template-columns: minmax(0, 1fr); }
+  .fuentes { grid-column: 1; grid-row: auto; }
+  .consulta-inicio { gap: 24px; }
+  .ejemplos-lista { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 480px) {
+  .redactor { flex-direction: column; align-items: stretch; }
+  .redactor .btn { align-self: end; }
+}
