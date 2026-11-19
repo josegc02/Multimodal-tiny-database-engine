@@ -48,7 +48,10 @@ def fusionar(origen, senales, pesos):
         maximo = max(candidatos.values(), default=1)
         for i, valor in candidatos.items():
             normalizado = valor / maximo
-            fila = totales.setdefault(i, {"id": i, "puntaje": 0.0})
+            if i not in totales:
+                totales[i] = {"id": i, "puntaje": 0.0, "senales": dict.fromkeys(senales, 0.0)}
+            fila = totales[i]
+            fila["senales"][nombre] = normalizado
             fila["puntaje"] += normalizado * (pesos[nombre] / suma)
     validos = (fila for fila in totales.values() if fila["puntaje"] > 0)
     return sorted(validos, key=lambda fila: (-fila["puntaje"], fila["id"]))[:10]
