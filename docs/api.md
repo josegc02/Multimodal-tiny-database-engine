@@ -184,6 +184,6 @@ la primera petición. Consulte [instalación, caché y evaluación](extractor_mo
 ## Límites
 
 - Atiende **una petición a la vez**, porque el motor tiene una sola sesión SQL. Alcanza para la demo; una consulta lenta hace esperar a las demás.
-- Al iniciar, los índices se reconstruyen desde las tablas. Con miles de imágenes, el HNSW puede tardar alrededor de un minuto en estar listo.
+- Al iniciar, los índices se reconstruyen desde las tablas. Con la tienda completa (7,995 productos y 714 mil compras) el arranque tarda ~6 minutos, y el índice MobileNet se construye en segundo plano ~50 s más: **levante la API unos 7 minutos antes de la demo**. Después, una recomendación tarda ~0.2 s.
 - El asistente tarda lo que tarde el LLM: con `gemini-3.1-flash-lite`, de 3 a 5 segundos por pregunta. Mientras espera al LLM no bloquea las demás peticiones; solo las consultas SQL van de a una.
 - **Cuota gratuita de Gemini**: Google la muestra por proyecto en AI Studio y la renueva cada minuto y cada día (a medianoche del Pacífico). Cada pregunta gasta 2 llamadas, o 1 con `BD2_PALABRAS_CLAVE=local`. Si se acaba, el endpoint responde `502` con un mensaje claro; si Google está saturado (`503`), se reintenta solo hasta 3 veces.

@@ -95,6 +95,65 @@ optimizador del PR #118 (en un PR aparte porque afectan a todas las consultas):
 El JOIN del motor devuelve los mismos pares que el cálculo en Python en 20 de 20
 productos. Sin #118, estas recomendaciones son correctas pero lentas.
 
+## HNSW frente a búsqueda exacta
+
+`python -m benchmarks.tienda.hnsw` (escribe `hnsw.json`): el HNSW del motor
+(`engine/indexes/hnsw.py`) sobre los 7,995 productos, 500 consultas, contra la
+búsqueda exacta por coseno. La app usa **M=8, ef_construction=50** y en
+recomendaciones busca **k=102 con ef_search=102** (en negrita).
+
+| Vector | M / ef_construction | Construcción | k | ef_search | Recall@k | ms/consulta | Nodos visitados | P@10 de tipo |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| MobileNet (1280 dim.) | 8 / 50 | 63 s | 10 | 10 | 0.884 | 3.2 | 142 (2 %) | 72.6 % |
+| | | | 10 | 50 | 0.969 | 8.3 | 368 (5 %) | 72.8 % |
+| | | | **102** | **102** | **0.931** | **15.6** | **616 (8 %)** | **72.6 %** |
+| | | | 102 | 400 | 0.985 | 30.4 | 1,589 (20 %) | 72.7 % |
+| | 16 / 100 | 76 s | 10 | 50 | 0.991 | 4.6 | 553 (7 %) | 72.7 % |
+| | | | 102 | 102 | 0.972 | 10.1 | 907 (11 %) | 72.7 % |
+| SIFT + BoVW (1024 dim.) | 8 / 50 | 38 s | 10 | 10 | 0.663 | 1.5 | 176 (2 %) | 55.5 % |
+| | | | 10 | 50 | 0.846 | 3.8 | 464 (6 %) | 56.3 % |
+| | | | **102** | **102** | **0.811** | **6.9** | **767 (10 %)** | **56.8 %** |
+| | | | 102 | 400 | 0.951 | 20.1 | 1,831 (23 %) | 56.6 % |
+| | 16 / 100 | 72 s | 102 | 102 | 0.913 | 10.5 | 1,210 (15 %) | 56.8 % |
+
+Búsqueda exacta: P@10 de tipo 72.6 % (MobileNet) y 56.7 % (SIFT); 4.3 y 3.7 ms
+vectorizada con numpy; 36.9 y 20.0 ms fila por fila, como un recorrido secuencial
+del motor.
+
+- **La aproximación no cambia la recomendación**: con la configuración de la app,
+  el HNSW pierde el 7 % de los vecinos exactos de MobileNet (19 % en SIFT), pero el
+  acierto de tipo es el mismo que con la búsqueda exacta. Los vecinos que se
+  pierden son casi tan parecidos como los que encuentra.
+- **SIFT necesita más ef_search que MobileNet** para el mismo recall: sus
+  similitudes están más juntas (todas las fotos se parecen un poco), y el grafo
+  distingue peor a los vecinos.
+- **Con 8 mil productos, la búsqueda exacta vectorizada (4 ms) es más rápida que
+  nuestro HNSW en Python puro** (16 ms): el HNSW gana frente a un recorrido fila por
+  fila (37 ms) y escala mejor, porque solo visita el 8 % de los nodos; la búsqueda
+  exacta crece en proporción al catálogo.
+- M=16 da más recall con el mismo ef_search a cambio de una construcción más larga.
+  Para la recomendación no hace falta: el acierto ya es el de la búsqueda exacta.
+- Los tiempos varían entre corridas por la carga de la máquina (hasta ±40 %); el
+  recall y los nodos visitados son deterministas (semilla 42).
+
+## Latencia de la API con los datos reales
+
+`GET /recomendaciones/{id}` con la tienda cargada en `data/app` (7,995 productos,
+714 mil compras), ya con #118:
+
+| Momento | Tiempo |
+|---|---:|
+| Arranque de la API (reconstruye los índices del motor) | ~6 min |
+| Índice MobileNet, construido en segundo plano al arrancar | ~50 s más |
+| Recomendación (mediana de 8 productos; mín.–máx.) | **229 ms** (150–624 ms) |
+| Recomendación con `vector_imagen=sift` | 256 ms |
+
+Antes de estas mejoras una recomendación tardaba ~4.7 s: la revisión de los 7,995
+archivos de imagen en cada petición (3.5 s), el `SELECT` del catálogo para esa
+revisión (0.6 s) y la categoría por recorrido de la tabla (0.6 s). Ahora los
+archivos se revisan como mucho una vez por minuto y la categoría de cada candidato
+se busca por clave primaria.
+
 ## Solo la métrica de tipo (exploración previa)
 
 Con 505 consultas de prueba y pesos elegidos en validación, sin la señal de compras:
@@ -118,4 +177,4 @@ etiqueta.
   de la señal: puede favorecer un poco a la señal filtrada.
 - 18 % de las consultas de tipo tiene un casi duplicado en el catálogo; sin ellas las
   cifras bajan cerca de un punto y el orden no cambia.
-- En la app la imagen se busca con HNSW, no exacta.
+- En la app la imagen se busca con HNSW, no exacta; ver la sección de HNSW: no cambia el acierto.
