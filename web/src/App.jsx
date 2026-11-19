@@ -72,11 +72,10 @@ export default function App() {
         </div>
 
         <div className="motor">
-          <strong>Motor</strong>
+          <strong>Estado del asistente</strong>
           {errorEstado && <span style={{ color: 'var(--negativo)' }}>La API no responde</span>}
-          {estado && !estado.corpus && <span>Sin corpus: carga los papers con rag.corpus</span>}
+          {estado && !estado.corpus && <span>Biblioteca sin documentos</span>}
           {estado?.corpus && <span className="num">{entero(estado.documentos)} documentos · {entero(estado.fragmentos)} fragmentos</span>}
-          {estado?.corpus && <span>Índice SPIMI en fragmentos.texto</span>}
           {estado && (
             <span>
               <span className="punto" style={{ background: estado.llm ? 'var(--positivo)' : 'var(--gris)' }} />
