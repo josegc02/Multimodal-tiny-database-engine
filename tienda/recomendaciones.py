@@ -57,8 +57,14 @@ def misma_categoria(motor, categoria, candidatos):
     """
     if not categoria or not candidatos:
         return {}
-    filas = consultar(motor, f"SELECT id FROM productos WHERE categoria = {literal(categoria)}")
-    return {fila["id"]: 1 for fila in filas if fila["id"] in candidatos}
+    # Una búsqueda por clave primaria por candidato (~300): TEXT solo admite índices
+    # SPIMI, así que filtrar por categoría recorrería toda la tabla (~570 ms).
+    senal = {}
+    for i in sorted(candidatos):
+        filas = consultar(motor, f"SELECT categoria FROM productos WHERE id = {i}")
+        if filas and filas[0]["categoria"] == categoria:
+            senal[i] = 1
+    return senal
 
 
 def fusionar(origen, senales, pesos, metodo="rrf", bonos=("categoria",)):
