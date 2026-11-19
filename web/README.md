@@ -19,11 +19,13 @@ npm run dev                                      # http://localhost:5173
 
 La API se busca en `http://127.0.0.1:8000`; para otra dirección, crea `web/.env.local` con `VITE_API_URL=http://...`.
 
+Para la exposición, `VITE_TRAZA_ABIERTA=1` deja abierto por defecto el panel "Cómo se respondió" (sin la variable, cada navegador recuerda si lo abrió).
+
 ## Pantallas
 
 | Ruta | Qué hace |
 | --- | --- |
-| `#/asistente` | Preguntar: respuesta con citas `[n]`, fuentes con su página y puntaje BM25, y "Cómo se respondió" (palabras clave, el SQL real y los tiempos) |
+| `#/asistente` | Preguntar: respuesta con citas `[n]` (con vista previa de la fuente al pasar el mouse) y los documentos en que se basa; fuentes con su página, su puntaje BM25 y las palabras clave resaltadas; y "Cómo se respondió", plegable: el flujo en 4 pasos, el gráfico de los candidatos de BM25 (elegidos y por qué se descartó el resto), dónde se fue el tiempo y el SQL real |
 | `#/asistente/p/<pregunta>` | Abre y pregunta de inmediato; sirve para preparar enlaces de la demo |
 | `#/asistente/biblioteca` | Los 259 documentos, con búsqueda y filtros por tipo y tema |
 | `#/asistente/documento/<id>` | Un documento: abstract, fragmentos y enlaces al PDF en cada página |
