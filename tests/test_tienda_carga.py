@@ -1,6 +1,7 @@
 """El esquema de la tienda debe cargar datos reproducibles y consultables."""
 
 import csv
+import io
 import json
 import tempfile
 import unittest
@@ -11,13 +12,43 @@ import numpy as np
 
 from tienda import carga
 from tienda.amazon import CAMPOS_COMPRAS
-from tienda.comun import escribir_csv
+from tienda.comun import descargar, escribir_csv
 from tienda.imagenes import CAMPOS_PRODUCTOS
 from tienda.osm import CAMPOS_TIENDAS
 from tienda.stock import generar
 
 
 class TestTiendaCarga(unittest.TestCase):
+    def test_descarga_reanuda_sin_perder_el_archivo_parcial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            destino = Path(tmp) / "datos.gz"
+            (Path(tmp) / "datos.gz.part").write_bytes(b"abc")
+
+            class Respuesta(io.BytesIO):
+                status = 206
+                headers = {"Content-Range": "bytes 3-5/6"}
+
+            def abrir(request, timeout):
+                self.assertEqual(request.get_header("Range"), "bytes=3-")
+                return Respuesta(b"def")
+
+            descargar("https://example.org/datos.gz", destino, abrir=abrir, log=lambda _: None)
+            self.assertEqual(destino.read_bytes(), b"abcdef")
+
+    def test_descarga_incompleta_conserva_part_y_no_publica_destino(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            destino = Path(tmp) / "datos.gz"
+
+            class Respuesta(io.BytesIO):
+                status = 200
+                headers = {"Content-Length": "6"}
+
+            with self.assertRaisesRegex(IOError, "Descarga incompleta"):
+                descargar("https://example.org/datos.gz", destino,
+                          abrir=lambda request, timeout: Respuesta(b"abc"), log=lambda _: None)
+            self.assertFalse(destino.exists())
+            self.assertEqual((Path(tmp) / "datos.gz.part").read_bytes(), b"abc")
+
     def test_stock_es_estable_y_todos_los_productos_tienen_stock(self):
         productos = [{"id": "2"}, {"id": "1"}, {"id": "3"}]
         tiendas = [{"id": "20"}, {"id": "10"}, {"id": "30"}]

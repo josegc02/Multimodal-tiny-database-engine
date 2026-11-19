@@ -7,6 +7,7 @@ Luego: python -m tienda.carga preparar; python -m tienda.carga cargar --datos da
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from tienda.amazon import CAMPOS_COMPRAS, COMPRAS, PRODUCTOS
@@ -96,6 +97,10 @@ def preparar(productos=PRODUCTOS, compras=COMPRAS, tiendas=TIENDAS,
 
 
 def cargar(sql=SQL, datos=ROOT / "data" / "app"):
+    # La cuantización BoVW hace muchos productos matriciales pequeños. BLAS con
+    # decenas de hilos tiene una sobrecarga enorme aquí; fijarlo antes de
+    # importar el motor acelera la carga sin cambiar los resultados.
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     from frontend.motor import Motor
 
     sentencias = [linea.strip() for linea in Path(sql).read_text(encoding="utf-8").splitlines()

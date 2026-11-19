@@ -4,6 +4,11 @@ La opción B usa una categoría de Amazon Reviews 2023 (`Video_Games`) y una
 instantánea de tiendas reales de Lima tomada de OpenStreetMap. El stock se
 genera con una semilla fija: **no representa inventario real**.
 
+En la validación completa del 18 de noviembre de 2026, la selección de 8 000
+candidatos produjo 7 995 productos con imagen válida (5 descartados). La carga
+terminó con 100 000 compras de 11 276 usuarios, 623 tiendas y 15 838 filas de
+stock, con semilla 100.
+
 ## Reproducir el dataset
 
 Ejecutar desde la raíz del repositorio, con `requirements.txt` instalado y
@@ -31,11 +36,17 @@ y `metadata.json` con conteos, semilla y SHA-256. Cada producto se asigna a
 una, dos o tres tiendas elegidas con semilla fija; cada par recibe 1–20
 unidades. El orden de los CSV de entrada no afecta al stock generado.
 
+Las descargas de metadata y reseñas se guardan primero como `.part`; si la
+conexión se corta, ejecutar el mismo comando de nuevo reanuda la descarga
+cuando el servidor admite solicitudes `Range`.
+
 `cargar` crea las tablas e índices en la carpeta indicada. Rechaza una carpeta
 que ya contenga las tablas de la tienda. Para repetir la carga, usar **otra**
 carpeta de datos; el script no borra datos existentes. La ruta de cada imagen
 en `productos.csv` se genera para la máquina que ejecutó la descarga, así que
 hay que regenerar ese CSV al mover el dataset a otro equipo.
+La carga fija un hilo de OpenBLAS por defecto antes de importar el motor para
+evitar la sobrecarga de muchos productos matriciales pequeños de BoVW.
 
 | Archivo | Versionado | Contenido |
 |---|---|---|
