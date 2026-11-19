@@ -46,7 +46,14 @@ PROMPT_RESPUESTA = (
     "- Sé breve: uno a tres párrafos."
 )
 
-# Glosario para el modo sin LLM: palabras de la pregunta (sin tildes) -> términos en inglés.
+# Modo sin LLM. Primero se reemplazan frases de varias palabras y luego cada
+# palabra de la pregunta (en minúsculas y sin tildes) con el glosario.
+FRASES = (
+    (r"\barbol(?:es)? b\+?(?![a-z0-9])", " b-tree "),
+    (r"\bbases? de datos\b", " database "),
+    (r"\bsensibles? a la localidad\b", " locality sensitive "),
+)
+
 GLOSARIO = {
     "indice": "index", "indices": "index", "invertido": "inverted", "busqueda": "search",
     "buscar": "search", "recuperacion": "retrieval", "consulta": "query", "consultas": "query",
@@ -69,6 +76,10 @@ GLOSARIO = {
     "memoria": "memory", "disco": "disk", "compresion": "compression", "escalable": "scalable",
     "particion": "partition", "particiones": "partition", "texto": "text", "imagen": "image",
     "imagenes": "image", "audio": "audio", "palabra": "word", "palabras": "word",
+    "cardinalidad": "cardinality", "estima": "estimation", "estimar": "estimation",
+    "estimacion": "estimation", "selectividad": "selectivity", "localidad": "locality",
+    "aprendida": "learned", "aprendidas": "learned", "rango": "range", "escritura": "write",
+    "lectura": "read", "transaccion": "transaction", "transacciones": "transaction",
 }
 
 PALABRAS_VACIAS = set(
@@ -76,7 +87,8 @@ PALABRAS_VACIAS = set(
     "los un una unos unas y o u e a al en es son se su sus lo le les mas menos muy ya hay "
     "explica explicame dime describe define cuentame funciona funcionan sirve diferencia "
     "diferencias ventaja ventajas usa usan uso usar tiene tienen hace hacen esto este esta "
-    "estos estas eso ese esa qué cuál cómo".split()
+    "estos estas eso ese esa frente versus vs puede pueden debe deben cada otro otra "
+    "otros otras mejor peor".split()
 )
 
 
@@ -152,8 +164,11 @@ def palabras_clave_locales(pregunta: str) -> str:
     Las palabras que no están en el glosario se conservan: suelen ser siglas o
     términos que ya están en inglés (HNSW, BM25, B+tree, LSM...).
     """
+    texto = _sin_tildes(pregunta).lower()
+    for patron, reemplazo in FRASES:
+        texto = re.sub(patron, reemplazo, texto)
     terminos = []
-    for palabra in _terminos(pregunta):
+    for palabra in _terminos(texto):
         if palabra in PALABRAS_VACIAS or len(palabra) < 2:
             continue
         traducida = GLOSARIO.get(palabra, palabra)

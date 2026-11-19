@@ -59,6 +59,13 @@ class TestFunciones(unittest.TestCase):
         consulta = palabras_clave_locales("¿Cómo funciona la búsqueda de vecinos cercanos en HNSW?")
         self.assertEqual(consulta, "search neighbors nearest hnsw")
 
+    def test_palabras_clave_locales_reconoce_frases(self):
+        self.assertEqual(palabras_clave_locales("¿Índice aprendido frente a un árbol B+?"),
+                         "index learned b-tree")
+        self.assertEqual(palabras_clave_locales("bases de datos vectoriales"), "database vector")
+        self.assertEqual(palabras_clave_locales("¿Cómo se estima la cardinalidad?"),
+                         "estimation cardinality")
+
     def test_palabras_clave_limpia_la_salida_del_llm(self):
         llm = LLMFalso(palabras="HNSW, graph; 'search'\nnearest-neighbor.")
         self.assertEqual(palabras_clave("pregunta", llm), "hnsw graph search nearest-neighbor")
