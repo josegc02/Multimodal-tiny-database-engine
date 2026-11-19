@@ -32,20 +32,24 @@ from typing import Callable, Protocol
 MODELO_CLAUDE = "claude-haiku-5-5"
 MODELO_GEMINI = "gemini-3.1-flash-lite"  # el más rápido de la capa gratuita (~2-3 s)
 PROVEEDORES = ("gemini", "claude", "ninguno")
-MAX_PALABRAS_CLAVE = 16
+MAX_PALABRAS_CLAVE = 16  # modo sin LLM: todas las traducidas de la pregunta
+MAX_PALABRAS_LLM = 5     # con LLM: solo las más específicas (benchmarks/asistente)
 MAX_POR_PAPER = 2      # fragmentos de un mismo documento en la respuesta, para variar las fuentes
 CANDIDATOS_POR_K = 5   # se piden k * 5 fragmentos a BM25 y luego se aplica MAX_POR_PAPER
+UMBRAL_RELATIVO = 0.6  # se descarta un fragmento con menos del 60 % del puntaje del primero
 SIN_FRAGMENTOS = "No encontré fragmentos de los papers relacionados con la pregunta."
 
-# Bilingüe a propósito: los papers están en inglés y las clases del curso, en español.
+# Pocas palabras y en inglés, medido en benchmarks/asistente: cada término de
+# más (y cada término en español) suma puntaje a fragmentos que no tratan el
+# tema. Las diapositivas del curso igual aparecen, porque usan los términos
+# técnicos en inglés (buffer manager, write-ahead log, B+ tree...).
 PROMPT_PALABRAS_CLAVE = (
-    "Eres parte de un buscador BM25 sobre bases de datos y recuperación de información. "
-    "El corpus mezcla papers académicos en inglés y diapositivas de clase en español. "
-    "Convierte la pregunta del usuario en palabras clave para ese buscador: primero 4 a 8 "
-    "en inglés (términos técnicos, siglas como HNSW o BM25, sinónimos útiles) y luego 3 a 6 "
-    "en español como aparecerían en una clase (por ejemplo: fragmentacion, pagina, indice). "
-    "No incluyas palabras vacías como 'de', 'the' o 'como'. Responde solo con las palabras "
-    "separadas por espacios, sin explicación ni puntuación."
+    "Eres parte de un buscador BM25 sobre papers académicos y clases de bases de datos y "
+    "recuperación de información. Convierte la pregunta del usuario en 5 palabras clave en "
+    "inglés. Empieza por el término técnico de la pregunta traducido literalmente (buffer "
+    "manager, extendible hashing, horizontal fragmentation) o su sigla (HNSW, SPIMI, BM25), "
+    "y sigue con términos técnicos o sinónimos útiles. No incluyas palabras vacías. Responde "
+    "solo con las palabras separadas por espacios, sin explicación ni puntuación."
 )
 
 PROMPT_RESPUESTA = (
@@ -231,33 +235,29 @@ def _terminos(texto: str) -> list[str]:
 def palabras_clave_locales(pregunta: str) -> str:
     """Modo sin LLM: quita palabras vacías y traduce con el glosario.
 
-    Primero van los términos en inglés (para los papers) y después las palabras
-    originales en español que se tradujeron (para las clases del curso). Las
-    palabras que no están en el glosario se conservan una vez: suelen ser siglas o
-    términos que ya están en inglés (HNSW, BM25, B+tree, LSM...).
+    Las palabras que no están en el glosario se conservan: suelen ser siglas o
+    términos que ya están en inglés (HNSW, BM25, B+tree, LSM...). No se agregan
+    las originales en español: en benchmarks/asistente bajaban la precisión@5
+    de 0.83 a 0.64.
     """
     texto = _sin_tildes(pregunta).lower()
-    originales = [p for p in _terminos(texto) if p not in PALABRAS_VACIAS and len(p) >= 2]
     for patron, reemplazo in FRASES:
         texto = re.sub(patron, reemplazo, texto)
-    ingles, espanol = [], []
+    terminos = []
     for palabra in _terminos(texto):
         if palabra in PALABRAS_VACIAS or len(palabra) < 2:
             continue
         traducida = GLOSARIO.get(palabra, palabra)
-        if traducida not in ingles:
-            ingles.append(traducida)
-    for palabra in originales:
-        if palabra not in ingles and palabra not in espanol:
-            espanol.append(palabra)
-    return " ".join((ingles + espanol)[:MAX_PALABRAS_CLAVE])
+        if traducida not in terminos:
+            terminos.append(traducida)
+    return " ".join(terminos[:MAX_PALABRAS_CLAVE])
 
 
 def palabras_clave(pregunta: str, llm: LLM | None) -> str:
     """Palabras clave en inglés para MATCH. Siempre devuelve solo [a-z0-9-] y espacios."""
     if llm is not None:
         consulta = " ".join(_terminos(llm.completar(PROMPT_PALABRAS_CLAVE, pregunta, 4000))
-                            [:MAX_PALABRAS_CLAVE])
+                            [:MAX_PALABRAS_LLM])
         if consulta:
             return consulta
     return palabras_clave_locales(pregunta)
@@ -277,7 +277,9 @@ def recuperar(ejecutar: Callable, consulta: str, k: int) -> list[dict]:
     """Top-k fragmentos por BM25, cada uno con el título, autores, año y URL de su paper.
 
     Se toman a lo más MAX_POR_PAPER fragmentos de cada documento, para que un paper
-    largo que repite los términos no ocupe todo el top-k.
+    largo que repite los términos no ocupe todo el top-k, y se descartan los que
+    no llegan a UMBRAL_RELATIVO del puntaje del primero: suelen coincidir solo en
+    un término general.
     """
     if not consulta:
         return []
@@ -285,8 +287,11 @@ def recuperar(ejecutar: Callable, consulta: str, k: int) -> list[dict]:
         "SELECT id, paper_id, pagina, pagina_fin, texto, SCORE() AS puntaje FROM fragmentos "
         f"WHERE MATCH(texto, '{consulta}') USING BM25 ORDER BY puntaje DESC "
         f"LIMIT {int(k) * CANDIDATOS_POR_K}"))
+    minimo = UMBRAL_RELATIVO * float(candidatos[0]["puntaje"]) if candidatos else 0.0
     fragmentos, por_paper = [], {}
     for fragmento in candidatos:
+        if float(fragmento["puntaje"]) < minimo:
+            break  # vienen ordenados: los siguientes tampoco llegan
         usados = por_paper.get(fragmento["paper_id"], 0)
         if usados < MAX_POR_PAPER:
             por_paper[fragmento["paper_id"]] = usados + 1
