@@ -55,3 +55,27 @@ def fusionar(origen, senales, pesos):
             fila["puntaje"] += normalizado * (pesos[nombre] / suma)
     validos = (fila for fila in totales.values() if fila["puntaje"] > 0)
     return sorted(validos, key=lambda fila: (-fila["puntaje"], fila["id"]))[:10]
+
+
+def cercanas(motor, lat, lon, producto_id=None, radio=None, limite=10):
+    punto = f"POINT({lat:.12f}, {lon:.12f})"
+    distancia = f"distancia(ubicacion, {punto})"
+    filtro = "" if radio is None else f"WHERE {distancia} <= {radio:.8f}"
+    stock = None
+    if producto_id is not None:
+        filas = consultar(motor, f"SELECT tienda_id, unidades FROM stock "
+                                 f"WHERE producto_id = {producto_id} AND unidades > 0")
+        stock = {fila["tienda_id"]: fila["unidades"] for fila in filas}
+        if not stock:
+            return []
+    # Ampliar k si las tiendas más próximas no tienen el producto.
+    k = limite
+    while True:
+        filas = consultar(motor, f"SELECT id, nombre, ubicacion, {distancia} AS distancia_m "
+                                 f"FROM tiendas {filtro} ORDER BY {distancia} LIMIT {k}")
+        if stock is None:
+            return filas
+        disponibles = [{**fila, "unidades": stock[fila["id"]]} for fila in filas if fila["id"] in stock]
+        if len(disponibles) >= limite or len(filas) < k:
+            return disponibles[:limite]
+        k *= 2
