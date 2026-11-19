@@ -1,3 +1,5 @@
+import gzip
+import json
 import threading
 import numpy as np
 from fastapi.testclient import TestClient
@@ -108,3 +110,37 @@ def test_tienda_http(tmp_path, monkeypatch):
         assert [t["id"] for t in cliente.get("/tiendas/cercanas?lat=0&lon=0&radio=100").json()] == [1]
         filas = cliente.get("/catalogo?q=racing&categoria=games&precio_min=20").json()
         assert [f["id"] for f in filas] == [3]
+
+
+def test_rrf_no_depende_de_la_escala():
+    # BM25 sin tope frente a cosenos juntos: con RRF solo cuenta la posición.
+    senales = {"texto": {1: 900.0, 2: 3.0, 3: 2.0}, "imagen": {3: 0.91, 2: 0.90, 1: 0.10}}
+    filas = fusionar(0, senales, {"texto": 1, "imagen": 1})
+    assert [f["id"] for f in filas] == [1, 3, 2]
+    maximo = fusionar(0, senales, {"texto": 1, "imagen": 1}, metodo="max")
+    assert maximo[0]["id"] == 1 and maximo[0]["puntaje"] > 0.5
+
+
+def test_rrf_empates_por_id_y_bono_de_categoria():
+    senales = {"compras": {7: 1, 4: 1, 9: 2}, "categoria": {7: 1}}
+    filas = fusionar(0, senales, {"compras": 1, "categoria": 0})
+    assert [f["id"] for f in filas] == [9, 4, 7]  # empate 4 y 7: primero el id menor
+    filas = fusionar(0, senales, {"compras": 1, "categoria": 0.25})
+    assert [f["id"] for f in filas][:2] == [7, 9]  # el bono suma sin posición
+    assert filas[1]["senales"]["categoria"] == 0
+
+
+def test_compras_solo_usuarios_de_2_a_20(tmp_path):
+    from tienda.amazon import compras
+    resenas = tmp_path / "r.jsonl.gz"
+    lineas = [{"user_id": "uno", "parent_asin": "A", "verified_purchase": True, "timestamp": 1000}]
+    lineas += [{"user_id": "dos", "parent_asin": a, "verified_purchase": True, "timestamp": 2000} for a in "AB"]
+    lineas += [{"user_id": "muchos", "parent_asin": f"P{i}", "verified_purchase": True, "timestamp": 3000}
+               for i in range(21)]
+    lineas += [{"user_id": "dos", "parent_asin": "C", "verified_purchase": False, "timestamp": 2000}]
+    with gzip.open(resenas, "wt", encoding="utf-8") as f:
+        f.writelines(json.dumps(x) + "\n" for x in lineas)
+    productos = [{"asin": a, "id": i} for i, a in enumerate(["A", "B", "C"] + [f"P{i}" for i in range(21)], 1)]
+    filas = compras(resenas, productos)
+    assert {(f["usuario"], f["producto_id"]) for f in filas} == {("dos", 1), ("dos", 2)}
+    assert all(f["fecha"] == 2 for f in filas)  # milisegundos -> segundos
