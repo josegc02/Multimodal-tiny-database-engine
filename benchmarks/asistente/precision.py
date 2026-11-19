@@ -28,6 +28,7 @@ import hashlib
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 from api import asistente
@@ -36,6 +37,7 @@ from frontend.motor import Motor
 DIR = Path(__file__).resolve().parent
 PREGUNTAS = DIR / "preguntas.json"
 CACHE = DIR / "cache_palabras.json"
+PAUSA = 4.0  # segundos entre llamadas al LLM
 
 
 def es_relevante(texto: str, evidencia: list[str]) -> bool:
@@ -44,12 +46,21 @@ def es_relevante(texto: str, evidencia: list[str]) -> bool:
 
 
 def palabras_en_cache(pregunta: str, llm, cache: dict) -> str:
-    """Las palabras clave del LLM, guardadas por (prompt, pregunta)."""
+    """Las palabras clave como las arma el asistente, con la parte del LLM en caché.
+
+    Se guarda solo lo que responde el LLM (por versión del prompt y pregunta); los
+    cognados de la pregunta se agregan en cada medición, como en ``palabras_clave``.
+    """
     version = hashlib.sha1(asistente.PROMPT_PALABRAS_CLAVE.encode("utf-8")).hexdigest()[:10]
     clave = f"{version}|{pregunta}"
     if clave not in cache:
-        cache[clave] = asistente.palabras_clave(pregunta, llm)
-    return cache[clave]
+        cache[clave] = asistente._palabras_del_llm(
+            llm.completar(asistente.PROMPT_PALABRAS_CLAVE, pregunta, 4000))
+        time.sleep(PAUSA)  # el plan gratuito de Gemini limita las peticiones por minuto
+    ingles = cache[clave]
+    if not ingles:
+        return asistente.palabras_clave_locales(pregunta)
+    return " ".join([ingles] + asistente.cognados(pregunta, ingles.split()))
 
 
 def medir(ejecutar, preguntas, obtener_palabras, k=5, detalle=False):
