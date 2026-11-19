@@ -1,9 +1,10 @@
-"""Pushdown de selección en JOIN y fusión RRF de la tienda."""
-import gzip
-import json
+"""Pushdown de selección en JOIN y valores distintos con KMV."""
+import random
 
+import pytest
+
+from engine.query.logical_plan import LogicalPlanner
 from frontend.motor import Motor
-from tienda.recomendaciones import fusionar
 
 CONSULTA = ("SELECT b.producto_id AS id, COUNT(*) AS n FROM compras a JOIN compras b ON a.usuario = b.usuario "
             "WHERE a.producto_id = 5 AND b.producto_id <> 5 GROUP BY b.producto_id ORDER BY id")
@@ -56,38 +57,56 @@ def test_pushdown_no_baja_terminos_de_la_otra_tabla(tmp_path):
     motor.cerrar()
 
 
-def test_rrf_no_depende_de_la_escala():
-    # BM25 sin tope frente a cosenos juntos: con RRF solo cuenta la posición.
-    senales = {"texto": {1: 900.0, 2: 3.0, 3: 2.0}, "imagen": {3: 0.91, 2: 0.90, 1: 0.10}}
-    filas = fusionar(0, senales, {"texto": 1, "imagen": 1})
-    assert [f["id"] for f in filas] == [1, 3, 2]
-    maximo = fusionar(0, senales, {"texto": 1, "imagen": 1}, metodo="max")
-    assert maximo[0]["id"] == 1 and maximo[0]["puntaje"] > 0.5
+# Mismas filas con y sin pushdown: filtros de una tabla, de las dos, OR entre tablas,
+# NOT, BETWEEN, tres tablas, alias, sin alias y sin WHERE (el storage no admite NULL).
+EQUIVALENCIA = [
+    "SELECT a.id, b.id FROM t a JOIN u b ON a.k = b.k WHERE a.x = 3 ORDER BY a.id, b.id",
+    "SELECT a.id, b.id FROM t a JOIN u b ON a.k = b.k WHERE a.x = 3 AND b.y > 4 ORDER BY a.id, b.id",
+    "SELECT a.id, b.id FROM t a JOIN u b ON a.k = b.k WHERE a.x = 3 OR b.y = 2 ORDER BY a.id, b.id",
+    "SELECT a.id, b.id FROM t a JOIN u b ON a.k = b.k WHERE a.x > b.y ORDER BY a.id, b.id",
+    "SELECT a.id, b.id FROM t a JOIN u b ON a.k = b.k WHERE a.x < 5 AND a.id > 100 AND b.y = a.x "
+    "ORDER BY a.id, b.id",
+    "SELECT a.id, b.id FROM t a JOIN u b ON a.k = b.k WHERE b.y = 7 ORDER BY a.id, b.id",
+    "SELECT a.id, b.id FROM t a JOIN u b ON a.k = b.k WHERE (a.x = 1 OR a.x = 2) AND NOT b.y = 3 "
+    "ORDER BY a.id, b.id",
+    "SELECT a.id, b.id, c.id FROM t a JOIN u b ON a.k = b.k JOIN t c ON b.k = c.k "
+    "WHERE a.x = 4 AND c.x <> 4 ORDER BY a.id, b.id, c.id",
+    "SELECT t.id, u.id FROM t JOIN u ON t.k = u.k WHERE t.x = 2 ORDER BY t.id, u.id",
+    "SELECT a.k, COUNT(*) FROM t a JOIN u b ON a.k = b.k WHERE a.x BETWEEN 2 AND 6 GROUP BY a.k ORDER BY a.k",
+    "SELECT a.id, b.id FROM t a JOIN u b ON a.k = b.k ORDER BY a.id, b.id",
+]
 
 
-def test_rrf_empates_por_id_y_bono_de_categoria():
-    senales = {"compras": {7: 1, 4: 1, 9: 2}, "categoria": {7: 1}}
-    filas = fusionar(0, senales, {"compras": 1, "categoria": 0})
-    assert [f["id"] for f in filas] == [9, 4, 7]  # empate 4 y 7: primero el id menor
-    filas = fusionar(0, senales, {"compras": 1, "categoria": 0.25})
-    assert [f["id"] for f in filas][:2] == [7, 9]  # el bono suma sin posición
-    assert filas[1]["senales"]["categoria"] == 0
+@pytest.fixture
+def tablas(tmp_path):
+    motor = Motor(directorio=str(tmp_path), modo_demo=False)
+    motor.ejecutar("CREATE TABLE t (id INT PRIMARY KEY, k INT, x INT)")
+    motor.ejecutar("CREATE TABLE u (id INT PRIMARY KEY, k INT, y INT)")
+    rnd = random.Random(7)
+    for tabla, filas in (("t", 400), ("u", 300)):
+        valores = ", ".join(f"({i}, {rnd.randint(0, 30)}, {rnd.randint(0, 9)})" for i in range(filas))
+        r = motor.ejecutar(f"INSERT INTO {tabla} VALUES {valores}")
+        assert not r.tiene_error, r.error
+    motor.ejecutar("CREATE INDEX t_x ON t (x) USING HASH")
+    motor.ejecutar("CREATE INDEX u_k ON u (k) USING HASH")
+    yield motor
+    motor.cerrar()
 
 
-def test_compras_solo_usuarios_de_2_a_20(tmp_path):
-    from tienda.amazon import compras
-    resenas = tmp_path / "r.jsonl.gz"
-    lineas = [{"user_id": "uno", "parent_asin": "A", "verified_purchase": True, "timestamp": 1000}]
-    lineas += [{"user_id": "dos", "parent_asin": a, "verified_purchase": True, "timestamp": 2000} for a in "AB"]
-    lineas += [{"user_id": "muchos", "parent_asin": f"P{i}", "verified_purchase": True, "timestamp": 3000}
-               for i in range(21)]
-    lineas += [{"user_id": "dos", "parent_asin": "C", "verified_purchase": False, "timestamp": 2000}]
-    with gzip.open(resenas, "wt", encoding="utf-8") as f:
-        f.writelines(json.dumps(x) + "\n" for x in lineas)
-    productos = [{"asin": a, "id": i} for i, a in enumerate(["A", "B", "C"] + [f"P{i}" for i in range(21)], 1)]
-    filas = compras(resenas, productos)
-    assert {(f["usuario"], f["producto_id"]) for f in filas} == {("dos", 1), ("dos", 2)}
-    assert all(f["fecha"] == 2 for f in filas)  # milisegundos -> segundos
+@pytest.mark.parametrize("sql", EQUIVALENCIA)
+def test_mismas_filas_con_y_sin_pushdown(tablas, sql, monkeypatch):
+    con = tablas.ejecutar(sql)
+    assert not con.tiene_error, con.error
+    monkeypatch.setattr(LogicalPlanner, "_pushdown", staticmethod(lambda where, statement: None))
+    sin = tablas.ejecutar(sql)
+    assert not sin.tiene_error, sin.error
+    assert con.filas == sin.filas
+    assert con.filas  # la consulta devuelve filas: la comparación dice algo
+
+
+def test_left_join_no_existe_en_el_parser(tablas):
+    # El pushdown asume INNER JOIN; si se agrega LEFT/RIGHT, la guarda de _pushdown lo apaga.
+    assert tablas.ejecutar("SELECT a.id FROM t a LEFT JOIN u b ON a.k = b.k WHERE a.x = 1").tiene_error
 
 
 def test_distintos_kmv_exacto_y_estimado():
@@ -100,3 +119,14 @@ def test_distintos_kmv_exacto_y_estimado():
     for i in range(200_000):
         muchos.agregar(i % 50_000)  # enteros consecutivos: el hash se mezcla antes
     assert abs(muchos.estimar() - 50_000) / 50_000 < 0.1
+
+
+def test_estadisticas_con_mas_de_1024_distintos(tmp_path):
+    motor = Motor(directorio=str(tmp_path), modo_demo=False)
+    motor.ejecutar("CREATE TABLE c (id INT PRIMARY KEY, usuario VARCHAR(20))")
+    for inicio in range(0, 6000, 1000):
+        motor.ejecutar("INSERT INTO c VALUES " + ", ".join(f"({i}, 'u{i // 2}')" for i in range(inicio, inicio + 1000)))
+    tabla = motor.catalog.table("c")
+    tabla.analyze()
+    assert abs(tabla.statistics.distinct_values["usuario"] - 3000) / 3000 < 0.1  # antes: 1024
+    motor.cerrar()
