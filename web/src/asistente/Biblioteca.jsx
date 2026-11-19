@@ -59,15 +59,15 @@ export default function Biblioteca() {
           ))}
         </div>
         <label className="filtro-biblioteca">
-          Tema
-          <select className="selector" value={tema} onChange={(e) => setTema(e.target.value)}>
+          <span id="filtro-tema">Tema</span>
+          <select className="selector" aria-labelledby="filtro-tema" value={tema} onChange={(e) => setTema(e.target.value)}>
             <option value="">Todos</option>
             {temas.map((t) => <option key={t} value={t}>{TEMAS[t] ?? t}</option>)}
           </select>
         </label>
         <label className="filtro-biblioteca">
-          Año
-          <select className="selector" value={anio} onChange={(e) => setAnio(e.target.value)}>
+          <span id="filtro-anio">Año</span>
+          <select className="selector" aria-labelledby="filtro-anio" value={anio} onChange={(e) => setAnio(e.target.value)}>
             <option value="">Todos</option>
             {anios.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
@@ -107,7 +107,7 @@ export default function Biblioteca() {
                 {filas.slice(0, visibles).map((d) => (
                   <tr key={d.id}>
                     <td>
-                      <a href={enlace.documento(d.id)} style={{ color: 'var(--tinta)', fontWeight: 500 }}>{d.titulo}</a>
+                      <a href={enlace.documento(d.id)} className="titulo-documento">{d.titulo}</a>
                       <span className="celda-sub">{autoresCortos(d.autores)}</span>
                       <span className="celda-sub ficha-movil">
                         {[esClase(d) ? 'Clase' : 'Paper', TEMAS[d.tema] ?? d.tema, d.anio,

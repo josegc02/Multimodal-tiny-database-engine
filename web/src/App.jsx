@@ -73,7 +73,7 @@ export default function App() {
 
         <div className="motor">
           <strong>Estado del asistente</strong>
-          {errorEstado && <span style={{ color: 'var(--negativo)' }}>La API no responde</span>}
+          {errorEstado && <span style={{ color: '#ffadb4' }}>Servidor sin conexión</span>}
           {estado && !estado.corpus && <span>Biblioteca sin documentos</span>}
           {estado?.corpus && <span className="num">{entero(estado.documentos)} documentos · {entero(estado.fragmentos)} fragmentos</span>}
           {estado && (

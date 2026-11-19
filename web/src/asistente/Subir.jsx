@@ -19,7 +19,7 @@ export default function Subir({ alSubir, preguntarSobre }) {
 
   function elegir(lista) {
     const pdf = lista?.[0];
-    if (!pdf || fase === 'subiendo') return;
+    if (!pdf || fase === 'subiendo' || fase === 'listo') return;
     setArchivo(null);
     if (!pdf.name.toLowerCase().endsWith('.pdf')) { setError(new Error('Elige un archivo PDF.')); setFase('error'); return; }
     if (pdf.size > MAX_MB * 1024 * 1024) { setError(new Error(`El PDF pasa de ${MAX_MB} MB.`)); setFase('error'); return; }
@@ -58,6 +58,7 @@ export default function Subir({ alSubir, preguntarSobre }) {
     setAnio(String(new Date().getFullYear()));
     setTipo('paper');
     setResultado(null);
+    setError(null);
     setFase('elegir');
   }
 
@@ -74,7 +75,7 @@ export default function Subir({ alSubir, preguntarSobre }) {
       <div className="columnas">
         <form className="principal" onSubmit={indexar}>
           <label className="zona" data-encima={encima} data-bloqueado={bloqueado}
-                 onDragOver={(e) => { e.preventDefault(); setEncima(true); }} onDragLeave={() => setEncima(false)}
+                 onDragOver={(e) => { e.preventDefault(); setEncima(!bloqueado); }} onDragLeave={() => setEncima(false)}
                  onDrop={(e) => { e.preventDefault(); setEncima(false); elegir(e.dataTransfer.files); }}>
             <IconoSubir />
             <span style={{ fontWeight: 500 }}>{archivo ? archivo.name : 'Arrastra un PDF o haz clic para elegirlo'}</span>
