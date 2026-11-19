@@ -25,6 +25,7 @@ Las tablas son las del corpus del #97 (``rag/corpus.py``)::
 from __future__ import annotations
 
 import os
+import time
 import re
 import unicodedata
 from typing import Callable, Protocol
@@ -354,12 +355,28 @@ def preguntar(ejecutar: Callable, pregunta: str, k: int = 5, llm: LLM | None = N
     pregunta = pregunta.strip()
     if not pregunta:
         raise ErrorAsistente("La pregunta está vacía")
+    inicio = time.perf_counter()
+    sentencias: list[str] = []
+    ms_motor = 0.0
+
+    def ejecutar_y_medir(sql: str):
+        nonlocal ms_motor
+        t = time.perf_counter()
+        resultado = ejecutar(sql)
+        ms_motor += (time.perf_counter() - t) * 1000
+        sentencias.append(sql)
+        return resultado
+
+    t = time.perf_counter()
     consulta = palabras_clave(pregunta, llm if palabras_con_llm else None)
-    fragmentos = recuperar(ejecutar, consulta, k)
-    respuesta = None
+    s_palabras = time.perf_counter() - t
+    fragmentos = recuperar(ejecutar_y_medir, consulta, k)
+    respuesta, s_redaccion = None, None
     if llm is not None:
+        t = time.perf_counter()
         respuesta = (llm.completar(PROMPT_RESPUESTA, mensaje_respuesta(pregunta, fragmentos), 16000)
                      if fragmentos else SIN_FRAGMENTOS)
+        s_redaccion = round(time.perf_counter() - t, 2) if fragmentos else None
     return {
         "pregunta": pregunta,
         "consulta": consulta,
@@ -367,4 +384,81 @@ def preguntar(ejecutar: Callable, pregunta: str, k: int = 5, llm: LLM | None = N
         "respuesta": respuesta,
         "citas": citas(respuesta, len(fragmentos)) if respuesta else [],
         "fragmentos": fragmentos,
+        # Lo que hizo el motor, para mostrarlo en el front ("Cómo se respondió").
+        "traza": {
+            "sql": sentencias,
+            "ms_motor": round(ms_motor, 1),
+            "documentos": len({f["paper_id"] for f in fragmentos}),
+            "palabras_con_llm": llm is not None and palabras_con_llm,
+            "s_palabras": round(s_palabras, 2) if llm is not None and palabras_con_llm else None,
+            "s_redaccion": s_redaccion,
+            "s_total": round(time.perf_counter() - inicio, 2),
+            "modelo": getattr(llm, "modelo", None),
+        },
+    }
+
+
+# --- Biblioteca y subida de PDF (front del asistente, #99) -------------------
+
+COLUMNAS_PAPER = "id, arxiv_id, titulo, autores, anio, abstract, categoria, fuente, url, licencia, tema"
+
+
+def _literal(valor) -> str:
+    return "'" + str(valor).replace("'", "''") + "'"
+
+
+def listar_documentos(ejecutar: Callable) -> list[dict]:
+    """Todos los documentos (sin abstract) con su número de fragmentos."""
+    conteos = {f["paper_id"]: f["n"] for f in _consultar(
+        ejecutar, "SELECT paper_id, COUNT(*) AS n FROM fragmentos GROUP BY paper_id")}
+    documentos = _consultar(ejecutar, "SELECT id, arxiv_id, titulo, autores, anio, fuente, url, tema FROM papers")
+    for documento in documentos:
+        documento["fragmentos"] = conteos.get(documento["id"], 0)
+    return sorted(documentos, key=lambda d: d["id"])
+
+
+def obtener_documento(ejecutar: Callable, paper_id: int) -> dict | None:
+    """Un documento con su abstract y todos sus fragmentos en orden."""
+    filas = _consultar(ejecutar, f"SELECT {COLUMNAS_PAPER} FROM papers WHERE id = {int(paper_id)}")
+    if not filas:
+        return None
+    documento = filas[0]
+    documento["fragmentos"] = _consultar(ejecutar, (
+        "SELECT id, orden, pagina, pagina_fin, palabras, texto FROM fragmentos "
+        f"WHERE paper_id = {int(paper_id)} ORDER BY orden"))
+    return documento
+
+
+def indexar_pdf(ejecutar: Callable, paginas: list[tuple[int, str]], titulo: str, autores: str,
+                anio: int, tema: str, fuente: str) -> dict:
+    """Fragmenta un PDF ya extraído y lo inserta en papers y fragmentos.
+
+    El índice SPIMI de fragmentos.texto se actualiza con el INSERT. Devuelve el
+    id nuevo y lo que hizo cada paso, para mostrar el avance.
+    """
+    from rag.chunking import fragmentar, quitar_referencias
+
+    titulo = titulo.strip()
+    if not titulo:
+        raise ErrorAsistente("El documento necesita un título")
+    fragmentos = fragmentar(quitar_referencias(paginas))
+    if not fragmentos:
+        raise ErrorAsistente("El PDF no tiene texto extraíble (¿es un escaneo?)")
+    paper_id = int(_consultar(ejecutar, "SELECT MAX(id) AS m FROM papers")[0]["m"] or 0) + 1
+    primer_fragmento = int(_consultar(ejecutar, "SELECT MAX(id) AS m FROM fragmentos")[0]["m"] or 0) + 1
+    t = time.perf_counter()
+    _consultar(ejecutar, (
+        f"INSERT INTO papers ({COLUMNAS_PAPER}) VALUES ({paper_id}, '', {_literal(titulo)}, "
+        f"{_literal(autores.strip())}, {int(anio)}, '', {_literal(fuente)}, {_literal(fuente)}, '', "
+        f"'Subido por el usuario', {_literal(tema)})"))
+    filas = ", ".join(
+        f"({primer_fragmento + i}, {paper_id}, {f['orden']}, {f['pagina']}, {f['pagina_fin']}, "
+        f"{f['palabras']}, {_literal(f['texto'])})" for i, f in enumerate(fragmentos))
+    _consultar(ejecutar, f"INSERT INTO fragmentos (id, paper_id, orden, pagina, pagina_fin, palabras, texto) VALUES {filas}")
+    return {
+        "id": paper_id,
+        "paginas": len(paginas),
+        "fragmentos": len(fragmentos),
+        "palabras": sum(f["palabras"] for f in fragmentos),
+        "ms_insercion": round((time.perf_counter() - t) * 1000, 1),
     }
