@@ -339,3 +339,5 @@ tbody tr:hover { background: #faf7fe; }
 @media (max-width: 760px) {
   .volver-cita { min-height: 44px; }
 }
+
+.consulta :is(h1, .redactor textarea) { scroll-margin-top: 64px; }

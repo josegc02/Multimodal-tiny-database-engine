@@ -24,7 +24,9 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
   const [origenCita, setOrigenCita] = useState(null);
   const [segundos, setSegundos] = useState(0);
   const campo = useRef(null);
-  const autoEnviada = useRef(false); // StrictMode monta dos veces en desarrollo: una sola petición
+  const peticion = useRef(null);
+
+  useEffect(() => () => peticion.current?.abort(), []);
 
   useEffect(() => { if (borrador) { limpiarBorrador(); campo.current?.focus(); } }, [borrador, limpiarBorrador]);
   useEffect(() => {
@@ -35,27 +37,36 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
   }, [fase]);
 
   useEffect(() => {
-    if (auto && !autoEnviada.current) { autoEnviada.current = true; enviar(auto); }
+    if (!auto) return undefined;
+    const inicioAutomatico = setTimeout(() => enviar(auto), 0);
+    return () => clearTimeout(inicioAutomatico);
   }, [auto]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function enviar(textoPregunta, { usarLlm = true } = {}) {
     const limpia = textoPregunta.trim();
-    if (!limpia || fase === 'cargando') return;
+    if (!limpia || peticion.current) return;
+    const solicitud = new AbortController();
+    peticion.current = solicitud;
     setPregunta(limpia);
+    setOrigenCita(null);
     setDatos(null);
     setFase('cargando');
     setError(null);
     try {
-      const respuesta = await api.preguntar({ pregunta: limpia, usarLlm });
+      const respuesta = await api.preguntar({ pregunta: limpia, usarLlm, signal: solicitud.signal });
+      if (solicitud.signal.aborted) return;
       setDatos(respuesta);
       setCita(null);
-      setOrigenCita(null);
       setFase('listo');
       setTexto('');
       ir(enlace.reciente(alResponder(respuesta)));
+      document.querySelector('.consulta h1')?.scrollIntoView({ block: 'nearest' });
     } catch (e) {
+      if (solicitud.signal.aborted) return;
       setError(e);
       setFase('error');
+    } finally {
+      peticion.current = null;
     }
   }
 
@@ -97,11 +108,12 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
           <h1>{inicio ? 'Investiga con tus fuentes' : pregunta}</h1>
           <p className="sub" aria-live="polite">{subtitulo}</p>
         </div>
-        {!inicio && fase !== 'cargando' && <a className="btn2" href={enlace.preguntar} onClick={() => {
-          setFase('inicio');
-          setDatos(null);
-          setTexto('');
-        }}>Nueva pregunta</a>}
+        {!inicio && fase !== 'cargando' && (
+          <div className="acciones">
+            <button className="btn2" onClick={() => { setTexto(pregunta); campo.current?.focus(); }}>Editar pregunta</button>
+            <button className="btn2" onClick={() => campo.current?.focus()}>Otra pregunta</button>
+          </div>
+        )}
       </header>
 
       <div className={`consulta-rejilla${conFuentes ? ' con-fuentes' : ''}`}>
