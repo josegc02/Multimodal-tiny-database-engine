@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from api.asistente import ErrorAsistente, ErrorLLM, crear_llm, preguntar
+from api.tienda import rutas_tienda
 
 from engine.indexes.extendible_hash import ExtendibleHash
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
@@ -222,6 +223,7 @@ def create_app(directorio: str | None = None, carpetas_archivos: list[str] | Non
         except ErrorLLM as exc:
             return _error(502, str(exc))
 
+    app.include_router(rutas_tienda(estado, lock))
     return app
 
 
