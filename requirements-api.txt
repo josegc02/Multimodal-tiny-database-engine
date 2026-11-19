@@ -2,3 +2,5 @@
 fastapi~=0.115.13
 uvicorn~=0.34.3
 httpx~=0.28.1   # cliente de las pruebas (fastapi.testclient)
+google-genai~=2.34  # LLM del asistente (#98) por defecto: Gemini, capa gratuita
+anthropic~=2.10     # alternativa con BD2_LLM=claude
