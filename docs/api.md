@@ -32,6 +32,7 @@ Los datos **se conservan entre reinicios**: las tablas se crean una vez (con los
 | `GET /tablas` | Lista las tablas con sus columnas e índices |
 | `GET /archivos?ruta=...` | Devuelve una imagen o audio guardado en una columna `IMAGE` / `AUDIO` |
 | `POST /asistente/preguntar` | Responde una pregunta con los papers, citando las fuentes (opción A) |
+| `GET /asistente/estado` | Qué hay cargado (documentos, fragmentos) y el LLM activo |
 | `GET /asistente/documentos` | La biblioteca: papers y clases con su número de fragmentos |
 | `GET /asistente/documentos/{id}` | Un documento con su abstract y sus fragmentos |
 | `GET /asistente/documentos/{id}/pdf` | Su PDF, si está en esta máquina (ábralo con `#page=N`) |

@@ -252,6 +252,18 @@ def create_app(directorio: str | None = None, carpetas_archivos: list[str] | Non
         except ErrorLLM as exc:
             return _error(502, str(exc))
 
+    @app.get("/asistente/estado")
+    def asistente_estado():
+        """Qué hay cargado y con qué LLM se responde (la barra lateral del front)."""
+        llm = estado["llm"]
+        conteos = {}
+        for tabla in ("papers", "fragmentos"):
+            resultado = _sql_con_lock(f"SELECT COUNT(*) AS n FROM {tabla}")
+            conteos[tabla] = None if resultado.tiene_error else resultado.filas[0][0]
+        return {"corpus": conteos["fragmentos"] is not None, "documentos": conteos["papers"],
+                "fragmentos": conteos["fragmentos"], "llm": getattr(llm, "modelo", None) if llm else None,
+                "palabras_con_llm": estado["palabras_con_llm"]}
+
     @app.get("/asistente/documentos")
     def asistente_documentos():
         """La biblioteca: papers y clases con su número de fragmentos."""

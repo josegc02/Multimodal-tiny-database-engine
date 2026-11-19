@@ -327,6 +327,16 @@ class TestEndpoint(unittest.TestCase):
         self.assertFalse(sin_llm["palabras_con_llm"])
         self.assertIsNone(sin_llm["s_redaccion"])
 
+    def test_estado_del_asistente(self):
+        self.assertEqual(self.abrir(None, corpus=False).get("/asistente/estado").json(),
+                         {"corpus": False, "documentos": None, "fragmentos": None, "llm": None,
+                          "palabras_con_llm": True})
+
+    def test_estado_con_corpus(self):
+        estado = self.abrir(ClienteGemini(modelo="gemini-x")).get("/asistente/estado").json()
+        self.assertEqual((estado["corpus"], estado["documentos"], estado["fragmentos"], estado["llm"]),
+                         (True, 3, 4, "gemini-x"))
+
     def test_biblioteca_y_detalle(self):
         cliente = self.abrir(None)
         documentos = cliente.get("/asistente/documentos").json()
