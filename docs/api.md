@@ -100,7 +100,9 @@ Solo sirve imágenes y audios dentro de las carpetas de `BD2_ARCHIVOS`: fuera de
 
 ### `POST /asistente/preguntar`
 
-Necesita las tablas `papers` y `fragmentos` del corpus (#97): `python -m rag.corpus cargar --datos data/app`.
+Necesita las tablas `papers` y `fragmentos` del corpus (#97): `python -m rag.corpus cargar --datos data/app`. Reinicie la API después de cargar para que vea las tablas.
+
+Para incluir las clases del curso, copie sus PDFs a `datasets/papers/curso/` con un `curso.csv` antes de `rag.corpus construir` (ver `datasets/papers/README.md`). Esa carpeta no se sube al repositorio.
 
 Petición (`k` y `usar_llm` son opcionales):
 
@@ -127,8 +129,8 @@ Respuesta `200`:
 
 Cómo se arma:
 
-1. La pregunta pasa a palabras clave en inglés (`consulta`), porque BM25 compara términos y los papers están en inglés. Con LLM se le pide al modelo; sin LLM, o con `BD2_PALABRAS_CLAVE=local`, se usa un glosario pequeño.
-2. `SELECT ... FROM fragmentos WHERE MATCH(texto, consulta) USING BM25 ORDER BY puntaje DESC LIMIT k`, y después `SELECT ... FROM papers WHERE id IN (...)` para la metadata, porque el motor no admite `MATCH` con `JOIN`.
+1. La pregunta pasa a palabras clave (`consulta`) **en inglés y en español**, porque BM25 compara términos: los papers están en inglés y las clases del curso, en español. Con LLM se le pide al modelo; sin LLM, o con `BD2_PALABRAS_CLAVE=local`, se usa un glosario pequeño más las palabras originales de la pregunta.
+2. `SELECT ... FROM fragmentos WHERE MATCH(texto, consulta) USING BM25 ORDER BY puntaje DESC LIMIT 5k`. De esos candidatos se toman los `k` mejores con **a lo más 2 fragmentos por documento**, para que un paper largo no ocupe todo el resultado. Después, `SELECT ... FROM papers WHERE id IN (...)` trae la metadata, porque el motor no admite `MATCH` con `JOIN`.
 3. El LLM recibe los fragmentos numerados y debe responder solo con ellos, citando `[n]`. Si no le sirven, lo dice.
 
 - `[n]` en `respuesta` corresponde a `fragmentos[n-1]`. `citas` lista los números citados, sin repetir y en orden de aparición.
