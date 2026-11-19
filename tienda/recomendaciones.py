@@ -39,6 +39,18 @@ def texto(motor, descripcion):
     return {fila["id"]: fila["puntos"] for fila in filas}
 
 
+def misma_categoria(motor, categoria, candidatos):
+    """Señal "categoría similar": 1 para los candidatos de la misma categoría que el origen.
+
+    Solo reordena lo que ya trajeron las otras señales; no agrega productos. Un
+    producto sin categoría no recibe esta señal (ni bono ni castigo).
+    """
+    if not categoria or not candidatos:
+        return {}
+    filas = consultar(motor, f"SELECT id FROM productos WHERE categoria = {literal(categoria)}")
+    return {fila["id"]: 1 for fila in filas if fila["id"] in candidatos}
+
+
 def fusionar(origen, senales, pesos):
     """Escala cada señal por su máximo positivo y combina por media ponderada."""
     totales = {}

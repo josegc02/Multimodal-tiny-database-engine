@@ -12,6 +12,20 @@ def test_top_diez_y_desempate():
     assert [f["id"] for f in filas] == list(range(1, 11))
 
 
+def test_categoria_reordena_sin_agregar(tmp_path):
+    from frontend.motor import Motor
+    from tienda.recomendaciones import misma_categoria
+    motor = Motor(directorio=str(tmp_path), modo_demo=False)
+    motor.ejecutar("CREATE TABLE productos (id INT PRIMARY KEY, categoria TEXT)")
+    motor.ejecutar("INSERT INTO productos VALUES (1,'mandos'),(2,'juegos'),(3,'mandos'),(4,'mandos'),(5,'')")
+    # 4 es de la misma categoría pero no es candidato: no se agrega.
+    assert misma_categoria(motor, "mandos", {2, 3, 5}) == {3: 1}
+    assert misma_categoria(motor, "", {2, 3}) == {}  # sin categoría: ni bono ni castigo
+    senales = {"texto": {2: 1.0, 3: 0.9}, "categoria": misma_categoria(motor, "mandos", {2, 3})}
+    assert [f["id"] for f in fusionar(1, senales, {"texto": 1, "categoria": 0.25})] == [3, 2]
+    motor.cerrar()
+
+
 def test_tienda_http(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     for archivo in ("a", "b", "c"):
@@ -51,7 +65,8 @@ def test_tienda_http(tmp_path, monkeypatch):
         r = cliente.post("/sql", json={"sql": sql})
         assert r.status_code == 200, r.text
         for pesos, esperado in [("1,0,0", 2), ("0,1,0", 3), ("0,0,1", 3)]:
-            filas = cliente.get("/recomendaciones/1", params={"pesos": pesos}).json()
+            filas = cliente.get("/recomendaciones/1", params={"pesos": pesos, "vector_imagen": "sift",
+                                                              "peso_categoria": 0}).json()
             assert filas[0]["id"] == esperado
             assert filas[0]["puntaje"] == 1
             assert set(filas[0]["senales"]) == {"texto", "imagen", "compras"}
@@ -75,8 +90,13 @@ def test_tienda_http(tmp_path, monkeypatch):
             raise FileNotFoundError("Falta MobileNet. Ejecute python -m engine.features.image.mobilenet")
         monkeypatch.setattr("tienda.indice_imagen.extractor_for", sin_modelo)
         assert cliente.get("/recomendaciones/1?vector_imagen=mobilenet").status_code == 503
+        # Sin pedir una representación, se usa SIFT cuando falta el modelo.
+        por_defecto = cliente.get("/recomendaciones/1?pesos=0,1,0&peso_categoria=0")
+        assert por_defecto.status_code == 200, por_defecto.text
+        assert [f["id"] for f in por_defecto.json()] == [3]
         # La indisponibilidad de una representación no altera el índice SIFT.
         assert cliente.get("/recomendaciones/1?vector_imagen=sift").status_code == 200
+        assert cliente.get("/recomendaciones/1?peso_categoria=-1").status_code == 422
         assert cliente.get("/recomendaciones/1?vector_imagen=desconocido").status_code == 422
         assert cliente.get("/recomendaciones/999").status_code == 404
         assert cliente.get("/productos/1?lat=0&lon=0").json()["tienda_cercana"]["id"] == 2
