@@ -41,6 +41,7 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
     const limpia = textoPregunta.trim();
     if (!limpia || fase === 'cargando') return;
     setPregunta(limpia);
+    setDatos(null);
     setFase('cargando');
     setError(null);
     try {
@@ -58,7 +59,7 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
 
   const alEnviar = (evento) => { evento.preventDefault(); enviar(texto); };
   const alTeclear = (evento) => {
-    if (evento.key === 'Enter' && !evento.shiftKey) { evento.preventDefault(); enviar(texto); }
+    if (evento.key === 'Enter' && !evento.shiftKey && !evento.nativeEvent.isComposing) { evento.preventDefault(); enviar(texto); }
   };
   const elegirCita = (n) => {
     setCita(n);
@@ -88,7 +89,7 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
           <h1>{inicio ? 'Investiga con tus fuentes' : pregunta}</h1>
           <p className="sub" aria-live="polite">{subtitulo}</p>
         </div>
-        {!inicio && <a className="btn2" href={enlace.preguntar} onClick={() => {
+        {!inicio && fase !== 'cargando' && <a className="btn2" href={enlace.preguntar} onClick={() => {
           setFase('inicio');
           setDatos(null);
           setTexto('');
@@ -163,17 +164,18 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
 
 function ErrorRespuesta({ error, reintentar, soloFragmentos }) {
   const delLlm = error?.estado === 502;
+  const sinClave = delLlm && /API key|credencial/i.test(error?.message ?? '');
   return (
     <section className="panel respuesta" aria-label="Error" role="alert">
       <div className="error-bloque">
         <IconoError />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span className="error-titulo">{delLlm ? 'El LLM no respondió' : 'No se pudo responder'}</span>
-          <span style={{ color: 'var(--tinta-2)' }}>{error?.message}</span>
+          <span className="error-titulo">{sinClave ? 'Revisa la clave del modelo' : delLlm ? 'El modelo no está disponible' : 'No se pudo responder'}</span>
+          <span style={{ color: 'var(--tinta-2)' }}>{sinClave ? 'La clave falta o el proveedor la rechazó. Puedes continuar con los fragmentos de la biblioteca.' : error?.message}</span>
         </div>
       </div>
       <div className="acciones" style={{ paddingLeft: 26 }}>
-        {delLlm && <button className="btn" onClick={soloFragmentos}>Responder solo con fragmentos</button>}
+        {delLlm && <button className="btn" onClick={soloFragmentos}>Buscar solo fragmentos</button>}
         {error?.estado !== 422 && <button className={delLlm ? 'btn2' : 'btn'} onClick={reintentar}>Reintentar</button>}
       </div>
     </section>

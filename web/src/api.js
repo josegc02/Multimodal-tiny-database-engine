@@ -14,7 +14,7 @@ async function pedir(ruta, opciones = {}) {
     respuesta = await fetch(BASE + ruta, opciones);
   } catch {
     throw new ErrorApi('sin_conexion',
-      `La API no responde en ${BASE}. Levántala desde la raíz del proyecto con: uvicorn api.main:app`);
+      'No se pudo conectar con el servidor. Revisa la conexión y vuelve a intentarlo.');
   }
   const datos = await respuesta.json().catch(() => ({}));
   if (!respuesta.ok) {

@@ -78,8 +78,7 @@ export default function App() {
           {estado?.corpus && <span className="num">{entero(estado.documentos)} documentos · {entero(estado.fragmentos)} fragmentos</span>}
           {estado && (
             <span>
-              <span className="punto" style={{ background: estado.llm ? 'var(--positivo)' : 'var(--gris)' }} />
-              {estado.llm ?? 'Sin LLM: solo fragmentos'}
+              {estado.llm ? `Modelo configurado: ${estado.llm}` : 'Modo búsqueda: solo fragmentos'}
             </span>
           )}
         </div>
@@ -87,7 +86,7 @@ export default function App() {
 
       <main className="contenido">
         {ruta.vista === 'preguntar' && (
-          <Preguntar key={ruta.reciente ?? ruta.auto ?? 'nueva'} reciente={reciente} auto={ruta.auto} estado={estado}
+          <Preguntar key={ruta.reciente ?? ruta.auto ?? 'nueva'} reciente={reciente} auto={ruta.auto}
                      borrador={borrador} limpiarBorrador={() => setBorrador('')} alResponder={alResponder} />
         )}
         {ruta.vista === 'biblioteca' && <Biblioteca />}
