@@ -341,3 +341,17 @@ tbody tr:hover { background: #faf7fe; }
 }
 
 .consulta :is(h1, .redactor textarea) { scroll-margin-top: 64px; }
+
+.buscar-historial {
+  min-width: 0;
+  margin: 0 4px 6px;
+  padding: 8px;
+  border: 1px solid #827392;
+  border-radius: var(--radio-control);
+  background: #302643;
+  color: #fff;
+}
+.buscar-historial::placeholder { color: #c8bbd9; }
+.recientes { max-height: 240px; overflow-y: auto; }
+.recientes a { flex: none; }
+.recientes :focus-visible { outline-offset: -2px; }

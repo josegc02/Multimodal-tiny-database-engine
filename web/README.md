@@ -31,7 +31,7 @@ Para la exposición, `VITE_TRAZA_ABIERTA=1` deja abierto por defecto el panel "C
 | `#/asistente/documento/<id>` | Un documento: abstract, fragmentos y enlaces al PDF en cada página |
 | `#/asistente/subir` | Sube un PDF: lo extrae, lo fragmenta y lo indexa en el motor |
 
-Las preguntas recientes se guardan en el navegador con su respuesta, así que volver a una no gasta cuota del LLM.
+El historial permite buscar hasta 30 preguntas recientes de este navegador y reabrir sus respuestas sin gastar cuota del LLM. Desde un fragmento abierto por una cita se puede regresar a la posición exacta en la respuesta.
 
 Si el LLM falla (sin key, sin cuota o sin internet), la respuesta ofrece **"Buscar solo fragmentos"**, que pregunta con `usar_llm: false`.
 
