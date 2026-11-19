@@ -29,6 +29,8 @@ from pathlib import Path
 
 import numpy as np
 
+from tienda.recomendaciones import COSENO_DUPLICADO, clave_titulo, plataformas, sin_duplicados
+
 PRODUCTOS = Path("datasets/tienda/generated/productos.csv")
 RESENAS = Path("datasets/tienda/raw/Video_Games.jsonl.gz")
 CACHE = Path("datasets/tienda/benchmark")
@@ -122,6 +124,7 @@ def main():
     n = len(productos)
     tipo = [tipo_titulo(p) for p in productos]
     cat = [p["categoria"] for p in productos]
+    plat = [plataformas(p["titulo"], p["categoria"]) for p in productos]
 
     # Consultas de la métrica de tipo: hasta 30 por tipo en validación y 60 en prueba.
     por_tipo = collections.defaultdict(list)
@@ -223,7 +226,14 @@ def main():
         for i in list(total):
             if c["wcat"] and cat[i] and cat[i] == cat[q]:
                 total[i] += c["wcat"]
-        return [i for i, _ in sorted(total.items(), key=lambda x: (-x[1], x[0]))[:10]]
+            if c.get("wplat") and len(plat[q]) == 1 and plat[q] <= plat[i]:
+                total[i] += c["wplat"]
+        ordenados = [i for i, _ in sorted(total.items(), key=lambda x: (-x[1], x[0]))]
+        if not c.get("dedup"):
+            return ordenados[:10]
+        filas = [{"id": i, "titulo": productos[i]["titulo"]} for i in ordenados[:60]]
+        origen = {"id": q, "titulo": productos[q]["titulo"]}
+        return [f["id"] for f in sin_duplicados(origen, filas, lambda i: img["mobilenet"][i])]
 
     def m_tipo(qs, c=None, recs=None):
         out = []
@@ -231,6 +241,27 @@ def main():
             r = recs(q) if recs else recomendar(q, c)
             out.append(np.mean([tipo[v] == tipo[q] for v in r]) if r else 0.0)
         return np.array(out)
+
+    def m_plataforma(qs, c=None, recs=None):
+        """Fracción de recomendados de la misma consola (consultas con una sola plataforma)."""
+        out = []
+        for q in qs:
+            if len(plat[q]) == 1:
+                r = recs(q) if recs else recomendar(q, c)
+                out.append(np.mean([plat[q] <= plat[v] for v in r]) if r else 0.0)
+        return np.array(out)
+
+    def duplicados(qs, c):
+        """Fracción de listas con algún duplicado (del consultado o entre sí)."""
+        con = 0
+        for q in qs:
+            r = recomendar(q, c)
+            claves = [clave_titulo(productos[i]["titulo"]) for i in [q] + r]
+            vecs = img["mobilenet"][[q] + r]
+            sim = vecs @ vecs.T
+            np.fill_diagonal(sim, 0)
+            con += len(set(claves)) < len(claves) or bool((sim > COSENO_DUPLICADO).any())
+        return con / len(qs)
 
     def m_comp(qs, c=None, recs=None):
         return np.array([len(set(recs(q) if recs else recomendar(q, c)) & objetivos[q]) / min(10, len(objetivos[q]))
@@ -255,6 +286,20 @@ def main():
     elegida = etapa("3. pesos", [dict(e2, wc=wc, wi=wi, wcat=wcat) for wc in (0, 0.25, 0.5, 1, 2)
                                  for wi in (0.25, 0.5) for wcat in (0, 0.25, 1)])
 
+    # 4. Plataforma (con duplicados quitados). Regla fijada antes de medir: promedio de las tres
+    #    métricas normalizadas (tipo, comportamiento y misma plataforma).
+    print("\n4. plataforma, sin duplicados (validación)")
+    filas4 = []
+    for wplat in (0, 0.25, 0.5, 1):
+        c = dict(elegida, dedup=True, wplat=wplat)
+        filas4.append((c, m_tipo(tipo_val, c).mean(), m_comp(comp_val, c).mean(),
+                       m_plataforma(tipo_val + comp_val, c).mean()))
+    mejores = [max(f[j] for f in filas4) for j in (1, 2, 3)]
+    for c, *ms in filas4:
+        print(f"  plataforma {c['wplat']:<4} tipo {ms[0]:.3f}  comportamiento {ms[1]:.3f}  misma plataforma {ms[2]:.3f}"
+              f"  puntaje {np.mean([m / b for m, b in zip(ms, mejores)]):.3f}")
+    final = max(filas4, key=lambda f: np.mean([m / b for m, b in zip(f[1:], mejores)]))[0]
+
     RRF = dict(PR117, fusion="rrf", wi=0.5)
     finales = {"antes: texto + SIFT, pesos 1,1,1": dict(PR117, img="sift", wi=1, wcat=0),
                "#117: MobileNet 0.25 + categoría 0.25": PR117,
@@ -262,7 +307,9 @@ def main():
                "#117 + compras a 30 días": dict(PR117, compras="hoy_ventana"),
                "#117 + RRF con pesos 1/0.5/1/0.25": RRF,
                "RRF + usuarios 2 a 20 + 30 días, k=51": dict(RRF, compras="filtrada"),
-               "elegida": elegida}
+               "elegida": elegida,
+               "elegida + sin duplicados": dict(elegida, dedup=True),
+               "final: + sin duplicados + plataforma": final}
     bootstrap = np.random.default_rng(0)
     it = bootstrap.integers(0, len(tipo_prueba), (5000, len(tipo_prueba)))
     ic_ = bootstrap.integers(0, len(comp_prueba), (5000, len(comp_prueba)))
@@ -272,6 +319,9 @@ def main():
         return [round(float(np.percentile(m, 2.5)), 4), round(float(np.percentile(m, 97.5)), 4)]
 
     res = {nm: (m_tipo(tipo_prueba, c), m_comp(comp_prueba, c)) for nm, c in finales.items()}
+    extra = {nm: (m_plataforma(tipo_prueba + comp_prueba, c), duplicados(tipo_prueba + comp_prueba, c))
+             for nm, c in finales.items()}
+    ip = bootstrap.integers(0, len(extra["elegida"][0]), (5000, len(extra["elegida"][0])))
     ref_t, ref_c = res["#117: MobileNet 0.25 + categoría 0.25"]
     pop = lambda q: [p for p in populares if p != q][:10]  # noqa: E731
     salida = {"corte": str(np.datetime64(T, "s")), "cobertura": len(objetivos), "productos": n,
@@ -284,10 +334,13 @@ def main():
     for nm, (t, cm) in res.items():
         fila = {"nombre": nm, "config": finales[nm], "tipo": float(t.mean()), "tipo_ic": ic(t, it),
                 "comportamiento": float(cm.mean()), "comportamiento_ic": ic(cm, ic_),
-                "dif_117_tipo_ic": ic(t - ref_t, it), "dif_117_comportamiento_ic": ic(cm - ref_c, ic_)}
+                "dif_117_tipo_ic": ic(t - ref_t, it), "dif_117_comportamiento_ic": ic(cm - ref_c, ic_),
+                "misma_plataforma": float(extra[nm][0].mean()), "misma_plataforma_ic": ic(extra[nm][0], ip),
+                "listas_con_duplicados": round(extra[nm][1], 4)}
         salida["configuraciones"].append(fila)
         print(f"  {nm:42s} tipo {fila['tipo']:.3f} {fila['tipo_ic']}  comportamiento {fila['comportamiento']:.3f} "
-              f"{fila['comportamiento_ic']}  vs #117 {fila['dif_117_tipo_ic']} / {fila['dif_117_comportamiento_ic']}")
+              f"{fila['comportamiento_ic']}  vs #117 {fila['dif_117_tipo_ic']} / {fila['dif_117_comportamiento_ic']}"
+              f"  plataforma {fila['misma_plataforma']:.3f}  listas con duplicados {fila['listas_con_duplicados']:.1%}")
     json.dump(salida, open(SALIDA, "w", encoding="utf-8"), indent=1, ensure_ascii=False)
     print(f"\n{SALIDA} ({time.perf_counter() - t0:.0f} s de evaluación)")
 
