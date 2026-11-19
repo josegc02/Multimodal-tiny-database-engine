@@ -1,0 +1,8 @@
+{
+  "fuente": "OpenStreetMap vía Overpass API",
+  "licencia": "ODbL 1.0 — © OpenStreetMap contributors",
+  "url": "https://overpass-api.de/api/interpreter",
+  "fecha_consulta": "2026-11-18T04:39:18+00:00",
+  "consulta": "[out:json][timeout:180];\nnwr[\"shop\"~\"^(video_games|electronics|computer|department_store|mall)$\"][\"name\"](-12.52,-77.2,-11.57,-76.62);\nout center tags;",
+  "tiendas": 623
+}

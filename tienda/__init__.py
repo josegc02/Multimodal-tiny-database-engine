@@ -1,0 +1,1 @@
+"""Opción B: datos de la tienda para el sistema de recomendación (issue #100)."""
