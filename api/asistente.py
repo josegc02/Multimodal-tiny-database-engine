@@ -303,7 +303,7 @@ def recuperar(ejecutar: Callable, consulta: str, k: int) -> list[dict]:
         return []
     ids = ", ".join(str(int(f["paper_id"])) for f in fragmentos)
     papers = {p["id"]: p for p in _consultar(
-        ejecutar, f"SELECT id, titulo, autores, anio, url FROM papers WHERE id IN ({ids})")}
+        ejecutar, f"SELECT id, titulo, autores, anio, url, fuente FROM papers WHERE id IN ({ids})")}
     salida = []
     for n, fragmento in enumerate(fragmentos, start=1):
         paper = papers.get(fragmento["paper_id"], {})
@@ -315,6 +315,7 @@ def recuperar(ejecutar: Callable, consulta: str, k: int) -> list[dict]:
             "autores": paper.get("autores"),
             "anio": paper.get("anio"),
             "url": paper.get("url"),
+            "fuente": paper.get("fuente"),
             "pagina": fragmento["pagina"],
             "pagina_fin": fragmento["pagina_fin"],
             "puntaje": round(float(fragmento["puntaje"]), 4),
