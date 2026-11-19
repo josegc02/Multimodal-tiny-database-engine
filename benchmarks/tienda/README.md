@@ -133,7 +133,7 @@ del motor.
   exacta crece en proporción al catálogo.
 - M=16 da más recall con el mismo ef_search a cambio de una construcción más larga.
   Para la recomendación no hace falta: el acierto ya es el de la búsqueda exacta.
-- Los tiempos varían entre corridas por la carga de la máquina (hasta ±40 %); el
+- Los tiempos varían entre corridas por la carga de la máquina (la configuración de la app midió 9.8 ms en otra corrida); el
   recall y los nodos visitados son deterministas (semilla 42).
 
 ## Latencia de la API con los datos reales
