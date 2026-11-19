@@ -71,7 +71,7 @@ Compras filtradas: solo usuarios con 2 a 20 compras y solo pares a 30 días o me
   categoría: solo si el consultado tiene una sola consola, y un producto
   multiplataforma o sin consola no se castiga. El peso se eligió en validación con
   el promedio de las tres métricas (regla fijada antes de medir): con 1.0, la misma
-  consola pasa de 74 % a 98 % y el tipo baja medio punto (n. s.).
+  consola pasa de 74 % a 98 % y el tipo baja medio punto.
 - "Misma consola" se mide sobre las consultas con una sola plataforma (74 % del
   catálogo).
 
