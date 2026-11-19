@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
-from api.asistente import (SIN_FRAGMENTOS, ClienteClaude, ClienteGemini, ErrorLLM, citas,
-                           crear_llm, palabras_clave, palabras_clave_locales)
+from api.asistente import (MAX_POR_PAPER, SIN_FRAGMENTOS, ClienteClaude, ClienteGemini, ErrorLLM,
+                           citas, crear_llm, palabras_clave, palabras_clave_locales, recuperar)
 
 try:
     from fastapi.testclient import TestClient
@@ -57,21 +57,43 @@ class LLMCaido:
 class TestFunciones(unittest.TestCase):
     def test_palabras_clave_locales_traduce_y_quita_vacias(self):
         consulta = palabras_clave_locales("¿Cómo funciona la búsqueda de vecinos cercanos en HNSW?")
-        self.assertEqual(consulta, "search neighbors nearest hnsw")
+        # Primero en inglés (papers) y luego las originales en español (clases del curso).
+        self.assertEqual(consulta, "search neighbors nearest hnsw busqueda vecinos cercanos")
 
     def test_palabras_clave_locales_reconoce_frases(self):
         self.assertEqual(palabras_clave_locales("¿Índice aprendido frente a un árbol B+?"),
-                         "index learned b-tree")
-        self.assertEqual(palabras_clave_locales("bases de datos vectoriales"), "database vector")
+                         "index learned b-tree indice aprendido arbol")
+        self.assertEqual(palabras_clave_locales("bases de datos vectoriales"),
+                         "database vector bases datos vectoriales")
         self.assertEqual(palabras_clave_locales("¿Cómo se estima la cardinalidad?"),
-                         "estimation cardinality")
+                         "estimation cardinality estima cardinalidad")
 
     def test_palabras_clave_limpia_la_salida_del_llm(self):
         llm = LLMFalso(palabras="HNSW, graph; 'search'\nnearest-neighbor.")
         self.assertEqual(palabras_clave("pregunta", llm), "hnsw graph search nearest-neighbor")
 
     def test_palabras_clave_vacias_del_llm_usan_el_glosario(self):
-        self.assertEqual(palabras_clave("índice invertido", LLMFalso(palabras="...")), "index inverted")
+        self.assertEqual(palabras_clave("índice invertido", LLMFalso(palabras="...")),
+                         "index inverted indice invertido")
+
+    def test_recuperar_limita_fragmentos_por_paper(self):
+        # BM25 devuelve 4 fragmentos del paper 1 antes que los de los papers 2 y 3.
+        candidatos = [(i, pid, 30.0 - i) for i, pid in enumerate([1, 1, 1, 1, 2, 3, 2], start=1)]
+        consultas = []
+
+        def ejecutar(sql):
+            consultas.append(sql)
+            if "FROM fragmentos" in sql:
+                return SimpleNamespace(tiene_error=False, error=None,
+                                       columnas=["id", "paper_id", "pagina", "pagina_fin", "texto", "puntaje"],
+                                       filas=[(i, pid, 1, 1, f"t{i}", s) for i, pid, s in candidatos])
+            return SimpleNamespace(tiene_error=False, error=None, columnas=["id", "titulo", "autores", "anio", "url"],
+                                   filas=[(pid, f"P{pid}", "", 2020, "") for pid in (1, 2, 3)])
+
+        fragmentos = recuperar(ejecutar, "hnsw", 4)
+        self.assertEqual([f["id"] for f in fragmentos], [1, 2, 5, 6])  # el 3.º y 4.º del paper 1 se saltan
+        self.assertEqual(MAX_POR_PAPER, 2)
+        self.assertIn("LIMIT 20", consultas[0])  # se piden más candidatos que k
 
     def test_citas_validas_sin_repetir_y_en_orden(self):
         self.assertEqual(citas("a [2] b [1, 3] c [2] d [7] e [0]", total=3), [2, 1, 3])
