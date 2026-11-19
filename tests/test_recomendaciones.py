@@ -49,6 +49,7 @@ def test_tienda_http(tmp_path, monkeypatch):
             otra_peticion.append("bloqueada" if hilo.is_alive() else "respondió")
         return np.array(vectores[Path(ruta).name])
     monkeypatch.setattr("tienda.indice_imagen.extract_features", extraer_mobilenet)
+    monkeypatch.setattr("tienda.indice_imagen.ImageIndex.REVISION_S", 0)  # revisar archivos en cada petición
     with TestClient(create_app(str(tmp_path), llm=None)) as cliente:
         sql = """
         CREATE TABLE productos(id INT PRIMARY KEY, descripcion TEXT, imagen IMAGE, precio FLOAT, categoria TEXT);
