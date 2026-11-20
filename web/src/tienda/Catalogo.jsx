@@ -136,7 +136,7 @@ export default function Catalogo({ ruta, categorias, errorCategorias, reintentar
             <button className="enlace" onClick={() => pedir(filas?.length ?? 0)} style={{ marginLeft: 'auto' }}>Reintentar</button>
           </div>
         )}
-        {filas?.map((p) => <Tarjeta key={p.id} producto={p} />)}
+        {filas?.map((p, i) => <Tarjeta key={p.id} producto={p} prioridad={i < 4} />)}
         {!filas && !error && Array.from({ length: 8 }, (_, i) => <TarjetaCargando key={i} />)}
         {filas?.length === 0 && (
           <div className="vacio">
@@ -166,10 +166,10 @@ function Consola({ nombre, productos, activa, alElegir }) {
   );
 }
 
-function Tarjeta({ producto: p }) {
+function Tarjeta({ producto: p, prioridad }) {
   return (
     <a className="tarjeta" href={enlace.ficha(p.id)}>
-      <span className="foto"><Foto producto={p} /></span>
+      <span className="foto"><Foto producto={p} prioridad={prioridad} /></span>
       <span className="tarjeta-titulo">{p.titulo}</span>
       <span className="tarjeta-precio num">{precio(p.precio)}</span>
       <span className="tarjeta-meta num">{estrellas(p.rating)} de 5, {cantidad(p.num_resenas)} reseñas</span>

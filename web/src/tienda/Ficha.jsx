@@ -72,7 +72,7 @@ export default function Ficha({ id, explicar, alVer }) {
   return (
     <div className="pagina">
       <section className="cabecera" aria-labelledby="titulo-producto">
-        <div className="foto"><Foto producto={producto} alt={producto.titulo} /></div>
+        <div className="foto"><Foto producto={producto} alt={producto.titulo} prioridad /></div>
         <div className="cabecera-texto">
           <nav className="ruta-cat" aria-label="Categoría">
             {partes.slice(1).map((parte, i) => {
