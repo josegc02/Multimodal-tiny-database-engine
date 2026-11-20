@@ -38,7 +38,6 @@ function Fuente({ f, activa, citada, sinLlm, ancho, elegir, terminos, volverACit
       <button className="fuente-cabeza" onClick={() => { if (!activa) elegir(f.n); }} aria-label={`Resaltar la fuente ${f.n}`} aria-pressed={activa}>
         <span className="numero-fuente">{f.n}</span>
         <span className="fuente-lugar">{referencia(f)} · {clase ? '' : `${f.anio} · `}{paginas(f, clase)}</span>
-        <span className="fuente-puntaje num">BM25 {f.puntaje.toFixed(2)}</span>
       </button>
       <div className="pista"><div style={{ width: `${Math.round(ancho)}%` }} /></div>
       <h3 id={`titulo-fuente-${f.n}`} className="fuente-titulo">{f.titulo}</h3>
@@ -47,7 +46,10 @@ function Fuente({ f, activa, citada, sinLlm, ancho, elegir, terminos, volverACit
         <button className="texto-btn volver-cita" onClick={volverACita}>Volver a la cita [{f.n}]</button>
       )}
       <div className="fuente-pie">
-        <span className="sub">{uso}</span>
+        <span className="fuente-detalles sub">
+          <span>{uso}</span>
+          <span className="fuente-puntaje num">BM25 {f.puntaje.toFixed(2)}</span>
+        </span>
         <span className="enlaces">
           {texto.length > CORTE && (
             <button className="texto-btn" style={{ fontSize: 12 }} aria-expanded={completo} onClick={() => setCompleto(!completo)}>
