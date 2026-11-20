@@ -1107,7 +1107,7 @@ compara texturas y estructuras locales, no el significado de la imagen (por
 eso una consulta de un gato puede devolver una fachada antes que otro gato).
 Una búsqueda semántica requiere embeddings aprendidos: en la Parte 5 se agregó
 MobileNetV2, que en COCO 1K sube la precisión por categoría de 6,3 % a 33,2 %
-(sección 13). Los porcentajes son menores que en la prueba con
+(ver la Parte 5). Los porcentajes son menores que en la prueba con
 val2017 de la sección 10 porque estas consultas cubren categorías poco
 frecuentes (azar ≈ 4 % frente a ≈ 20 %).
 
@@ -1265,6 +1265,12 @@ Usar el motor con datos reales (718 mil compras) mostró tres problemas que las 
 
 * **Asistente** (`index.html`): la pregunta, la respuesta con citas que muestran la fuente al pasar el mouse, los fragmentos con su página y su puntaje BM25, y un panel plegable "Cómo se respondió" con el flujo, los candidatos de BM25 (elegidos y por qué se descartó el resto), el tiempo de cada paso y el SQL real. También la biblioteca de documentos y la subida de PDFs.
 * **Tienda "Partida"** (`tienda.html`): catálogo con búsqueda (en español o inglés), tarjetas por consola que filtran, tipo y precio; ficha con la tienda más cercana con stock, su distancia y un mapa (Leaflet con OpenStreetMap); y "Te puede interesar", con el motivo de cada recomendación. El modo "Explicar y ajustar" muestra cuánto aportó cada señal y deja mover los pesos y cambiar entre MobileNet y SIFT: la lista se reordena en vivo y marca cuánto subió o bajó cada producto.
+
+![Asistente](../benchmarks/results/parte5/app_asistente.png)
+
+![Catálogo de la tienda](../benchmarks/results/parte5/app_tienda_catalogo.png)
+
+![Ficha con "Explicar y ajustar"](../benchmarks/results/parte5/app_tienda_explicar.png)
 
 El diseño se revisó en navegador a 1440, 768 y 390 px, con las reglas de accesibilidad de contraste, foco visible y movimiento reducido. Con la tienda cargada, una recomendación tarda 0,2–0,6 s y una página del catálogo, 0,2 s.
 
