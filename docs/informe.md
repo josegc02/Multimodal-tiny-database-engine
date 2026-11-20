@@ -1166,7 +1166,7 @@ La Parte 5 construye dos aplicaciones encima del motor, sin usar otra base de da
 
 ### 12. Asistente académico (opción A)
 
-**Corpus.** 259 documentos: papers de índices, recuperación y RAG, y las diapositivas de las clases del curso. Cada PDF se divide en fragmentos por página y se carga en dos tablas, `papers` y `fragmentos`, con un índice SPIMI sobre `fragmentos.texto`. Desde la interfaz se puede subir un PDF nuevo: se extrae, se fragmenta y se indexa en el motor.
+**Corpus.** 259 documentos: papers de índices, recuperación y RAG, y las diapositivas de las clases del curso. Cada PDF se divide en fragmentos de 200 a 500 palabras, cada uno con su página de inicio y de fin para citarla, y se carga en dos tablas, `papers` y `fragmentos`, con un índice SPIMI sobre `fragmentos.texto`. Desde la interfaz se puede subir un PDF nuevo: se extrae, se fragmenta y se indexa en el motor.
 
 **Flujo de una pregunta.**
 
