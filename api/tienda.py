@@ -77,7 +77,8 @@ def rutas_tienda(estado, lock):
                  limite: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0)):
         filtros = []
         if categoria:
-            filtros.append(f"categoria = {literal(categoria)}")
+            # La categoría y sus subcategorías: "Video Games > PlayStation 4" incluye "... > Games".
+            filtros.append(f"(categoria = {literal(categoria)} OR categoria LIKE {literal(categoria.replace('%', '') + ' > %')})")
         if precio_min is not None and precio_max is not None and precio_min > precio_max:
             raise HTTPException(422, "Rango de precios invertido")
         for operador, valor in ((">=", precio_min), ("<=", precio_max)):
@@ -90,6 +91,13 @@ def rutas_tienda(estado, lock):
         with lock:
             return consultar(estado["motor"], f"SELECT * FROM productos{where} "
                              f"ORDER BY {orden} LIMIT {limite} OFFSET {offset}")
+
+    @router.get("/categorias")
+    def categorias():
+        """Cada categoría con su cantidad de productos, de mayor a menor."""
+        with lock:
+            filas = consultar(estado["motor"], "SELECT categoria, COUNT(*) AS productos FROM productos GROUP BY categoria")
+        return sorted(filas, key=lambda f: (-f["productos"], f["categoria"] or ""))
 
     @router.get("/productos/{id}")
     def ficha(id: int, lat: float | None = Query(None, ge=-90, le=90),

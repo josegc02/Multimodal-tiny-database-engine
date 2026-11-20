@@ -111,6 +111,7 @@ def test_tienda_http(tmp_path, monkeypatch):
         assert [t["id"] for t in cliente.get("/tiendas/cercanas?lat=0&lon=0&radio=100").json()] == [1]
         filas = cliente.get("/catalogo?q=racing&categoria=games&precio_min=20").json()
         assert [f["id"] for f in filas] == [3]
+        assert cliente.get("/categorias").json() == [{"categoria": "games", "productos": 3}]
 
 
 def test_rrf_no_depende_de_la_escala():
@@ -201,3 +202,17 @@ def test_cache_de_compras_se_invalida_al_cambiar_la_tabla(tmp_path, monkeypatch)
     assert api_tienda.compras_en_cache(estado, motor, 1) == {2: 1, 3: 1}  # cambió la tabla: se recalcula
     assert llamadas == [1, 1]
     motor.cerrar()
+
+
+def test_catalogo_filtra_por_categoria_y_subcategorias(tmp_path):
+    with TestClient(create_app(str(tmp_path), llm=None)) as cliente:
+        r = cliente.post("/sql", json={"sql": """
+        CREATE TABLE productos(id INT PRIMARY KEY, descripcion TEXT, precio FLOAT, categoria TEXT);
+        INSERT INTO productos VALUES (1,'a',10,'Video Games > PlayStation 4'),(2,'b',20,'Video Games > PlayStation 4 > Games'),
+                                     (3,'c',30,'Video Games > PlayStation 5'),(4,'d',40,'Video Games > Xbox One > Games');
+        """})
+        assert r.status_code == 200, r.text
+        ps4 = cliente.get("/catalogo", params={"categoria": "Video Games > PlayStation 4"}).json()
+        assert [f["id"] for f in ps4] == [1, 2]  # no incluye "PlayStation 5" aunque empiece igual
+        cats = cliente.get("/categorias").json()
+        assert len(cats) == 4 and all(c["productos"] == 1 for c in cats)
