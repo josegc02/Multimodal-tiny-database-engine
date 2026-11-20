@@ -59,7 +59,10 @@ PLATAFORMAS = [
     ("ps5", r"\bps5\b|playstation 5"), ("ps4", r"\bps4\b|playstation 4"), ("ps3", r"\bps3\b|playstation 3"),
     ("ps2", r"\bps2\b|playstation 2"), ("psvita", r"ps ?vita|playstation vita"), ("psp", r"\bpsp\b"),
     ("xbox series", r"xbox series|series [xs]\b"), ("xbox one", r"xbox one"), ("xbox 360", r"xbox 360"),
-    ("switch", r"\bswitch\b"), ("3ds", r"\b[23]ds\b"), ("ds", r"nintendo ds\b|\bnds\b"),
+    # "Switch" a secas también es la tecla de un teclado o el botón de un mouse ("Optical Switch"):
+    # cuenta solo como consola en las formas en que se nombra a la Nintendo Switch.
+    ("switch", r"nintendo[- ]?switch|\bswitch[ -]?(?:oled|lite)\b|\b(?:for|para|with)\s+(?:the\s+)?switch\b|"
+               r"\bswitch\s*(?:/|console|controllers?|games?|joy-?cons?|dock|case|pro controller)|\bns\b|\bnsw\b"), ("3ds", r"\b[23]ds\b"), ("ds", r"nintendo ds\b|\bnds\b"),
     ("wii u", r"wii u\b"), ("wii", r"\bwii\b(?! u)"), ("gamecube", r"gamecube"),
     ("sega", r"\bsega\b|dreamcast|genesis|saturn"),
     ("vr", r"oculus|meta quest|\bquest [23]\b|virtual reality"), ("pc", r"\bpc\b|windows|\bmac\b|steam\b(?! deck)"),

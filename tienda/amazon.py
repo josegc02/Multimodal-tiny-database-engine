@@ -28,6 +28,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+from tienda.categorias import fuera_de_tema, normalizar
 from tienda.comun import GENERATED_DIR, RAW_DIR, descargar, escribir_csv, leer_csv
 
 BASE_URL = "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_2023/raw"
@@ -95,7 +96,13 @@ def url_imagen(imagenes):
 
 
 def producto(meta):
-    """Fila de candidato o None si al producto le falta precio, descripción o imagen."""
+    """Fila de candidato, o None si le falta precio, descripción o imagen, o no es de la tienda.
+
+    Libros, películas, música y comida que Amazon dejó en Video Games se descartan; la
+    ruta de categoría se corrige contra el título (ver tienda.categorias).
+    """
+    if fuera_de_tema(meta):
+        return None
     asin, titulo = meta.get("parent_asin"), texto_limpio(meta.get("title"))
     descripcion = f'{texto_limpio(meta.get("description"))} {texto_limpio(meta.get("features"))}'.strip()
     valor, imagen = precio(meta.get("price")), url_imagen(meta.get("images"))
@@ -110,7 +117,7 @@ def producto(meta):
         "rating": float(meta.get("average_rating") or 0),
         "num_resenas": int(meta.get("rating_number") or 0),
         "marca": texto_limpio(meta.get("store")) or "Desconocida",
-        "categoria": " > ".join(categorias) or texto_limpio(meta.get("main_category")) or "Video Games",
+        "categoria": normalizar(categorias, titulo),
         "url_imagen": imagen,
     }
 
