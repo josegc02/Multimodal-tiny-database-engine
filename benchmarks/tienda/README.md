@@ -151,6 +151,30 @@ del motor.
 - Los tiempos varían entre corridas por la carga de la máquina (la configuración de la app midió 9.8 ms en otra corrida); el
   recall y los nodos visitados son deterministas (semilla 42).
 
+### Según el tamaño del catálogo
+
+`python -m benchmarks.tienda.hnsw_escala` (escribe `hnsw_escala.json`): los 7,995
+vectores MobileNet reales más copias con ruido hasta 25k y 50k. El ruido está
+calibrado para que cada copia se parezca a su original como el 10.º vecino real
+(coseno 0.78 frente a 0.79), no como un clon; con ruido pequeño las consultas se
+vuelven artificialmente fáciles y el HNSW parece visitar menos nodos al crecer.
+Configuración de la app (M=8, ef_construction=50, k=102, ef_search=102), 200 consultas:
+
+| Productos | Construcción | Recall@102 | HNSW | Nodos visitados | Exacta numpy | Exacta fila por fila |
+|---:|---:|---:|---:|---:|---:|---:|
+| 8,000 | 36 s | 0.940 | 6.2 ms | 608 (7.6 %) | **3.9 ms** | 20 ms |
+| 25,000 | 121 s | 0.934 | **7.3 ms** | 789 (3.2 %) | 12.8 ms | 92 ms |
+| 50,000 | 259 s | 0.919 | **8.8 ms** | 1,042 (2.1 %) | 24.3 ms | 110 ms |
+
+- **El catálogo crece 6.25 veces; el HNSW visita 1.7 veces más nodos y tarda 1.4 veces
+  más.** La búsqueda exacta vectorizada crece en proporción (6.2 veces).
+- **Las curvas se cruzan entre 8k y 25k productos**: con la tienda actual (8k) la
+  exacta en numpy todavía gana; desde ~15k gana el HNSW, aun escrito en Python puro
+  frente a numpy (que corre en C). Frente a un recorrido fila por fila, como el del
+  motor sin índice, el HNSW gana en todos los tamaños.
+- El recall baja poco (0.94 → 0.92) y la construcción crece algo más que lineal
+  (cada inserción busca en un grafo más grande).
+
 ## Latencia de la API con los datos reales
 
 `GET /recomendaciones/{id}` con la tienda cargada en `data/app` (7,995 productos,
