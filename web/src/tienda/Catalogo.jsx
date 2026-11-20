@@ -17,6 +17,8 @@ export default function Catalogo({ ruta, categorias, errorCategorias, reintentar
   const [hayMas, setHayMas] = useState(false);
   const [precioMin, setPrecioMin] = useState(min);
   const [precioMax, setPrecioMax] = useState(max);
+  // En el teléfono, tipo y precio van tras un botón para que la lista empiece arriba.
+  const [verFiltros, setVerFiltros] = useState(() => !window.matchMedia('(max-width: 720px)').matches || Boolean(min || max));
   useEffect(() => { setPrecioMin(min); setPrecioMax(max); }, [min, max]);
 
   const pedir = (offset) => {
@@ -84,7 +86,10 @@ export default function Catalogo({ ruta, categorias, errorCategorias, reintentar
         ))}
       </div>
 
-      <form className="filtros" onSubmit={(e) => { e.preventDefault(); filtrar({ min: precioMin, max: precioMax }); }}>
+      <button type="button" className="btn2 boton-filtros" aria-expanded={verFiltros} onClick={() => setVerFiltros(!verFiltros)}>
+        {verFiltros ? 'Ocultar filtros' : `Filtros${min || max || categoria !== consola ? ' (activos)' : ''}`}
+      </button>
+      <form className="filtros" data-abiertos={verFiltros} onSubmit={(e) => { e.preventDefault(); filtrar({ min: precioMin, max: precioMax }); }}>
         {otras.length > 0 && (
           <label className="campo">
             Otra consola

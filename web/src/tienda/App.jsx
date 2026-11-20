@@ -58,7 +58,7 @@ export default function App() {
         {ruta.vista === 'catalogo' && (
           <Catalogo ruta={ruta} categorias={categorias} errorCategorias={errorCategorias} reintentar={cargarCategorias} />
         )}
-        {ruta.vista === 'ficha' && <Ficha key={ruta.id} id={ruta.id} alVer={setVistos} />}
+        {ruta.vista === 'ficha' && <Ficha key={ruta.id} id={ruta.id} explicar={ruta.explicar} alVer={setVistos} />}
         {ruta.vista === 'vistos' && <Vistos vistos={vistos} />}
       </main>
 

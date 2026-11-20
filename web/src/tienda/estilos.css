@@ -110,6 +110,7 @@ p { margin: 0; }
 .consola[aria-pressed="true"] span:first-child { color: var(--tinta-2); }
 .filtros { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
 .filtros .resumen { margin-left: auto; color: var(--gris); }
+.boton-filtros { display: none; align-self: flex-start; }
 .rejilla { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--hueco); }
 .tarjeta { display: flex; flex-direction: column; gap: 10px; color: var(--tinta); border-radius: var(--radio); }
 .tarjeta .foto { aspect-ratio: 1; border: 1px solid var(--borde); border-radius: var(--radio); background: var(--hoja); padding: 16px; display: grid; place-items: center; overflow: hidden; }
@@ -153,6 +154,8 @@ p { margin: 0; }
 .lista-tiendas li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: baseline; padding: 9px 0; border-top: 1px solid var(--regla); }
 .lista-tiendas li > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lista-tiendas .num { text-align: right; color: var(--gris); }
+.lista-tiendas small { display: block; font-size: var(--fs-chico); line-height: 16px; color: var(--gris); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.subtitulo { font-size: var(--fs-chico); line-height: 16px; color: var(--gris); }
 .mapa { height: 300px; border-radius: var(--radio); overflow: hidden; background: var(--realce); }
 .leyenda { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: var(--fs-chico); color: var(--gris); }
 .leyenda i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
@@ -192,6 +195,8 @@ p { margin: 0; }
 
 /* ---------- Teléfono y tableta ---------- */
 @media (max-width: 1100px) {
+  .barra { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .marca-sub { display: none; }
   .rejilla { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .consolas { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .rejilla6 > .span2, .rejilla6 > .span4 { grid-column: span 6; }
@@ -208,6 +213,12 @@ p { margin: 0; }
   .consola { flex: 0 0 148px; }
   .rejilla { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
   .filtros .resumen { margin-left: 0; width: 100%; }
+  .boton-filtros { display: inline-flex; }
+  .filtros[data-abiertos="false"] > :not(.resumen) { display: none; }
+  .campo input { width: 100%; }
+  .filtros { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .filtros .campo:has(select) { grid-column: 1 / -1; }
+  .filtros .btn2, .filtros .resumen { grid-column: 1 / -1; }
   .cabecera { grid-template-columns: 96px minmax(0, 1fr); padding: 12px; gap: 12px; }
   .cabecera .foto { width: 96px; height: 96px; }
   .compra { grid-column: 1 / -1; flex-direction: row; align-items: center; justify-content: space-between; }

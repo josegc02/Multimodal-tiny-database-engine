@@ -26,10 +26,10 @@ function aportes(fila, pesos) {
   return crudos.map((c) => c / suma);
 }
 
-export default function Recomendaciones({ id }) {
+export default function Recomendaciones({ id, explicarAlAbrir = false }) {
   const [pesos, setPesos] = useState(PESOS);
   const [vector, setVector] = useState('mobilenet');
-  const [explicar, setExplicar] = useState(false);
+  const [explicar, setExplicar] = useState(explicarAlAbrir);
   const [filas, setFilas] = useState(null);
   const [pesosDeFilas, setPesosDeFilas] = useState(PESOS);
   const [antes, setAntes] = useState(null);      // posiciones con los pesos anteriores

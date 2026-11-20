@@ -12,12 +12,13 @@ import { guardarVisto } from './vistos.js';
 
 const TIENDAS_EN_MAPA = 8;
 
-export default function Ficha({ id, alVer }) {
+export default function Ficha({ id, explicar, alVer }) {
   const [producto, setProducto] = useState(null);
   const [error, setError] = useState(null);
   const [ubicacion, setUbicacion] = useState(leerUbicacion);
   const [tiendas, setTiendas] = useState(null);
   const [errorTiendas, setErrorTiendas] = useState(null);
+  const [sinStock, setSinStock] = useState([]);      // tiendas más cerca que no lo tienen
   const [avisoUbicacion, setAvisoUbicacion] = useState('');
 
   const cargar = () => {
@@ -29,8 +30,16 @@ export default function Ficha({ id, alVer }) {
   const cargarTiendas = () => {
     setTiendas(null);
     setErrorTiendas(null);
-    tienda.tiendasCercanas({ lat: ubicacion.lat, lon: ubicacion.lon, productoId: id, limite: TIENDAS_EN_MAPA })
-      .then(setTiendas).catch(setErrorTiendas);
+    setSinStock([]);
+    Promise.all([
+      tienda.tiendasCercanas({ lat: ubicacion.lat, lon: ubicacion.lon, productoId: id, limite: TIENDAS_EN_MAPA }),
+      tienda.tiendasCercanas({ lat: ubicacion.lat, lon: ubicacion.lon, limite: 4 }),
+    ]).then(([conStock, todas]) => {
+      setTiendas(conStock);
+      const conProducto = new Set(conStock.map((t) => t.id));
+      const limite = conStock[0]?.distancia_m ?? Infinity;
+      setSinStock(todas.filter((t) => !conProducto.has(t.id) && t.distancia_m < limite).slice(0, 3));
+    }).catch(setErrorTiendas);
   };
   useEffect(cargarTiendas, [id, ubicacion]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -102,7 +111,14 @@ export default function Ficha({ id, alVer }) {
                 <p className="gris">La más cercana con stock</p>
                 <p className="cercana-nombre">{cercana.nombre}</p>
               </div>
+              {(cercana.direccion || cercana.distrito) && (
+                <p className="gris">{[cercana.direccion, cercana.distrito].filter(Boolean).join(', ')}</p>
+              )}
               <p className="cifra num">{distancia(cercana.distancia_m)}<small>de {ubicacion.nombre}, {cantidad(cercana.unidades)} en stock</small></p>
+              <a className="enlace" target="_blank" rel="noreferrer"
+                 href={`https://www.openstreetmap.org/directions?from=${ubicacion.lat},${ubicacion.lon}&to=${cercana.ubicacion.lat},${cercana.ubicacion.lon}`}>
+                Cómo llegar
+              </a>
               {tiendas.length > 1 && (
                 <ul className="lista-tiendas">
                   {tiendas.slice(1, 5).map((t) => (
@@ -115,6 +131,20 @@ export default function Ficha({ id, alVer }) {
                 </ul>
               )}
               {tiendas.length === 1 && <p className="gris">Es la única tienda de Lima con stock.</p>}
+              {sinStock.length > 0 && (
+                <div>
+                  <p className="subtitulo">Más cerca, pero sin stock</p>
+                  <ul className="lista-tiendas">
+                    {sinStock.map((t) => (
+                      <li key={t.id}>
+                        <span>{t.nombre}{t.distrito && <small>{t.distrito}</small>}</span>
+                        <span className="num">{distancia(t.distancia_m)}</span>
+                        <span className="num">0 u.</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </>
           )}
         </section>
@@ -137,7 +167,7 @@ export default function Ficha({ id, alVer }) {
         </section>
       </div>
 
-      <Recomendaciones id={id} />
+      <Recomendaciones id={id} explicarAlAbrir={explicar} />
     </div>
   );
 }
@@ -145,6 +175,7 @@ export default function Ficha({ id, alVer }) {
 function FichaCargando() {
   return (
     <div className="pagina" aria-busy="true">
+      <h1 className="oculto">Cargando el producto</h1>
       <div className="cabecera">
         <div className="foto esqueleto" style={{ border: 0 }} />
         <div className="cabecera-texto">
