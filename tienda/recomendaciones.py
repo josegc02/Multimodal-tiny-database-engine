@@ -189,10 +189,12 @@ def cercanas(motor, lat, lon, producto_id=None, radio=None, limite=10):
         stock = {fila["tienda_id"]: fila["unidades"] for fila in filas}
         if not stock:
             return []
+    existentes = motor.catalog.table("tiendas").storage.schema.fields
+    columnas = ", ".join(c for c in ("id", "nombre", "distrito", "direccion", "ubicacion") if c in existentes)
     # Ampliar k si las tiendas más próximas no tienen el producto.
     k = limite
     while True:
-        filas = consultar(motor, f"SELECT id, nombre, ubicacion, {distancia} AS distancia_m "
+        filas = consultar(motor, f"SELECT {columnas}, {distancia} AS distancia_m "
                                  f"FROM tiendas {filtro} ORDER BY {distancia} LIMIT {k}")
         if stock is None:
             return filas

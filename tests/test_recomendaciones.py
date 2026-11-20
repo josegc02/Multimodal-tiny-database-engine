@@ -217,6 +217,9 @@ def test_catalogo_filtra_por_categoria_y_subcategorias(tmp_path):
         assert [f["id"] for f in ps4] == [1, 2]  # no incluye "PlayStation 5" aunque empiece igual
         cats = cliente.get("/categorias").json()
         assert len(cats) == 4 and all(c["productos"] == 1 for c in cats)
+        cliente.post("/sql", json={"sql": "INSERT INTO productos VALUES (5,'e',50,'Video Games > PlayStation 4')"})
+        cats = {c["categoria"]: c["productos"] for c in cliente.get("/categorias").json()}
+        assert cats["Video Games > PlayStation 4"] == 2  # la caché se invalida al cambiar la tabla
 
 
 def test_revision_vencida_no_hace_esperar(tmp_path, monkeypatch):
