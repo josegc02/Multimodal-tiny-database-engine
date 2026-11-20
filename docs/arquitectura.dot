@@ -1,0 +1,39 @@
+// Arquitectura del motor y sus aplicaciones (entrega final).
+// Regenerar: dot -Tpng -Gdpi=200 docs/arquitectura.dot -o docs/overleaf/images/arquitectura.png
+digraph arquitectura {
+  graph [rankdir=TB, fontname="Helvetica", nodesep=0.35, ranksep=0.42, pad=0.2, bgcolor="white"];
+  node  [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, color="#8c8c8c", fillcolor="#f4f4f2", margin="0.16,0.08"];
+  edge  [color="#555555", arrowsize=0.7];
+
+  subgraph cluster_clientes {
+    label="Clientes"; fontname="Helvetica-Bold"; fontsize=11; color="#bbbbbb"; style="rounded";
+    web   [label="Front web (Vite + React)\nAsistente  ·  Tienda «Partida»", fillcolor="#dbe9f6", color="#1f77b4"];
+    tk    [label="Interfaz Tkinter\nArchivos · Consultas · Resultados · Plan · Mapa"];
+  }
+
+  api [label="API REST (FastAPI)\n/sql · /asistente/* · /catalogo · /recomendaciones · /tiendas/cercanas", fillcolor="#dbe9f6", color="#1f77b4"];
+  app [label="Lógica de las aplicaciones\nrag/ (PDF → fragmentos, LLM)  ·  tienda/ (señales, RRF)", fillcolor="#dbe9f6", color="#1f77b4"];
+  llm [label="LLM externo\n(Gemini)", shape=box, style="rounded,dashed", fillcolor="white"];
+  motor [label="Motor (fachada)\nStatementExecutor: sesión, transacciones, locks"];
+  conc  [label="Concurrencia\nLocks IS/IX/S/SIX/X · 2PL · deadlocks"];
+  sql   [label="Lexer → Parser → AST → Plan lógico\nMATCH · SIMILAR_TO · distancia()"];
+  opt   [label="Optimizador por costos\npushdown · estadísticas con KMV", fillcolor="#fbe3d3", color="#d95f02"];
+  ejec  [label="Ejecutor\nScan · Text Search · Vector Search · Join · Aggregate · Sort"];
+  ext   [label="Algoritmos externos\nsort k-way · hash GROUP BY / JOIN"];
+  cat   [label="Catálogo\ntablas, índices, estadísticas"];
+  feat  [label="ExtractFeatures\nSIFT/MFCC + Bag of Words · MobileNetV2"];
+
+  subgraph cluster_datos {
+    label="Datos en disco (páginas de 4 KB)"; labelloc=b; fontname="Helvetica-Bold"; fontsize=11; color="#bbbbbb"; style="rounded";
+    alm  [label="Almacenamiento\nHeap · Secuencial · tabla B+\nTEXT e IMAGE/AUDIO en archivo aparte"];
+    idx  [label="Índices\nB+ · Hash extensible · R-Tree\nSPIMI (TF-IDF, BM25) · IVF · HNSW"];
+  }
+
+  web -> api; tk -> motor;
+  api -> app; app -> llm [style=dashed, arrowhead=open];
+  app -> motor [label=" SQL", fontsize=9, fontname="Helvetica"];
+  api -> motor [label=" /sql", fontsize=9, fontname="Helvetica"];
+  motor -> conc; motor -> sql; sql -> opt; opt -> ejec;
+  ejec -> ext; ejec -> cat; ejec -> feat [style=dashed, arrowhead=open, label=" vector de la consulta", fontsize=9, fontname="Helvetica"];
+  cat -> alm; cat -> idx;
+}

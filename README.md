@@ -8,17 +8,18 @@ Proyecto de Base de Datos II (UTEC, 2026-2): un gestor de bases de datos constru
 | **2. Espacial** | Completa | R-Tree en disco con consultas por radio, k-NN y polígonos; métricas Euclidiana y Haversine; SQL espacial; mapa interactivo (tkintermapview); comparación contra GiST de PostGIS. |
 | **3. Texto** | Completa | Preprocesamiento (stopwords y stemming en español e inglés), índice invertido SPIMI en disco, rankings TF-IDF + coseno y BM25, SQL con `MATCH ... USING TF_IDF \| BM25` y `SCORE()`; comparación contra GIN de PostgreSQL. |
 | **4. Multimedia** | Completa | ExtractFeatures con Bag of Visual/Audio Words (SIFT → K-Means K=1024 para imágenes, MFCC → K=256 para audio → TF-IDF); índices IVF y HNSW; métricas euclidiana, producto punto y coseno; SQL con `SIMILAR_TO` y `SIMILARITY_SCORE()`; galería en la interfaz; comparación IVF vs HNSW. |
-| 5. Aplicación de IA | Pendiente | Entrega final. |
+| **5. Aplicaciones** | Completa | API REST (FastAPI) y front web con dos aplicaciones sobre el motor: un **asistente académico con RAG** (opción A: PDFs en fragmentos de 200–500 palabras, BM25 sobre SPIMI y un LLM que cita las fuentes) y una **tienda de videojuegos con recomendaciones híbridas** (opción B: compras, imagen con MobileNetV2 + HNSW, texto con BM25, categoría y consola, fusionadas con RRF; tienda más cercana con el R-Tree). |
 
-El diseño, los algoritmos y los resultados experimentales están en el [informe](docs/informe.md).
+El diseño, los algoritmos y los resultados experimentales de las cinco partes están en el [informe](docs/informe.md).
 
-> **Comparación experimental de la Parte 4.** Los resultados de
-> [`benchmarks/results/multimedia/`](benchmarks/results/multimedia/report.md) (1K, 10K y 100K imágenes de
-> MS-COCO 2017, IVF vs HNSW, euclidiana vs coseno, k=10) usan el vector final de ExtractFeatures: histogramas
-> BoVW de 1024 dimensiones con TF-IDF. Con los parámetros fijos del benchmark, IVF construye 8–50× más rápido y
-> mantiene Recall@10 ≈ 0,67–0,70 en los tres tamaños; HNSW responde 7–10× más rápido en 100K, pero su Recall@10
-> baja de 0,95 (1K) a 0,41 (100K) porque `ef_search=50` no crece con el corpus. Euclidiana y coseno dan
-> resultados casi iguales (vectores de norma 1). Análisis completo en la sección 11 del informe.
+**Resultados principales**
+
+| Parte | Resultado |
+| :--- | :--- |
+| 4. Multimedia | Con 100K imágenes de MS-COCO, HNSW responde en 7,4 ms frente a 51 ms de IVF, e IVF construye 8–50× más rápido. Con `ef_search` = 400, HNSW llega a Recall@10 0,70 (IVF: 0,66). SIFT + BoVW encuentra la misma foto, pero no la categoría: P@10 por categoría de 6,3 %, frente a 33,2 % con MobileNetV2. |
+| 5. Asistente | Precisión de las fuentes de 0,767 a **0,962** en 18 preguntas del curso; BM25 supera a TF-IDF en todos los umbrales. |
+| 5. Tienda | Mismo tipo de producto: 45,7 % → **69,1 %**; compró después: 6,7 % → **10,6 %**; misma consola: 51,9 % → 92,7 %; sin duplicados. Búsqueda en español: 21 % → 54 %. |
+| 5. Motor | Con 718 mil compras reales: pushdown de selección y estadísticas con KMV (JOIN de 27,7 s → 18 ms); hash extensible lineal con claves repetidas (508 s → 60 s). |
 
 ---
 
@@ -29,6 +30,8 @@ El diseño, los algoritmos y los resultados experimentales están en el [informe
 - **Tkinter**, para la interfaz gráfica. Viene con el instalador oficial de Python en Windows; en Ubuntu: `sudo apt install python3-tk`.
 - **Internet**, solo para el fondo del mapa (el panel descarga los mosaicos; los datos son locales).
 - **OpenCV y librosa** (en `requirements.txt`), para extraer los vectores de las columnas `IMAGE` y `AUDIO`.
+- **Node.js 18 o superior**, para el front web de la Parte 5 (probado con 22).
+- **Clave de Gemini** (gratuita en [aistudio.google.com](https://aistudio.google.com)), opcional: sin ella el asistente devuelve solo los fragmentos.
 - **Opcional:** Docker, para las comparaciones con PostgreSQL (PostGIS en la Parte 2 y GIN en la Parte 3).
 
 ### Instalación básica
@@ -210,15 +213,55 @@ El optimizador elige por costo estimado entre recorrer la tabla y usar un índic
 
 Gramática completa: [`docs/sql_grammar.ebnf`](docs/sql_grammar.ebnf).
 
-### API REST (Parte 5)
+### Aplicaciones (Parte 5)
+
+**1. Instalar** (además de `requirements.txt`):
 
 ```bash
 python -m pip install -r requirements-api.txt
-uvicorn api.main:app --reload            # http://127.0.0.1:8000/docs
-curl http://127.0.0.1:8000/tablas
+cd web && npm install && cd ..
 ```
 
-Recibe SQL en `POST /sql` y responde en JSON; también lista las tablas (`GET /tablas`) y sirve imágenes y audios (`GET /archivos`). A diferencia de la interfaz gráfica, no está en modo demo: guarda las tablas en `data/app` y las reabre al reiniciar. Endpoints, formato de las respuestas y variables de entorno: [`docs/api.md`](docs/api.md).
+**2. Preparar los datos** (una sola vez; quedan en `data/app`):
+
+```bash
+# Asistente: papers de arXiv + clases del curso → tablas papers y fragmentos con índice SPIMI
+python -m rag.arxiv seleccionar --maximo 250
+python -m rag.arxiv descargar
+python -m rag.corpus construir
+python -m rag.corpus cargar --datos data/app
+
+# Tienda: Amazon Reviews 2023 (Video Games), imágenes, compras, tiendas de Lima y stock
+python -m tienda.amazon seleccionar --cantidad 8000
+python -m tienda.imagenes --hilos 8
+python -m tienda.amazon compras
+python -m tienda.carga preparar --semilla 100
+python -m tienda.carga cargar --datos data/app
+
+# MobileNetV2 (ONNX, verificado con SHA-256) y sus vectores, para no calcularlos en la demo
+python -m engine.features.image.mobilenet
+python -m tienda.indice_imagen --datos data/app
+```
+
+**3. Levantar** (dos terminales):
+
+```bash
+# Terminal 1: API. Reconstruye los índices al iniciar (~5 min con la tienda completa)
+set GEMINI_API_KEY=...            # Linux/macOS: export GEMINI_API_KEY=...
+python -m uvicorn api.main:app --port 8000
+
+# Terminal 2: front web
+cd web
+npm run dev
+```
+
+| Dirección | Contenido |
+| :--- | :--- |
+| http://localhost:5173 | **Asistente**: preguntas con respuesta citada, biblioteca de documentos y subida de PDFs. |
+| http://localhost:5173/tienda.html | **Tienda "Partida"**: catálogo con búsqueda en español o inglés, ficha con la tienda más cercana con stock y mapa, recomendaciones con su motivo y "Explicar y ajustar" los pesos en vivo. |
+| http://127.0.0.1:8000/docs | API REST: `POST /sql` ejecuta SQL del motor y responde en JSON; además `/tablas`, `/archivos`, `/asistente/*`, `/catalogo`, `/categorias`, `/productos/{id}`, `/recomendaciones/{id}` y `/tiendas/cercanas`. |
+
+La API guarda las tablas en `data/app` y las reabre al reiniciar. Variables de entorno (`BD2_LLM`, `BD2_SIN_LLM`, `BD2_DATA_DIR`...), endpoints y formato JSON: [`docs/api.md`](docs/api.md). Pantallas y diseño del front: [`web/README.md`](web/README.md).
 
 ### Pruebas
 
@@ -245,9 +288,17 @@ python -m benchmarks.bench_text                     # Parte 3: TF-IDF vs BM25 vs
 # Parte 4: IVF vs HNSW sobre MS-COCO (requiere los subconjuntos de scripts/download_coco.py,
 # create_subsets.py y generate_queries.py); ~2 h para 1K, 10K y 100K
 python -m benchmarks.multimedia_compare --dataset-dir datasets/coco_subsets --output benchmarks/results/smoke/multimedia
+python -m benchmarks.comparar_extractores --dataset datasets/coco_subsets   # Parte 4 → 5: SIFT vs MobileNet vs CLIP
+
+python -m benchmarks.asistente.precision            # Parte 5 (A): precisión de las fuentes del asistente
+python -m benchmarks.tienda.medir                   # Parte 5 (B): tipo y comportamiento con IC por bootstrap
+python -m benchmarks.tienda.hnsw                    # Parte 5 (B): HNSW frente a búsqueda exacta
+python -m benchmarks.tienda.hnsw_escala             # Parte 5 (B): latencia y recall según el tamaño del catálogo
+python -m benchmarks.tienda.busqueda_es             # Parte 5 (B): búsqueda en español
+python -m benchmarks.bench_optimizador              # Parte 5: JOIN antes y después del pushdown y KMV
 ```
 
-Por defecto usan 1.000, 10.000 y 100.000 registros; los resultados y las gráficas se guardan en `benchmarks/results/`. La metodología está en [`benchmarks/README.md`](benchmarks/README.md), [`benchmarks/TEXT_BENCHMARK.md`](benchmarks/TEXT_BENCHMARK.md) y [`benchmarks/MULTIMEDIA_BENCHMARK.md`](benchmarks/MULTIMEDIA_BENCHMARK.md), y los análisis en las secciones 3, 5, 9 y 11 del informe.
+Por defecto usan 1.000, 10.000 y 100.000 registros; los resultados y las gráficas se guardan en `benchmarks/results/`. La metodología está en [`benchmarks/README.md`](benchmarks/README.md), [`benchmarks/TEXT_BENCHMARK.md`](benchmarks/TEXT_BENCHMARK.md) y [`benchmarks/MULTIMEDIA_BENCHMARK.md`](benchmarks/MULTIMEDIA_BENCHMARK.md), y los de la Parte 5 en [`benchmarks/tienda/README.md`](benchmarks/tienda/README.md) y [`benchmarks/asistente/README.md`](benchmarks/asistente/README.md); los análisis están en el informe.
 
 ---
 
@@ -255,11 +306,16 @@ Por defecto usan 1.000, 10.000 y 100.000 registros; los resultados y las gráfic
 
 ```mermaid
 flowchart TD
+    WEB["Front web (Vite + React)<br/>Asistente · Tienda Partida"] --> API["API REST (FastAPI)"]
+    API --> APPS["rag/ · tienda/<br/>fragmentos y LLM · señales y RRF"]
+    APPS -.-> LLM["LLM externo (Gemini)"]
+    APPS -->|SQL| M
+    API -->|POST /sql| M
     UI["Frontend Tkinter<br/>(Archivos, Consultas, Resultados, Plan, Mapa)"] --> M["Motor (fachada)"]
     M --> SE["StatementExecutor<br/>sesión, transacciones y locks"]
     SE --> P["Lexer → Parser → AST"]
-    P --> LP["LogicalPlanner"]
-    LP --> OPT["SQLOptimizer + QueryPlanner<br/>modelo de costos"]
+    P --> LP["LogicalPlanner<br/>pushdown de selección"]
+    LP --> OPT["SQLOptimizer + QueryPlanner<br/>modelo de costos, estadísticas con KMV"]
     OPT --> EX["SQLExecutor"]
     EX --> EXT["Algoritmos externos<br/>sort k-way, hash group by / join"]
     EX --> CAT["Catalog<br/>tablas, índices, estadísticas, latches"]
@@ -267,16 +323,16 @@ flowchart TD
     CAT --> IDX["Índices<br/>B+ · Hash extensible · R-Tree · SPIMI · HNSW · IVF"]
     IDX --> SP["Espacial<br/>Point, MBR, Polygon, Euclidiana, Haversine"]
     IDX --> TX["Texto<br/>tokens, stopwords, stemming; TF-IDF y BM25"]
-    ST --> FE["ExtractFeatures<br/>SIFT / MFCC → Bag of Words (K-Means) → TF-IDF"]
+    ST --> FE["ExtractFeatures<br/>SIFT / MFCC → Bag of Words → TF-IDF · MobileNetV2"]
     IDX --> VE["Vectores<br/>euclidiana, producto punto, coseno"]
     SE --> CC["Concurrencia<br/>LockManager + TransactionManager"]
 ```
 
 Recorrido de una sentencia:
-1. El **Motor** recibe el SQL del frontend.
+1. El **Motor** recibe el SQL de la interfaz Tkinter, de `POST /sql` o de la lógica de una aplicación (`rag/`, `tienda/`).
 2. El **StatementExecutor** abre la transacción y toma los locks.
 3. El SQL se convierte en un **plan lógico**.
-4. El **optimizador** elige, con su modelo de costos, la ruta de acceso: recorrer la tabla o usar un índice (B+, hash o R-Tree). `MATCH` usa siempre su índice SPIMI y `SIMILAR_TO` su índice HNSW o IVF.
+4. El plan lógico baja a cada tabla los filtros que solo la usan (*pushdown*). El **optimizador** elige, con su modelo de costos, la ruta de acceso: recorrer la tabla o usar un índice (B+, hash o R-Tree). `MATCH` usa siempre su índice SPIMI y `SIMILAR_TO` su índice HNSW o IVF.
 5. El **ejecutor** produce las filas; si los datos no caben en el buffer, usa algoritmos externos.
 
 El **catálogo** mantiene los índices actualizados en cada escritura y las estadísticas que usa el optimizador.
@@ -307,6 +363,7 @@ engine/                         # Motor de base de datos (sin dependencias exter
 │   └── preprocessing.py        # Tokenización, stopwords (es/en) y stemming Snowball
 ├── features/
 │   ├── image/sift.py, audio/mfcc.py   # Descriptores locales
+│   ├── image/mobilenet.py      # MobileNetV2 (ONNX) preentrenado para la tienda
 │   ├── kmeans.py, bow.py       # K-Means y Bag of Visual/Audio Words con TF-IDF
 │   └── registry.py             # ExtractFeatures: el vector de cada IMAGE / AUDIO
 ├── vector/
@@ -330,7 +387,20 @@ engine/                         # Motor de base de datos (sin dependencias exter
     ├── transaction.py
     └── transaction_manager.py  # BEGIN/COMMIT/ROLLBACK con undo log
 api/
-└── main.py                     # API REST (FastAPI): /sql, /tablas, /archivos, /salud
+├── main.py                     # API REST (FastAPI): /sql, /tablas, /archivos, /salud
+├── asistente.py                # Opción A: /asistente/preguntar, biblioteca y subida de PDFs
+└── tienda.py                   # Opción B: catálogo, productos, recomendaciones y tiendas cercanas
+rag/
+├── arxiv.py                    # Selección y descarga de papers de arXiv
+├── chunking.py                 # PDF → fragmentos de 200–500 palabras con su página
+└── corpus.py                   # Tablas papers y fragmentos, índice SPIMI
+tienda/
+├── amazon.py, imagenes.py      # Selección de productos y compras de Amazon Reviews 2023, imágenes
+├── categorias.py, busqueda.py  # Limpieza de categorías y búsqueda en español ampliada al inglés
+├── osm.py, stock.py, carga.py  # Tiendas de Lima (OpenStreetMap), stock y carga en el motor
+├── recomendaciones.py          # Señales (compras, imagen, texto, categoría, consola) y fusión RRF
+└── indice_imagen.py            # Índice HNSW de los vectores MobileNet
+web/                            # Front web (Vite + React): index.html (asistente) y tienda.html (tienda)
 frontend/
 ├── main.py                     # Ventana principal
 ├── motor.py                    # Fachada entre la interfaz y el motor
@@ -342,7 +412,8 @@ benchmarks/
 ├── bench_storage.py, bench_indexes.py, complexity.py, concurrency_demo.py   # Parte 1
 ├── bench_spatial.py, generate_spatial_datasets.py                          # Parte 2
 ├── bench_text.py, generate_text_datasets.py, text_*.py                     # Parte 3
-├── multimedia_*.py                                                         # Parte 4
+├── multimedia_*.py, comparar_extractores.py                                # Parte 4
+├── tienda/, asistente/, bench_optimizador.py                               # Parte 5
 └── results/                    # CSV, metadatos y gráficas de las corridas oficiales
 models/                         # Vocabularios Bag of Words (imagen K=1024, audio K=256)
 datasets/                       # Distritos (GeoJSON) y descripción del corpus de texto; lo generado no se versiona
@@ -363,7 +434,12 @@ Otros archivos:
 
 | Archivo | Contenido |
 | :--- | :--- |
-| [`docs/informe.md`](docs/informe.md) | Informe incremental: arquitectura, dominio de datos, algoritmos y resultados experimentales de las Partes 1 a 4. |
+| [`docs/informe.md`](docs/informe.md) | Informe incremental: arquitectura, dominio de datos, algoritmos y resultados experimentales de las Partes 1 a 5. |
+| [`docs/arquitectura.dot`](docs/arquitectura.dot) | Diagrama de arquitectura del informe (Graphviz). |
+| [`web/README.md`](web/README.md) | Front web: pantallas, diseño y estructura de las dos aplicaciones. |
+| [`docs/extractor_mobilenet.md`](docs/extractor_mobilenet.md) | Extractor MobileNetV2 de la tienda. |
+| [`datasets/tienda/README.md`](datasets/tienda/README.md) | Datos de la tienda, limpieza de categorías y licencias. |
+| [`benchmarks/tienda/README.md`](benchmarks/tienda/README.md), [`benchmarks/asistente/README.md`](benchmarks/asistente/README.md) | Evaluación de las dos aplicaciones. |
 | [`docs/api.md`](docs/api.md) | API REST: cómo levantarla, endpoints y formato JSON. |
 | [`docs/parte2_espacial.md`](docs/parte2_espacial.md) | Diseño de la Parte 2 por issue. |
 | [`docs/consultas_espaciales.md`](docs/consultas_espaciales.md) | Contratos de las consultas espaciales (rango, k-NN, polígonos, SQL). |
