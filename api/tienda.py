@@ -36,7 +36,31 @@ def compras_en_cache(estado, motor, producto_id):
 
 
 def indice_mobilenet(estado):
-    return estado.setdefault("indice_mobilenet", ImageIndex(estado["motor"].directorio))
+    """El índice MobileNet de la API; se crea una sola vez (no en cada petición)."""
+    if "indice_mobilenet" not in estado:
+        estado["indice_mobilenet"] = ImageIndex(estado["motor"].directorio)
+    return estado["indice_mobilenet"]
+
+
+def revisar_en_segundo_plano(estado, lock):
+    """Revisa las imágenes de MobileNet sin que ninguna petición espere (una revisión a la vez)."""
+    if estado.get("revisando_mobilenet"):
+        return None
+    estado["revisando_mobilenet"] = True
+
+    def trabajo():
+        try:
+            with lock:
+                filas = consultar(estado["motor"], "SELECT id, imagen FROM productos")
+            indice_mobilenet(estado).actualizar(filas)
+        except (OSError, ValueError, RuntimeError, KeyError):
+            pass  # la próxima petición lo vuelve a intentar
+        finally:
+            estado["revisando_mobilenet"] = False
+
+    hilo = threading.Thread(target=trabajo, name="revisar-mobilenet", daemon=True)
+    hilo.start()
+    return hilo
 
 
 def precalentar(estado, lock):
@@ -77,7 +101,8 @@ def rutas_tienda(estado, lock):
                  limite: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0)):
         filtros = []
         if categoria:
-            filtros.append(f"categoria = {literal(categoria)}")
+            # La categoría y sus subcategorías: "Video Games > PlayStation 4" incluye "... > Games".
+            filtros.append(f"(categoria = {literal(categoria)} OR categoria LIKE {literal(categoria.replace('%', '') + ' > %')})")
         if precio_min is not None and precio_max is not None and precio_min > precio_max:
             raise HTTPException(422, "Rango de precios invertido")
         for operador, valor in ((">=", precio_min), ("<=", precio_max)):
@@ -86,10 +111,30 @@ def rutas_tienda(estado, lock):
         if q:
             filtros.append(f"MATCH(descripcion, {literal(q)}) USING BM25")
         where = " WHERE " + " AND ".join(filtros) if filtros else ""
-        orden = "SCORE() DESC, id" if q else "id"
+        # Con búsqueda, por relevancia BM25. Sin ella, en el orden de carga del archivo, que es
+        # el de id (los productos se cargan de más a menos reseñados): el índice de la clave
+        # primaria es hash y no da orden, y ORDER BY id ordenaba las 7,995 filas para mostrar
+        # 24 (1.5 s frente a 0.2 s leyendo las primeras que cumplen el filtro).
+        orden = " ORDER BY SCORE() DESC, id" if q else ""
         with lock:
-            return consultar(estado["motor"], f"SELECT * FROM productos{where} "
-                             f"ORDER BY {orden} LIMIT {limite} OFFSET {offset}")
+            return consultar(estado["motor"], f"SELECT * FROM productos{where}{orden} "
+                             f"LIMIT {limite} OFFSET {offset}")
+
+    @router.get("/categorias")
+    def categorias():
+        """Cada categoría con su cantidad de productos, de mayor a menor.
+
+        El GROUP BY recorre los 7,995 productos (~1.9 s): se guarda y se recalcula solo si
+        cambia la tabla, que el motor señala reemplazando sus estadísticas.
+        """
+        with lock:
+            motor = estado["motor"]
+            stats = motor.catalog.table("productos").statistics
+            cache = estado.get("cache_categorias")
+            if cache is None or cache[0] is not stats:
+                filas = consultar(motor, "SELECT categoria, COUNT(*) AS productos FROM productos GROUP BY categoria")
+                cache = estado["cache_categorias"] = (stats, sorted(filas, key=lambda f: (-f["productos"], f["categoria"] or "")))
+        return cache[1]
 
     @router.get("/productos/{id}")
     def ficha(id: int, lat: float | None = Query(None, ge=-90, le=90),
@@ -121,7 +166,14 @@ def rutas_tienda(estado, lock):
             raise HTTPException(422, "Indique tres pesos no negativos con suma positiva y finita")
         usar_mobilenet = vector_imagen != "sift"
         indice = indice_mobilenet(estado) if usar_mobilenet else None
-        revisar = usar_mobilenet and not indice.vigente()
+        # Con un índice ya armado, una revisión vencida corre en segundo plano y se responde
+        # con el índice actual; solo sin índice (primera vez) la petición espera.
+        revisar = usar_mobilenet and indice.index is None
+        if usar_mobilenet and indice.index is not None and not indice.vigente():
+            if indice.REVISAR_EN_SEGUNDO_PLANO:
+                revisar_en_segundo_plano(estado, lock)
+            else:
+                revisar = True
         with lock:
             motor = estado["motor"]
             origen = producto(motor, id)

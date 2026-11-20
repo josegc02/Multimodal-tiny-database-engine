@@ -4,10 +4,27 @@ La opción B usa una categoría de Amazon Reviews 2023 (`Video_Games`) y una
 instantánea de tiendas reales de Lima tomada de OpenStreetMap. El stock se
 genera con una semilla fija: **no representa inventario real**.
 
-En la validación completa del 18 de noviembre de 2026, la selección de 8 000
-candidatos produjo 7 995 productos con imagen válida (5 descartados). La carga
-terminó con 100 000 compras de 11 276 usuarios, 623 tiendas y 15 838 filas de
-stock, con semilla 100.
+Con la limpieza de categorías (20 de noviembre de 2026, ver abajo), la selección
+de 8 000 candidatos produce 7 994 productos con imagen válida (6 descartados) y
+718 733 compras de 264 464 usuarios (los de 2 a 20 compras); 623 tiendas y
+15 838 filas de stock, con semilla 100.
+
+## Limpieza de categorías (`tienda/categorias.py`)
+
+El archivo de Video Games de Amazon trae productos que no son de una tienda de
+videojuegos y rutas de categoría que contradicen al producto. `seleccionar` los
+corrige antes de elegir (medido sobre el catálogo anterior):
+
+| Problema | Antes | Después | Cómo |
+|---|---:|---:|---|
+| Libros, películas, música, comida y juegos de mesa (*Born a Crime* y *Star Wars Armada* salían en "PC > Games") | 131 | 0 | `main_category` (Books, Kindle, Movies & TV, Digital Music, Grocery), formato (`Type of item`: Blu-ray, DVD, Paperback…), campos de libro o película (ISBN, duración, director…) o un título inequívoco ("[DVD]", "Complete Series") |
+| Productos sin relación que ningún campo delata (audífonos genéricos, cargadores de Fitbit, Funko Pop, software de impuestos…) | 38 | 0 | Lista revisada a mano (`EXCLUIDOS`), con el motivo de cada uno |
+| Rutas promocionales tratadas como consola ("Game Genre of the Month", "Ubisoft", "Value Games Under $20") | 89 | 0 | Pasan a la consola que nombra el título, o a "Video Games" |
+| La consola del título contradice la de la ruta (una funda de Switch en "Nintendo DS", un soporte de PS5 en "Sega Game Gear") | 455 | 0 | La ruta pasa a la de la consola del título, conservando el resto ("Accessories > Cases & Storage") |
+
+La detección de consola ya no confunde "Optical Switch" o "Blue Switches" (teclas de
+teclados y mouse) con la Nintendo Switch. Los productos descartados se reemplazan
+por los siguientes más reseñados.
 
 ## Reproducir el dataset
 

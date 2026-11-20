@@ -301,6 +301,11 @@ def main():
               f"  puntaje {np.mean([m / b for m, b in zip(ms[:2], mejores)]):.3f}")
     final = max(filas4, key=lambda f: np.mean([m / b for m, b in zip(f[1:3], mejores)]))[0]
 
+    APP = dict(compras="filtrada", img="mobilenet", fusion="rrf", k=101, wc=1, wi=0.5, wt=1, wcat=0.25, wplat=0.5, dedup=True)
+    for nombre, c in (("final de la grilla", final), ("app", APP)):
+        t, cm = m_tipo(tipo_val, c).mean(), m_comp(comp_val, c).mean()
+        print(f"  validación, {nombre}: tipo {t:.3f}  comportamiento {cm:.3f}  puntaje {(t / mejores[0] + cm / mejores[1]) / 2:.3f}")
+
     RRF = dict(PR117, fusion="rrf", wi=0.5)
     finales = {"antes: texto + SIFT, pesos 1,1,1": dict(PR117, img="sift", wi=1, wcat=0),
                "#117: MobileNet 0.25 + categoría 0.25": PR117,
@@ -311,7 +316,10 @@ def main():
                "elegida": elegida,
                "elegida + sin duplicados": dict(elegida, dedup=True),
                "elegida + solo plataforma": dict(elegida, wplat=final["wplat"]),
-               "final: + sin duplicados + plataforma": final}
+               "final: + sin duplicados + plataforma": final,
+               # Lo que sirve la API hoy (api/tienda.py y tienda/recomendaciones.py), sea cual sea la
+               # elegida por la grilla: así el README reporta lo que ve quien usa la tienda.
+               "app: RRF 1/0.5/1, categoría 0.25, consola 0.5, sin duplicados": APP}
     bootstrap = np.random.default_rng(0)
     it = bootstrap.integers(0, len(tipo_prueba), (5000, len(tipo_prueba)))
     ic_ = bootstrap.integers(0, len(comp_prueba), (5000, len(comp_prueba)))

@@ -25,18 +25,18 @@ perder en ninguna** de las dos.
    **Favorece al texto**, que también sale del producto.
 2. **Comportamiento** (recall@10): de los productos que el mismo usuario compró **a
    30 días o menos** de la consulta, cuántos recomienda la app. Se separa por tiempo:
-   la señal de compras se construye solo con compras anteriores al corte (7 de agosto
+   la señal de compras se construye solo con compras anteriores al corte (4 de agosto
    de 2021, percentil 80) y se evalúa con las posteriores. Solo cuentan usuarios con
-   20 compras o menos en el periodo evaluado. Cobertura: 5,680 de 7,995 productos
-   (71 %) tienen al menos un objetivo. **Favorece a la señal de compras**.
+   20 compras o menos en el periodo evaluado. Cobertura: 5,766 de 7,994 productos
+   (72 %) tienen al menos un objetivo. **Favorece a la señal de compras**.
 
-Línea base "más populares" (siempre los 10 más comprados): 8.3 % de tipo y **2.9 %**
+Línea base "más populares" (siempre los 10 más comprados): 8.3 % de tipo y **2.8 %**
 de comportamiento. La métrica de comportamiento no está midiendo popularidad.
 
 ## Protocolo
 
-- **Validación**: 281 consultas de tipo y 800 de comportamiento. Ahí se elige todo.
-- **Prueba**: 505 y 800 consultas distintas. Ahí se reporta, sin volver a elegir.
+- **Validación**: 282 consultas de tipo y 800 de comportamiento. Ahí se elige todo.
+- **Prueba**: 506 y 800 consultas distintas. Ahí se reporta, sin volver a elegir.
 - **Regla de selección**, fijada antes de medir: gana la configuración con mayor
   promedio de (métrica ÷ mejor valor de esa métrica en la etapa).
 - **Grilla por etapas** para no sobreajustar la validación:
@@ -50,14 +50,29 @@ de comportamiento. La métrica de comportamiento no está midiendo popularidad.
 
 ## Resultados (prueba)
 
+Medidos sobre el catálogo limpio (7,994 productos, ver `datasets/tienda/README.md`:
+sin libros, películas ni productos ajenos, y con la consola corregida contra el título).
+
 | Configuración | Tipo | Comportamiento | Misma consola | Listas con duplicados |
 |---|---:|---:|---:|---:|
-| Antes: texto + SIFT, pesos 1,1,1, compras de antes | 47.1 % [44.3, 49.9] | 6.2 % [5.3, 7.2] | 53.5 % | 41 % |
-| #117 inicial: MobileNet 0.25 + categoría 0.25 | 64.7 % [61.9, 67.6] | 8.9 % [7.7, 10.1] | 72.1 % | 41 % |
-| Elegida: RRF, 101 candidatos, compras filtradas, pesos 1/0.5/1, categoría 0.25 | 70.9 % [68.1, 73.5] | 10.2 % [8.9, 11.5] | 75.0 % | 42 % |
-| Elegida + solo sin duplicados | 69.9 % [67.2, 72.6] | 10.3 % [9.1, 11.7] | 74.4 % | **0 %** |
-| Elegida + solo misma plataforma 0.5 | 70.9 % [68.1, 73.6] | 10.4 % [9.1, 11.7] | 93.1 % | 40 % |
-| **Final: sin duplicados + misma plataforma 0.5** | **70.0 %** [67.2, 72.7] | **10.5 %** [9.3, 11.8] | **93.2 %** | **0 %** |
+| Antes: texto + SIFT, pesos 1,1,1, compras de antes | 45.7 % [42.9, 48.4] | 6.7 % [5.8, 7.7] | 51.9 % | 42 % |
+| #117 inicial: MobileNet 0.25 + categoría 0.25 | 65.5 % [62.6, 68.3] | 8.8 % [7.7, 10.1] | 72.0 % | 43 % |
+| **La app: RRF, 101 candidatos, compras filtradas, pesos 1/0.5/1, categoría 0.25, consola 0.5, sin duplicados** | **69.1 %** [66.3, 71.9] | **10.6 %** [9.4, 11.9] | **92.7 %** | **0 %** |
+| La app − #117 inicial | +3.6 [+2.0, +5.3] | +1.8 [+1.0, +2.7] | | |
+
+**La configuración de la app no la vuelve a elegir la grilla sobre el catálogo limpio,
+y se conserva.** Se eligió con la misma regla sobre el catálogo anterior. Con el limpio,
+la etapa 1 prefirió la fusión por máximo a RRF por muy poco (0.988 frente a 0.970) y
+la grilla terminó en pesos 1/0.25/1, categoría 0.25 y consola 0.25. En **validación**,
+las dos empatan: la elegida por la grilla puntúa 0.998 (tipo 64.4 %, comportamiento
+11.5 %) y la de la app, 0.991 (65.5 % y 11.1 %). Cambiar los valores por defecto por
+una diferencia así sería mover la app con el ruido; en prueba, la de la app da 69.1 % y
+10.6 % frente a 66.4 % y 10.6 %. Las dos filas están en `resultados.json`.
+
+Las secciones siguientes (qué aporta cada cambio, duplicados, plataforma, HNSW) se
+midieron sobre el catálogo anterior, con ruido (7,995 productos), y sus conclusiones
+se mantienen: la limpieza cambió ~160 productos y las cifras se movieron alrededor de
+un punto.
 
 Compras filtradas: solo usuarios con 2 a 20 compras y solo pares a 30 días o menos.
 

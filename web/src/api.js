@@ -40,3 +40,29 @@ export const api = {
   subir: (formulario) => pedir('/asistente/documentos', { method: 'POST', body: formulario }),
   urlPdf: (id, pagina) => `${BASE}/asistente/documentos/${id}/pdf${pagina ? `#page=${pagina}` : ''}`,
 };
+
+// ---- Tienda (opción B): contrato en docs/api.md ----
+const consulta = (parametros) => {
+  const q = new URLSearchParams();
+  for (const [clave, valor] of Object.entries(parametros)) {
+    if (valor !== undefined && valor !== null && valor !== '') q.set(clave, valor);
+  }
+  const texto = q.toString();
+  return texto ? `?${texto}` : '';
+};
+
+export const tienda = {
+  categorias: () => pedir('/categorias'),
+  catalogo: ({ q, categoria, precioMin, precioMax, limite = 24, offset = 0 } = {}) =>
+    pedir(`/catalogo${consulta({ q, categoria, precio_min: precioMin, precio_max: precioMax, limite, offset })}`),
+  producto: (id, ubicacion) => pedir(`/productos/${id}${consulta({ lat: ubicacion?.lat, lon: ubicacion?.lon })}`),
+  recomendaciones: (id, { pesos, pesoCategoria, pesoPlataforma, vectorImagen, fusion } = {}) =>
+    pedir(`/recomendaciones/${id}${consulta({
+      pesos: pesos?.join(','), peso_categoria: pesoCategoria, peso_plataforma: pesoPlataforma,
+      vector_imagen: vectorImagen, fusion,
+    })}`),
+  tiendasCercanas: ({ lat, lon, productoId, limite = 8 }) =>
+    pedir(`/tiendas/cercanas${consulta({ lat, lon, producto_id: productoId, limite })}`),
+  // Las fotos viven en disco junto al motor; la API las sirve desde sus carpetas permitidas.
+  urlImagen: (ruta) => `${BASE}/archivos${consulta({ ruta })}`,
+};

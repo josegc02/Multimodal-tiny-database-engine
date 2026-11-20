@@ -59,7 +59,10 @@ PLATAFORMAS = [
     ("ps5", r"\bps5\b|playstation 5"), ("ps4", r"\bps4\b|playstation 4"), ("ps3", r"\bps3\b|playstation 3"),
     ("ps2", r"\bps2\b|playstation 2"), ("psvita", r"ps ?vita|playstation vita"), ("psp", r"\bpsp\b"),
     ("xbox series", r"xbox series|series [xs]\b"), ("xbox one", r"xbox one"), ("xbox 360", r"xbox 360"),
-    ("switch", r"\bswitch\b"), ("3ds", r"\b[23]ds\b"), ("ds", r"nintendo ds\b|\bnds\b"),
+    # "Switch" a secas también es la tecla de un teclado o el botón de un mouse ("Optical Switch"):
+    # cuenta solo como consola en las formas en que se nombra a la Nintendo Switch.
+    ("switch", r"nintendo[- ]?switch|\bswitch[ -]?(?:oled|lite)\b|\b(?:for|para|with)\s+(?:the\s+)?switch\b|"
+               r"\bswitch\s*(?:/|console|controllers?|games?|joy-?cons?|dock|case|pro controller)|\bns\b|\bnsw\b"), ("3ds", r"\b[23]ds\b"), ("ds", r"nintendo ds\b|\bnds\b"),
     ("wii u", r"wii u\b"), ("wii", r"\bwii\b(?! u)"), ("gamecube", r"gamecube"),
     ("sega", r"\bsega\b|dreamcast|genesis|saturn"),
     ("vr", r"oculus|meta quest|\bquest [23]\b|virtual reality"), ("pc", r"\bpc\b|windows|\bmac\b|steam\b(?! deck)"),
@@ -118,15 +121,18 @@ def sin_duplicados(origen, ordenados, vector=None, limite=10):
     return elegidos
 
 
-def filas_por_id(motor, ids):
-    """{id: fila} de los productos, una búsqueda por clave primaria por id.
+def filas_por_id(motor, ids, columnas=("id", "titulo", "categoria")):
+    """{id: fila} con las columnas pedidas que existan, una búsqueda por clave primaria por id.
 
     TEXT solo admite índices SPIMI, así que filtrar por categoría recorrería toda la
-    tabla (~570 ms); ~300 búsquedas por clave primaria tardan ~100 ms.
+    tabla (~570 ms); ~300 búsquedas por clave primaria tardan ~100 ms. Sin la
+    descripción: leerla de cada candidato sumaba ~0.3 s.
     """
+    existentes = motor.catalog.table("productos").storage.schema.fields
+    lista = ", ".join(c for c in columnas if c in existentes) or "*"
     filas = {}
     for i in sorted(ids):
-        encontradas = consultar(motor, f"SELECT * FROM productos WHERE id = {i}")
+        encontradas = consultar(motor, f"SELECT {lista} FROM productos WHERE id = {i}")
         if encontradas:
             filas[i] = encontradas[0]
     return filas
@@ -186,10 +192,12 @@ def cercanas(motor, lat, lon, producto_id=None, radio=None, limite=10):
         stock = {fila["tienda_id"]: fila["unidades"] for fila in filas}
         if not stock:
             return []
+    existentes = motor.catalog.table("tiendas").storage.schema.fields
+    columnas = ", ".join(c for c in ("id", "nombre", "distrito", "direccion", "ubicacion") if c in existentes)
     # Ampliar k si las tiendas más próximas no tienen el producto.
     k = limite
     while True:
-        filas = consultar(motor, f"SELECT id, nombre, ubicacion, {distancia} AS distancia_m "
+        filas = consultar(motor, f"SELECT {columnas}, {distancia} AS distancia_m "
                                  f"FROM tiendas {filtro} ORDER BY {distancia} LIMIT {k}")
         if stock is None:
             return filas
