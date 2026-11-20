@@ -1,0 +1,16 @@
+[
+  {
+    "size": 1000,
+    "metric": "cosine",
+    "technique": "mobilenet",
+    "queries": 73,
+    "precision_at_10": 0.33150684931506846
+  },
+  {
+    "size": 1000,
+    "metric": "cosine",
+    "technique": "sift",
+    "queries": 73,
+    "precision_at_10": 0.06301369863013699
+  }
+]

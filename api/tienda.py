@@ -1,5 +1,7 @@
 """API de catálogo, recomendaciones y tiendas."""
 import math
+from typing import Literal
+from tienda.indice_imagen import ImageIndex
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -50,7 +52,8 @@ def rutas_tienda(estado, lock):
             return fila
 
     @router.get("/recomendaciones/{id}")
-    def recomendaciones(id: int, pesos: str = Query("1,1,1", description="Compras, imagen, texto")):
+    def recomendaciones(id: int, pesos: str = Query("1,1,1", description="Compras, imagen, texto"),
+                        vector_imagen: Literal["sift", "mobilenet"] = "sift"):
         try:
             valores = [float(p) for p in pesos.split(",")]
         except ValueError:
@@ -61,7 +64,22 @@ def rutas_tienda(estado, lock):
         with lock:
             motor = estado["motor"]
             origen = producto(motor, id)
-            senales = {"compras": compras(motor, id), "imagen": visual(motor, origen["imagen"]),
+            catalogo_imagenes = (consultar(motor, "SELECT id, imagen FROM productos")
+                                 if vector_imagen == "mobilenet" else None)
+        if vector_imagen == "mobilenet":
+            # Fuera del lock del motor: extraer el catálogo tarda minutos la primera vez y
+            # no debe congelar el resto de la API. El índice tiene su propio lock.
+            indice = estado.setdefault("indice_mobilenet", ImageIndex(estado["motor"].directorio))
+            try:
+                indice.actualizar(catalogo_imagenes)
+            except (OSError, ValueError) as exc:  # falta el modelo: afecta a todo el índice
+                raise HTTPException(503, str(exc)) from exc
+            imagen = indice.buscar(id)  # vacío si el producto no tiene vector: quedan compras y texto
+        with lock:
+            motor = estado["motor"]
+            if vector_imagen != "mobilenet":
+                imagen = visual(motor, origen["imagen"])
+            senales = {"compras": compras(motor, id), "imagen": imagen,
                        "texto": texto(motor, origen["descripcion"])}
             filas = fusionar(id, senales, dict(zip(senales, valores)))
             return [{**producto(motor, fila["id"]), **fila} for fila in filas]

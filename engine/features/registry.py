@@ -84,19 +84,29 @@ def register_extractor(kind: str, extractor: Extractor) -> None:
         _extractors[kind] = extractor
 
 
-def extractor_for(kind: str) -> Extractor:
+def extractor_for(kind: str, name: str | None = None) -> Extractor:
     """Función que convierte la ruta de un archivo en su vector."""
     if kind not in MEDIA_TYPES:
         raise ValueError(f"Tipo multimedia no soportado: {kind}")
+    if name is not None and kind != "image":
+        raise ValueError("Los extractores con nombre solo corresponden a IMAGE")
+    if name is not None and name != "sift":
+        if kind != "image" or name != "mobilenet":
+            raise ValueError("Extractor multimedia desconocido")
+        with _latch:
+            if "image:mobilenet" not in _extractors:
+                from engine.features.image.mobilenet import MobileNetExtractor
+                _extractors["image:mobilenet"] = MobileNetExtractor()
+            return _extractors["image:mobilenet"]
     with _latch:
         if kind not in _extractors:
             _extractors[kind] = _default(kind)
         return _extractors[kind]
 
 
-def extract_features(kind: str, path: str) -> np.ndarray:
+def extract_features(kind: str, path: str, name: str | None = None) -> np.ndarray:
     """ExtractFeatures(objeto): vector 1D de números finitos para el archivo."""
-    vector = np.asarray(extractor_for(kind)(path), dtype=np.float32)
+    vector = np.asarray(extractor_for(kind, name)(path), dtype=np.float32)
     if vector.ndim != 1 or len(vector) == 0 or not np.isfinite(vector).all():
         raise ValueError("El extractor debe devolver un vector 1D de números finitos")
     return vector

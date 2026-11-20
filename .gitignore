@@ -48,3 +48,4 @@ docs/informe.pdf
 Thumbs.db
 
 test_manual.py
+*.onnx

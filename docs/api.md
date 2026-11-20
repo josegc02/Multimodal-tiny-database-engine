@@ -160,10 +160,23 @@ Las cifras de precisión que justifican estos valores están en `benchmarks/asis
 - `GET /asistente/documentos/{id}/pdf` busca el PDF en `datasets/papers/` (o en `BD2_PAPERS_DIR`): `pdf/` para arXiv, `curso/` según `curso.csv` y `subidos/` para los subidos. Responde `404` si no está descargado.
 - `POST /asistente/documentos` recibe `multipart/form-data` con `archivo` (PDF de hasta 20 MB), `titulo`, `autores`, `anio` y `tipo` (`paper` o `clase`). Extrae el texto por página, lo corta en fragmentos de 200–500 palabras y lo inserta en `papers` y `fragmentos`; el índice SPIMI se actualiza con el `INSERT`, así que el documento se puede preguntar al instante. Responde `{"id", "paginas", "fragmentos", "palabras", "ms_extraccion", "ms_insercion"}`, o `400` si no es un PDF o no tiene texto extraíble.
 
+### `GET /recomendaciones/{id}`
+
+Combina compras conjuntas, similitud de imagen y texto. `pesos=1,1,1` controla
+esas tres señales en ese orden. `vector_imagen=sift` es el valor predeterminado;
+`vector_imagen=mobilenet` elige el modelo CNN preentrenado del issue #102.
+
+```text
+GET /recomendaciones/1?pesos=0,1,0&vector_imagen=mobilenet
+```
+
+Devuelve hasta diez productos, excluyendo el producto consultado, con `puntaje`
+y `senales`. MobileNet requiere descargar sus pesos y construye su índice en
+la primera petición. Consulte [instalación, caché y evaluación](extractor_mobilenet.md).
+
 ## Límites
 
 - Atiende **una petición a la vez**, porque el motor tiene una sola sesión SQL. Alcanza para la demo; una consulta lenta hace esperar a las demás.
 - Al iniciar, los índices se reconstruyen desde las tablas. Con miles de imágenes, el HNSW puede tardar alrededor de un minuto en estar listo.
 - El asistente tarda lo que tarde el LLM: con `gemini-3.1-flash-lite`, de 3 a 5 segundos por pregunta. Mientras espera al LLM no bloquea las demás peticiones; solo las consultas SQL van de a una.
 - **Cuota gratuita de Gemini**: Google la muestra por proyecto en AI Studio y la renueva cada minuto y cada día (a medianoche del Pacífico). Cada pregunta gasta 2 llamadas, o 1 con `BD2_PALABRAS_CLAVE=local`. Si se acaba, el endpoint responde `502` con un mensaje claro; si Google está saturado (`503`), se reintenta solo hasta 3 veces.
-- El endpoint de la opción B (`/recomendaciones/{id}`, #101) se agrega sobre esta base.
