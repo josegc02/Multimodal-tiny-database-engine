@@ -1,0 +1,108 @@
+{
+ "busquedas": [
+  [
+   "mando inalámbrico",
+   0.0,
+   0.6
+  ],
+  [
+   "mando para switch",
+   0.1,
+   0.3
+  ],
+  [
+   "control de xbox",
+   0.1,
+   0.4
+  ],
+  [
+   "audífonos gamer",
+   0.3,
+   1.0
+  ],
+  [
+   "audífonos inalámbricos para ps5",
+   0.3,
+   0.9
+  ],
+  [
+   "auriculares con micrófono",
+   0.2,
+   1.0
+  ],
+  [
+   "teclado mecánico",
+   0.0,
+   0.9
+  ],
+  [
+   "teclado rgb",
+   0.5,
+   0.7
+  ],
+  [
+   "mouse inalámbrico",
+   0.9,
+   0.7
+  ],
+  [
+   "ratón para juegos",
+   0.0,
+   0.4
+  ],
+  [
+   "alfombrilla para mouse",
+   0.0,
+   0.9
+  ],
+  [
+   "funda para switch",
+   0.3,
+   0.7
+  ],
+  [
+   "estuche de viaje",
+   0.1,
+   0.4
+  ],
+  [
+   "cargador de mandos ps4",
+   0.0,
+   0.0
+  ],
+  [
+   "cable de carga",
+   0.1,
+   0.3
+  ],
+  [
+   "soporte para audífonos",
+   0.0,
+   0.0
+  ],
+  [
+   "soporte vertical ps5",
+   0.3,
+   0.3
+  ],
+  [
+   "juego de carreras",
+   0.5,
+   0.4
+  ],
+  [
+   "juego de fútbol",
+   0.5,
+   0.9
+  ],
+  [
+   "pegatinas para consola",
+   0.0,
+   0.0
+  ]
+ ],
+ "p10": {
+  "tal cual": 0.20999999999999996,
+  "ampliada": 0.5400000000000001
+ }
+}
