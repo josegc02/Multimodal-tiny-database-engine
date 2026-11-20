@@ -1,11 +1,11 @@
 {
- "corte": "2021-08-07T00:38:43",
- "cobertura": 5680,
- "productos": 7995,
+ "corte": "2021-08-04T20:58:45",
+ "cobertura": 5766,
+ "productos": 7994,
  "consultas": {
   "tipo": [
-   281,
-   505
+   282,
+   506
   ],
   "comportamiento": [
    800,
@@ -13,8 +13,8 @@
   ]
  },
  "mas_populares": {
-  "tipo": 0.08316831683168317,
-  "comportamiento": 0.0291875
+  "tipo": 0.08300395256916997,
+  "comportamiento": 0.02777579365079365
  },
  "configuraciones": [
   {
@@ -29,30 +29,30 @@
     "wt": 1,
     "wcat": 0
    },
-   "tipo": 0.47148514851485146,
+   "tipo": 0.4567193675889328,
    "tipo_ic": [
-    0.4434,
-    0.4994
+    0.4294,
+    0.4844
    ],
-   "comportamiento": 0.0620952380952381,
+   "comportamiento": 0.06715228174603174,
    "comportamiento_ic": [
-    0.0525,
-    0.0723
+    0.0578,
+    0.0773
    ],
    "dif_117_tipo_ic": [
-    -0.1994,
-    -0.1531
+    -0.2208,
+    -0.1751
    ],
    "dif_117_comportamiento_ic": [
-    -0.0363,
-    -0.0175
+    -0.0287,
+    -0.0132
    ],
-   "misma_plataforma": 0.5352159468438538,
+   "misma_plataforma": 0.5185185185185185,
    "misma_plataforma_ic": [
-    0.5173,
-    0.5532
+    0.5019,
+    0.5356
    ],
-   "listas_con_duplicados": 0.413
+   "listas_con_duplicados": 0.4165
   },
   {
    "nombre": "#117: MobileNet 0.25 + categoría 0.25",
@@ -66,15 +66,15 @@
     "wt": 1,
     "wcat": 0.25
    },
-   "tipo": 0.6473267326732672,
+   "tipo": 0.6549407114624506,
    "tipo_ic": [
-    0.6188,
-    0.6756
+    0.6263,
+    0.6828
    ],
-   "comportamiento": 0.08870337301587301,
+   "comportamiento": 0.08792559523809525,
    "comportamiento_ic": [
-    0.0769,
-    0.1009
+    0.0768,
+    0.1005
    ],
    "dif_117_tipo_ic": [
     0.0,
@@ -84,12 +84,12 @@
     0.0,
     0.0
    ],
-   "misma_plataforma": 0.7205980066445183,
+   "misma_plataforma": 0.7202777777777779,
    "misma_plataforma_ic": [
-    0.7013,
-    0.7399
+    0.7025,
+    0.7376
    ],
-   "listas_con_duplicados": 0.4069
+   "listas_con_duplicados": 0.4265
   },
   {
    "nombre": "#117 + compras de usuarios con 2 a 20",
@@ -103,30 +103,30 @@
     "wt": 1,
     "wcat": 0.25
    },
-   "tipo": 0.6455445544554456,
+   "tipo": 0.6681818181818182,
    "tipo_ic": [
-    0.619,
-    0.6723
+    0.6411,
+    0.6949
    ],
-   "comportamiento": 0.1043328373015873,
+   "comportamiento": 0.10038541666666667,
    "comportamiento_ic": [
-    0.092,
-    0.1171
+    0.0889,
+    0.113
    ],
    "dif_117_tipo_ic": [
-    -0.0182,
-    0.0145
+    -0.0012,
+    0.0281
    ],
    "dif_117_comportamiento_ic": [
-    0.0075,
-    0.0239
+    0.0064,
+    0.0186
    ],
-   "misma_plataforma": 0.7454042081949059,
+   "misma_plataforma": 0.7503703703703705,
    "misma_plataforma_ic": [
-    0.7272,
-    0.7638
+    0.7336,
+    0.7671
    ],
-   "listas_con_duplicados": 0.4107
+   "listas_con_duplicados": 0.4349
   },
   {
    "nombre": "#117 + compras a 30 días",
@@ -140,30 +140,30 @@
     "wt": 1,
     "wcat": 0.25
    },
-   "tipo": 0.671881188118812,
+   "tipo": 0.674703557312253,
    "tipo_ic": [
-    0.6434,
-    0.6996
+    0.6466,
+    0.7024
    ],
-   "comportamiento": 0.0914717261904762,
+   "comportamiento": 0.08956696428571428,
    "comportamiento_ic": [
-    0.0794,
-    0.1039
+    0.0784,
+    0.1018
    ],
    "dif_117_tipo_ic": [
-    0.0099,
-    0.0392
+    0.0061,
+    0.0334
    ],
    "dif_117_comportamiento_ic": [
-    -0.0023,
-    0.0079
+    -0.002,
+    0.0052
    ],
-   "misma_plataforma": 0.7406423034330011,
+   "misma_plataforma": 0.7514814814814815,
    "misma_plataforma_ic": [
-    0.7217,
-    0.7592
+    0.7346,
+    0.768
    ],
-   "listas_con_duplicados": 0.4245
+   "listas_con_duplicados": 0.4403
   },
   {
    "nombre": "#117 + RRF con pesos 1/0.5/1/0.25",
@@ -177,30 +177,30 @@
     "wt": 1,
     "wcat": 0.25
    },
-   "tipo": 0.7085148514851486,
+   "tipo": 0.7065217391304348,
    "tipo_ic": [
-    0.68,
-    0.7356
+    0.6785,
+    0.7328
    ],
-   "comportamiento": 0.08528571428571428,
+   "comportamiento": 0.08718998015873015,
    "comportamiento_ic": [
-    0.0737,
-    0.0971
+    0.076,
+    0.0996
    ],
    "dif_117_tipo_ic": [
-    0.0467,
-    0.0758
+    0.0385,
+    0.0652
    ],
    "dif_117_comportamiento_ic": [
-    -0.0099,
-    0.0027
+    -0.0059,
+    0.004
    ],
-   "misma_plataforma": 0.7256921373200442,
+   "misma_plataforma": 0.7265740740740741,
    "misma_plataforma_ic": [
-    0.7068,
-    0.7449
+    0.709,
+    0.7442
    ],
-   "listas_con_duplicados": 0.433
+   "listas_con_duplicados": 0.4387
   },
   {
    "nombre": "RRF + usuarios 2 a 20 + 30 días, k=51",
@@ -214,103 +214,103 @@
     "wt": 1,
     "wcat": 0.25
    },
-   "tipo": 0.7043564356435643,
+   "tipo": 0.7031620553359683,
    "tipo_ic": [
-    0.6764,
-    0.7315
+    0.6759,
+    0.7292
    ],
-   "comportamiento": 0.09649503968253968,
+   "comportamiento": 0.10285267857142857,
    "comportamiento_ic": [
-    0.0846,
-    0.1089
+    0.0911,
+    0.1155
    ],
    "dif_117_tipo_ic": [
-    0.0424,
-    0.0723
+    0.0332,
+    0.063
    ],
    "dif_117_comportamiento_ic": [
-    -0.0004,
-    0.0154
+    0.0085,
+    0.0215
    ],
-   "misma_plataforma": 0.748062015503876,
+   "misma_plataforma": 0.7513888888888889,
    "misma_plataforma_ic": [
-    0.7296,
-    0.7664
+    0.7344,
+    0.768
    ],
-   "listas_con_duplicados": 0.4215
+   "listas_con_duplicados": 0.4311
   },
   {
    "nombre": "elegida",
    "config": {
     "compras": "filtrada",
     "img": "mobilenet",
-    "fusion": "rrf",
+    "fusion": "max",
     "k": 101,
     "wc": 1,
-    "wi": 0.5,
+    "wi": 0.25,
     "wt": 1,
     "wcat": 0.25
    },
-   "tipo": 0.7085148514851486,
+   "tipo": 0.6778656126482213,
    "tipo_ic": [
-    0.6812,
-    0.7352
+    0.6512,
+    0.7038
    ],
-   "comportamiento": 0.10195882936507936,
+   "comportamiento": 0.10401785714285713,
    "comportamiento_ic": [
-    0.0892,
-    0.1152
+    0.0921,
+    0.1166
    ],
    "dif_117_tipo_ic": [
-    0.0457,
-    0.0766
+    0.0079,
+    0.0383
    ],
    "dif_117_comportamiento_ic": [
-    0.0046,
-    0.022
+    0.009,
+    0.0234
    ],
-   "misma_plataforma": 0.7496124031007753,
+   "misma_plataforma": 0.7711111111111112,
    "misma_plataforma_ic": [
-    0.7316,
-    0.7679
+    0.7546,
+    0.7871
    ],
-   "listas_con_duplicados": 0.4161
+   "listas_con_duplicados": 0.4357
   },
   {
    "nombre": "elegida + sin duplicados",
    "config": {
     "compras": "filtrada",
     "img": "mobilenet",
-    "fusion": "rrf",
+    "fusion": "max",
     "k": 101,
     "wc": 1,
-    "wi": 0.5,
+    "wi": 0.25,
     "wt": 1,
     "wcat": 0.25,
     "dedup": true
    },
-   "tipo": 0.6994059405940595,
+   "tipo": 0.6652173913043479,
    "tipo_ic": [
-    0.6721,
-    0.7261
+    0.6383,
+    0.6911
    ],
-   "comportamiento": 0.10334027777777777,
+   "comportamiento": 0.10329166666666667,
    "comportamiento_ic": [
-    0.0906,
-    0.1165
+    0.0912,
+    0.1161
    ],
    "dif_117_tipo_ic": [
-    0.0364,
-    0.0677
+    -0.0049,
+    0.0257
    ],
    "dif_117_comportamiento_ic": [
-    0.006,
-    0.0237
+    0.008,
+    0.0231
    ],
-   "misma_plataforma": 0.7438538205980066,
+   "misma_plataforma": 0.7682407407407408,
    "misma_plataforma_ic": [
-    0.7258,
-    0.762
+    0.7519,
+    0.7841
    ],
    "listas_con_duplicados": 0.0
   },
@@ -319,41 +319,80 @@
    "config": {
     "compras": "filtrada",
     "img": "mobilenet",
-    "fusion": "rrf",
+    "fusion": "max",
     "k": 101,
     "wc": 1,
-    "wi": 0.5,
+    "wi": 0.25,
     "wt": 1,
     "wcat": 0.25,
-    "wplat": 0.5
+    "wplat": 0.25
    },
-   "tipo": 0.7085148514851486,
+   "tipo": 0.6784584980237154,
    "tipo_ic": [
-    0.6808,
-    0.7356
+    0.652,
+    0.7045
    ],
-   "comportamiento": 0.1039469246031746,
+   "comportamiento": 0.10624355158730157,
    "comportamiento_ic": [
-    0.0913,
-    0.1173
+    0.0943,
+    0.119
    ],
    "dif_117_tipo_ic": [
-    0.0455,
-    0.0764
+    0.0087,
+    0.0387
    ],
    "dif_117_comportamiento_ic": [
-    0.0069,
-    0.024
+    0.0111,
+    0.0257
    ],
-   "misma_plataforma": 0.9308970099667775,
+   "misma_plataforma": 0.8824074074074074,
    "misma_plataforma_ic": [
-    0.921,
-    0.9405
+    0.87,
+    0.8941
    ],
-   "listas_con_duplicados": 0.4008
+   "listas_con_duplicados": 0.4349
   },
   {
    "nombre": "final: + sin duplicados + plataforma",
+   "config": {
+    "compras": "filtrada",
+    "img": "mobilenet",
+    "fusion": "max",
+    "k": 101,
+    "wc": 1,
+    "wi": 0.25,
+    "wt": 1,
+    "wcat": 0.25,
+    "dedup": true,
+    "wplat": 0.25
+   },
+   "tipo": 0.6642292490118578,
+   "tipo_ic": [
+    0.6374,
+    0.6907
+   ],
+   "comportamiento": 0.10583680555555557,
+   "comportamiento_ic": [
+    0.0936,
+    0.1187
+   ],
+   "dif_117_tipo_ic": [
+    -0.0061,
+    0.0247
+   ],
+   "dif_117_comportamiento_ic": [
+    0.0103,
+    0.0257
+   ],
+   "misma_plataforma": 0.8818518518518519,
+   "misma_plataforma_ic": [
+    0.8694,
+    0.8936
+   ],
+   "listas_con_duplicados": 0.0
+  },
+  {
+   "nombre": "app: RRF 1/0.5/1, categoría 0.25, consola 0.5, sin duplicados",
    "config": {
     "compras": "filtrada",
     "img": "mobilenet",
@@ -363,31 +402,31 @@
     "wi": 0.5,
     "wt": 1,
     "wcat": 0.25,
-    "dedup": true,
-    "wplat": 0.5
+    "wplat": 0.5,
+    "dedup": true
    },
-   "tipo": 0.7,
+   "tipo": 0.6911067193675888,
    "tipo_ic": [
-    0.6723,
-    0.7269
+    0.663,
+    0.7188
    ],
-   "comportamiento": 0.10502827380952383,
+   "comportamiento": 0.10612847222222221,
    "comportamiento_ic": [
-    0.0925,
-    0.1184
+    0.0938,
+    0.1194
    ],
    "dif_117_tipo_ic": [
-    0.037,
-    0.0683
+    0.0196,
+    0.0526
    ],
    "dif_117_comportamiento_ic": [
-    0.0076,
-    0.0254
+    0.0097,
+    0.0269
    ],
-   "misma_plataforma": 0.93156146179402,
+   "misma_plataforma": 0.9265740740740741,
    "misma_plataforma_ic": [
-    0.9217,
-    0.941
+    0.9169,
+    0.9356
    ],
    "listas_con_duplicados": 0.0
   }
