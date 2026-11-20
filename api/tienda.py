@@ -64,14 +64,20 @@ def rutas_tienda(estado, lock):
         with lock:
             motor = estado["motor"]
             origen = producto(motor, id)
-            if vector_imagen == "mobilenet":
-                indice = estado.setdefault("indice_mobilenet", ImageIndex(motor.directorio))
-                try:
-                    indice.actualizar(consultar(motor, "SELECT id, imagen FROM productos"))
-                    imagen = indice.buscar(id)
-                except (OSError, ValueError) as exc:
-                    raise HTTPException(503, str(exc)) from exc
-            else:
+            catalogo_imagenes = (consultar(motor, "SELECT id, imagen FROM productos")
+                                 if vector_imagen == "mobilenet" else None)
+        if vector_imagen == "mobilenet":
+            # Fuera del lock del motor: extraer el catálogo tarda minutos la primera vez y
+            # no debe congelar el resto de la API. El índice tiene su propio lock.
+            indice = estado.setdefault("indice_mobilenet", ImageIndex(estado["motor"].directorio))
+            try:
+                indice.actualizar(catalogo_imagenes)
+            except (OSError, ValueError) as exc:  # falta el modelo: afecta a todo el índice
+                raise HTTPException(503, str(exc)) from exc
+            imagen = indice.buscar(id)  # vacío si el producto no tiene vector: quedan compras y texto
+        with lock:
+            motor = estado["motor"]
+            if vector_imagen != "mobilenet":
                 imagen = visual(motor, origen["imagen"])
             senales = {"compras": compras(motor, id), "imagen": imagen,
                        "texto": texto(motor, origen["descripcion"])}
