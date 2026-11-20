@@ -27,17 +27,17 @@ Para la exposición, `VITE_TRAZA_ABIERTA=1` deja abierto por defecto el panel "C
 | --- | --- |
 | `#/asistente` | Preguntar: respuesta con citas `[n]` (con vista previa de la fuente al pasar el mouse) y los documentos en que se basa; fuentes con su página, su puntaje BM25 y las palabras clave resaltadas; y "Cómo se respondió", plegable: el flujo en 4 pasos, el gráfico de los candidatos de BM25 (elegidos y por qué se descartó el resto), dónde se fue el tiempo y el SQL real |
 | `#/asistente/p/<pregunta>` | Abre y pregunta de inmediato; sirve para preparar enlaces de la demo |
-| `#/asistente/biblioteca` | Los 259 documentos, con búsqueda y filtros por tipo y tema |
+| `#/asistente/biblioteca` | Los documentos cargados, con búsqueda por título y filtros por año, autor, tipo y tema |
 | `#/asistente/documento/<id>` | Un documento: abstract, fragmentos y enlaces al PDF en cada página |
 | `#/asistente/subir` | Sube un PDF: lo extrae, lo fragmenta y lo indexa en el motor |
 
-Las preguntas recientes se guardan en el navegador con su respuesta, así que volver a una no gasta cuota del LLM.
+El historial permite buscar hasta 30 preguntas recientes de este navegador y reabrir sus respuestas sin gastar cuota del LLM. Desde un fragmento abierto por una cita se puede regresar a la posición exacta en la respuesta.
 
-Si el LLM falla (sin key, sin cuota o sin internet), la respuesta ofrece **"Responder solo con fragmentos"**, que pregunta con `usar_llm: false`.
+Si el LLM falla (sin key, sin cuota o sin internet), la respuesta ofrece **"Buscar solo fragmentos"**, que pregunta con `usar_llm: false`.
 
 ## Diseño
 
-Estilo *achromatic ledger* de la skill `design-taste-frontend` (pantalla de aplicación): la interfaz va en tinta y el único color, el azul `--dato`, marca las citas y la fuente seleccionada. Las variables están en `src/estilos.css`. La maqueta aprobada por el equipo está en el canvas del proyecto.
+La vista de consulta prioriza la pregunta, la lectura y la verificación de fuentes. Usa Spectral para los títulos, Geist para los controles y un acento violeta que identifica la cita y su fragmento. En móvil las fuentes se presentan después de la respuesta. Los detalles de BM25, SPIMI y SQL siguen disponibles en «Cómo se respondió».
 
 ## Estructura
 

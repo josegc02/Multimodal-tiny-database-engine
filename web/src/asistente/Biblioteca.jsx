@@ -12,11 +12,13 @@ export default function Biblioteca() {
   const [busqueda, setBusqueda] = useState('');
   const [tipo, setTipo] = useState('todos');
   const [tema, setTema] = useState('');
+  const [anio, setAnio] = useState('');
+  const [autor, setAutor] = useState('');
   const [visibles, setVisibles] = useState(PASO);
 
   const cargar = () => { setError(null); api.documentos().then(setDocumentos).catch(setError); };
   useEffect(cargar, []);
-  useEffect(() => setVisibles(PASO), [busqueda, tipo, tema]);
+  useEffect(() => setVisibles(PASO), [busqueda, tipo, tema, anio, autor]);
 
   const totales = useMemo(() => {
     const lista = documentos ?? [];
@@ -24,29 +26,30 @@ export default function Biblioteca() {
   }, [documentos]);
   const temas = useMemo(() => [...new Set((documentos ?? []).map((d) => d.tema))].sort(
     (a, b) => (TEMAS[a] ?? a).localeCompare(TEMAS[b] ?? b)), [documentos]);
+  const anios = useMemo(() => [...new Set((documentos ?? []).map((d) => d.anio).filter(Boolean))]
+    .sort((a, b) => b - a), [documentos]);
   const filas = useMemo(() => {
     const texto = busqueda.trim().toLowerCase();
     return (documentos ?? [])
       .filter((d) => tipo === 'todos' || (tipo === 'clases' ? esClase(d) : !esClase(d)))
       .filter((d) => !tema || d.tema === tema)
-      .filter((d) => !texto || `${d.titulo} ${d.autores}`.toLowerCase().includes(texto));
-  }, [documentos, busqueda, tipo, tema]);
-  const fragmentos = (documentos ?? []).reduce((suma, d) => suma + d.fragmentos, 0);
+      .filter((d) => !anio || String(d.anio) === anio)
+      .filter((d) => !autor.trim() || (d.autores ?? '').toLowerCase().includes(autor.trim().toLowerCase()))
+      .filter((d) => !texto || d.titulo.toLowerCase().includes(texto));
+  }, [documentos, busqueda, tipo, tema, anio, autor]);
 
   return (
     <div className="pagina">
       <div className="titulo-texto">
         <h1>Biblioteca</h1>
-        <span className="sub num">
-          {documentos ? `${entero(totales.papers)} papers y ${entero(totales.clases)} clases del curso · ${entero(fragmentos)} fragmentos indexados con SPIMI` : 'Cargando la biblioteca…'}
-        </span>
+        <p className="sub">Explora los papers y las clases que puede consultar el asistente.</p>
       </div>
 
       <div className="herramientas">
         <label className="buscador">
           <IconoBuscar />
-          <span className="oculto">Buscar por título o autor</span>
-          <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Título o autor" />
+          <span className="oculto">Buscar por título</span>
+          <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Título" />
         </label>
         <div className="segmentos" role="group" aria-label="Tipo de documento">
           {[['todos', 'Todos'], ['papers', 'Papers'], ['clases', 'Clases']].map(([id, texto]) => (
@@ -55,12 +58,23 @@ export default function Biblioteca() {
             </button>
           ))}
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--gris)' }}>
-          Tema
-          <select className="selector" value={tema} onChange={(e) => setTema(e.target.value)}>
+        <label className="filtro-biblioteca">
+          <span id="filtro-tema">Tema</span>
+          <select className="selector" aria-labelledby="filtro-tema" value={tema} onChange={(e) => setTema(e.target.value)}>
             <option value="">Todos</option>
             {temas.map((t) => <option key={t} value={t}>{TEMAS[t] ?? t}</option>)}
           </select>
+        </label>
+        <label className="filtro-biblioteca">
+          <span id="filtro-anio">Año</span>
+          <select className="selector" aria-labelledby="filtro-anio" value={anio} onChange={(e) => setAnio(e.target.value)}>
+            <option value="">Todos</option>
+            {anios.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </label>
+        <label className="filtro-biblioteca">
+          Autor
+          <input className="selector" value={autor} onChange={(e) => setAutor(e.target.value)} />
         </label>
       </div>
 
@@ -73,10 +87,10 @@ export default function Biblioteca() {
         )}
         {!error && (
           <div className="tabla-marco">
-            <table style={{ minWidth: 720 }}>
+            <table className="tabla-biblioteca">
               <thead>
                 <tr>
-                  <th style={{ width: '52%' }}>Título</th>
+                  <th>Título</th>
                   <th>Tipo</th>
                   <th>Tema</th>
                   <th className="num">Año</th>
@@ -93,8 +107,12 @@ export default function Biblioteca() {
                 {filas.slice(0, visibles).map((d) => (
                   <tr key={d.id}>
                     <td>
-                      <a href={enlace.documento(d.id)} style={{ color: 'var(--tinta)', fontWeight: 500 }}>{d.titulo}</a>
+                      <a href={enlace.documento(d.id)} className="titulo-documento">{d.titulo}</a>
                       <span className="celda-sub">{autoresCortos(d.autores)}</span>
+                      <span className="celda-sub ficha-movil">
+                        {[esClase(d) ? 'Clase' : 'Paper', TEMAS[d.tema] ?? d.tema, d.anio,
+                          `${entero(d.fragmentos)} ${d.fragmentos === 1 ? 'fragmento' : 'fragmentos'}`].filter(Boolean).join(' · ')}
+                      </span>
                     </td>
                     <td style={{ whiteSpace: 'nowrap', color: 'var(--tinta-2)' }}>{esClase(d) ? 'Clase' : 'Paper'}</td>
                     <td style={{ whiteSpace: 'nowrap', color: 'var(--tinta-2)' }}>{TEMAS[d.tema] ?? d.tema}</td>

@@ -12,6 +12,7 @@ import Subir from './asistente/Subir.jsx';
 export default function App() {
   const ruta = useRuta();
   const [recientes, setRecientes] = useState(leerRecientes);
+  const [filtroHistorial, setFiltroHistorial] = useState('');
   const [estado, setEstado] = useState(null);       // GET /asistente/estado
   const [errorEstado, setErrorEstado] = useState(null);
   const [menuAbierto, setMenuAbierto] = useState(false);
@@ -30,6 +31,7 @@ export default function App() {
   };
   const preguntarSobre = (texto) => { setBorrador(texto); ir(enlace.preguntar); };
 
+  const consultasVisibles = recientes.filter((item) => item.pregunta.toLowerCase().includes(filtroHistorial.trim().toLowerCase()));
   const reciente = ruta.reciente ? recientes.find((r) => r.id === ruta.reciente) : null;
   const titulos = { preguntar: 'Preguntar', biblioteca: 'Biblioteca', documento: 'Documento', subir: 'Subir PDF' };
   const actual = (vista) => (ruta.vista === vista || (vista === 'biblioteca' && ruta.vista === 'documento') ? 'page' : undefined);
@@ -61,26 +63,29 @@ export default function App() {
         </nav>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span className="grupo-titulo">Recientes</span>
+          <h2 className="grupo-titulo">Historial</h2>
+          {recientes.length > 0 && (
+            <input type="search" className="buscar-historial" aria-label="Buscar en el historial"
+                   placeholder="Buscar preguntas" value={filtroHistorial} onChange={(e) => setFiltroHistorial(e.target.value)} />
+          )}
           <div className="recientes">
             {recientes.length === 0 && <span className="vacio">Tus preguntas aparecerán aquí.</span>}
-            {recientes.map((r) => (
-              <a key={r.id} href={enlace.reciente(r.id)} title={r.pregunta}
+            {recientes.length > 0 && consultasVisibles.length === 0 && <span className="vacio" role="status">Ninguna pregunta coincide.</span>}
+            {consultasVisibles.map((r) => (
+              <a key={r.id} href={enlace.reciente(r.id)} title={r.pregunta} onClick={() => setMenuAbierto(false)}
                  aria-current={ruta.reciente === r.id ? 'page' : undefined}>{r.pregunta}</a>
             ))}
           </div>
         </div>
 
         <div className="motor">
-          <strong>Motor</strong>
-          {errorEstado && <span style={{ color: 'var(--negativo)' }}>La API no responde</span>}
-          {estado && !estado.corpus && <span>Sin corpus: carga los papers con rag.corpus</span>}
+          <strong>Estado del asistente</strong>
+          {errorEstado && <span style={{ color: '#ffadb4' }}>Servidor sin conexión</span>}
+          {estado && !estado.corpus && <span>Biblioteca sin documentos</span>}
           {estado?.corpus && <span className="num">{entero(estado.documentos)} documentos · {entero(estado.fragmentos)} fragmentos</span>}
-          {estado?.corpus && <span>Índice SPIMI en fragmentos.texto</span>}
           {estado && (
             <span>
-              <span className="punto" style={{ background: estado.llm ? 'var(--positivo)' : 'var(--gris)' }} />
-              {estado.llm ?? 'Sin LLM: solo fragmentos'}
+              {estado.llm ? `Modelo configurado: ${estado.llm}` : 'Modo búsqueda: solo fragmentos'}
             </span>
           )}
         </div>
@@ -88,7 +93,7 @@ export default function App() {
 
       <main className="contenido">
         {ruta.vista === 'preguntar' && (
-          <Preguntar key={ruta.reciente ?? ruta.auto ?? 'nueva'} reciente={reciente} auto={ruta.auto} estado={estado}
+          <Preguntar key={ruta.reciente ?? ruta.auto ?? 'nueva'} reciente={reciente} auto={ruta.auto}
                      borrador={borrador} limpiarBorrador={() => setBorrador('')} alResponder={alResponder} />
         )}
         {ruta.vista === 'biblioteca' && <Biblioteca />}

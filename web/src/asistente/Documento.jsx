@@ -61,7 +61,7 @@ export default function Documento({ id, preguntarSobre }) {
             <span className="sub num" style={{ fontSize: 12 }}>{entero(palabras)} palabras · 200–500 por fragmento</span>
           </div>
           <div className="tabla-marco">
-            <table style={{ minWidth: 560 }}>
+            <table className="tabla-fragmentos">
               <thead>
                 <tr>
                   <th className="num" style={{ width: 40 }}>Nº</th>
@@ -79,6 +79,9 @@ export default function Documento({ id, preguntarSobre }) {
                     </td>
                     <td className="num" style={{ color: 'var(--tinta-2)' }}>{f.palabras}</td>
                     <td style={{ fontSize: 13, lineHeight: '19px', color: 'var(--tinta-2)' }}>
+                      <a className="fragmento-ubicacion" href={api.urlPdf(doc.id, f.pagina)} target="_blank" rel="noreferrer">
+                        Fragmento {f.orden} · {paginas(f, clase)}
+                      </a>
                       {sinCorreos(f.texto).slice(0, 280)}{f.texto.length > 280 ? '…' : ''}
                     </td>
                   </tr>

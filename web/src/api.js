@@ -12,9 +12,10 @@ async function pedir(ruta, opciones = {}) {
   let respuesta;
   try {
     respuesta = await fetch(BASE + ruta, opciones);
-  } catch {
+  } catch (error) {
+    if (opciones.signal?.aborted) throw error;
     throw new ErrorApi('sin_conexion',
-      `La API no responde en ${BASE}. Levántala desde la raíz del proyecto con: uvicorn api.main:app`);
+      'No se pudo conectar con el servidor. Revisa la conexión y vuelve a intentarlo.');
   }
   const datos = await respuesta.json().catch(() => ({}));
   if (!respuesta.ok) {
@@ -32,8 +33,8 @@ const json = (cuerpo) => ({
 
 export const api = {
   estado: () => pedir('/asistente/estado'),
-  preguntar: ({ pregunta, k = 5, usarLlm = true }) =>
-    pedir('/asistente/preguntar', json({ pregunta, k, usar_llm: usarLlm })),
+  preguntar: ({ pregunta, k = 5, usarLlm = true, signal }) =>
+    pedir('/asistente/preguntar', { ...json({ pregunta, k, usar_llm: usarLlm }), signal }),
   documentos: () => pedir('/asistente/documentos'),
   documento: (id) => pedir(`/asistente/documentos/${id}`),
   subir: (formulario) => pedir('/asistente/documentos', { method: 'POST', body: formulario }),
