@@ -15,7 +15,7 @@ from tienda.recomendaciones import (CANDIDATOS, cercanas, compras, consultar, fi
 # posteriores), elegidos en validación y reportados en prueba con fusión RRF.
 PESOS = "1,0.5,1"
 PESO_CATEGORIA = 0.25
-PESO_PLATAFORMA = 1.0  # sube la misma consola de 75 % a 98 % de los recomendados
+PESO_PLATAFORMA = 0.5  # misma consola de 75 % a 93 %; elegido con las métricas de tipo y comportamiento
 
 
 def compras_en_cache(estado, motor, producto_id):

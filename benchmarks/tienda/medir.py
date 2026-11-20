@@ -286,19 +286,20 @@ def main():
     elegida = etapa("3. pesos", [dict(e2, wc=wc, wi=wi, wcat=wcat) for wc in (0, 0.25, 0.5, 1, 2)
                                  for wi in (0.25, 0.5) for wcat in (0, 0.25, 1)])
 
-    # 4. Plataforma (con duplicados quitados). Regla fijada antes de medir: promedio de las tres
-    #    métricas normalizadas (tipo, comportamiento y misma plataforma).
+    # 4. Plataforma (con duplicados quitados). Se elige con las mismas dos métricas de antes;
+    #    "misma plataforma" es solo un control: la señal y esa métrica usan la misma regex,
+    #    así que elegir el peso con ella subiría el número por construcción.
     print("\n4. plataforma, sin duplicados (validación)")
     filas4 = []
     for wplat in (0, 0.25, 0.5, 1):
         c = dict(elegida, dedup=True, wplat=wplat)
         filas4.append((c, m_tipo(tipo_val, c).mean(), m_comp(comp_val, c).mean(),
                        m_plataforma(tipo_val + comp_val, c).mean()))
-    mejores = [max(f[j] for f in filas4) for j in (1, 2, 3)]
+    mejores = [max(f[j] for f in filas4) for j in (1, 2)]
     for c, *ms in filas4:
         print(f"  plataforma {c['wplat']:<4} tipo {ms[0]:.3f}  comportamiento {ms[1]:.3f}  misma plataforma {ms[2]:.3f}"
-              f"  puntaje {np.mean([m / b for m, b in zip(ms, mejores)]):.3f}")
-    final = max(filas4, key=lambda f: np.mean([m / b for m, b in zip(f[1:], mejores)]))[0]
+              f"  puntaje {np.mean([m / b for m, b in zip(ms[:2], mejores)]):.3f}")
+    final = max(filas4, key=lambda f: np.mean([m / b for m, b in zip(f[1:3], mejores)]))[0]
 
     RRF = dict(PR117, fusion="rrf", wi=0.5)
     finales = {"antes: texto + SIFT, pesos 1,1,1": dict(PR117, img="sift", wi=1, wcat=0),
@@ -309,6 +310,7 @@ def main():
                "RRF + usuarios 2 a 20 + 30 días, k=51": dict(RRF, compras="filtrada"),
                "elegida": elegida,
                "elegida + sin duplicados": dict(elegida, dedup=True),
+               "elegida + solo plataforma": dict(elegida, wplat=final["wplat"]),
                "final: + sin duplicados + plataforma": final}
     bootstrap = np.random.default_rng(0)
     it = bootstrap.integers(0, len(tipo_prueba), (5000, len(tipo_prueba)))

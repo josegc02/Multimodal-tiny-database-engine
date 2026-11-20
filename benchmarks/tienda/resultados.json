@@ -315,6 +315,44 @@
    "listas_con_duplicados": 0.0
   },
   {
+   "nombre": "elegida + solo plataforma",
+   "config": {
+    "compras": "filtrada",
+    "img": "mobilenet",
+    "fusion": "rrf",
+    "k": 101,
+    "wc": 1,
+    "wi": 0.5,
+    "wt": 1,
+    "wcat": 0.25,
+    "wplat": 0.5
+   },
+   "tipo": 0.7085148514851486,
+   "tipo_ic": [
+    0.6808,
+    0.7356
+   ],
+   "comportamiento": 0.1039469246031746,
+   "comportamiento_ic": [
+    0.0913,
+    0.1173
+   ],
+   "dif_117_tipo_ic": [
+    0.0455,
+    0.0764
+   ],
+   "dif_117_comportamiento_ic": [
+    0.0069,
+    0.024
+   ],
+   "misma_plataforma": 0.9308970099667775,
+   "misma_plataforma_ic": [
+    0.921,
+    0.9405
+   ],
+   "listas_con_duplicados": 0.4008
+  },
+  {
    "nombre": "final: + sin duplicados + plataforma",
    "config": {
     "compras": "filtrada",
@@ -326,30 +364,30 @@
     "wt": 1,
     "wcat": 0.25,
     "dedup": true,
-    "wplat": 1
+    "wplat": 0.5
    },
-   "tipo": 0.6944554455445544,
+   "tipo": 0.7,
    "tipo_ic": [
-    0.6663,
-    0.722
+    0.6723,
+    0.7269
    ],
-   "comportamiento": 0.10168005952380954,
+   "comportamiento": 0.10502827380952383,
    "comportamiento_ic": [
-    0.0892,
-    0.1148
+    0.0925,
+    0.1184
    ],
    "dif_117_tipo_ic": [
-    0.0313,
-    0.063
+    0.037,
+    0.0683
    ],
    "dif_117_comportamiento_ic": [
-    0.0041,
-    0.0223
+    0.0076,
+    0.0254
    ],
-   "misma_plataforma": 0.978294573643411,
+   "misma_plataforma": 0.93156146179402,
    "misma_plataforma_ic": [
-    0.9719,
-    0.9842
+    0.9217,
+    0.941
    ],
    "listas_con_duplicados": 0.0
   }
