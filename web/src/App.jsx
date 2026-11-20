@@ -1,28 +1,70 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
 import { entero } from './formato.js';
 import { guardarReciente, leerRecientes } from './historial.js';
 import { IconoBiblioteca, IconoMenu, IconoPreguntar, IconoSubir, Marca } from './Iconos.jsx';
-import { enlace, ir, useRuta } from './ruta.js';
+import { conFiltros, enlace, ir, useRuta } from './ruta.js';
 import Preguntar from './asistente/Preguntar.jsx';
 import Biblioteca from './asistente/Biblioteca.jsx';
 import Documento from './asistente/Documento.jsx';
 import Subir from './asistente/Subir.jsx';
 
 export default function App() {
-  const ruta = useRuta();
+  const [ruta, reemplazarRuta] = useRuta();
   const [recientes, setRecientes] = useState(leerRecientes);
   const [filtroHistorial, setFiltroHistorial] = useState('');
   const [estado, setEstado] = useState(null);       // GET /asistente/estado
   const [errorEstado, setErrorEstado] = useState(null);
   const [menuAbierto, setMenuAbierto] = useState(false);
+  const abrirMenu = useRef(null);
+  const cerrarMenu = useRef(null);
+  const debeDevolverFoco = useRef(false);
+  const { vista, id, auto, reciente: idReciente } = ruta;
   const [borrador, setBorrador] = useState('');      // pregunta sugerida desde otra vista
 
   const cargarEstado = useCallback(() => {
     api.estado().then((e) => { setEstado(e); setErrorEstado(null); }).catch(setErrorEstado);
   }, []);
   useEffect(cargarEstado, [cargarEstado]);
-  useEffect(() => setMenuAbierto(false), [ruta]);
+  useEffect(() => setMenuAbierto(false), [vista, id, auto, idReciente]);
+  useEffect(() => {
+    if (!menuAbierto) {
+      if (debeDevolverFoco.current) abrirMenu.current?.focus();
+      debeDevolverFoco.current = false;
+      return undefined;
+    }
+    debeDevolverFoco.current = true;
+    cerrarMenu.current?.focus();
+    const movil = window.matchMedia('(max-width: 900px)');
+    const alRedimensionar = (evento) => {
+      if (!evento.matches) {
+        debeDevolverFoco.current = false;
+        setMenuAbierto(false);
+      }
+    };
+    movil.addEventListener('change', alRedimensionar);
+    return () => movil.removeEventListener('change', alRedimensionar);
+  }, [menuAbierto]);
+
+  function tecladoMenu(evento) {
+    if (!menuAbierto) return;
+    if (evento.key === 'Escape') {
+      evento.preventDefault();
+      setMenuAbierto(false);
+      return;
+    }
+    if (evento.key !== 'Tab') return;
+    const elementos = evento.currentTarget.querySelectorAll('button, a[href], input');
+    const primero = elementos[0];
+    const ultimo = elementos[elementos.length - 1];
+    if (evento.shiftKey && document.activeElement === primero) {
+      evento.preventDefault();
+      ultimo.focus();
+    } else if (!evento.shiftKey && document.activeElement === ultimo) {
+      evento.preventDefault();
+      primero.focus();
+    }
+  }
 
   const alResponder = (datos) => {
     const { id, lista } = guardarReciente(datos);
@@ -33,33 +75,36 @@ export default function App() {
 
   const consultasVisibles = recientes.filter((item) => item.pregunta.toLowerCase().includes(filtroHistorial.trim().toLowerCase()));
   const reciente = ruta.reciente ? recientes.find((r) => r.id === ruta.reciente) : null;
+  const volverBiblioteca = conFiltros(enlace.biblioteca, ruta.filtros);
   const titulos = { preguntar: 'Preguntar', biblioteca: 'Biblioteca', documento: 'Documento', subir: 'Subir PDF' };
   const actual = (vista) => (ruta.vista === vista || (vista === 'biblioteca' && ruta.vista === 'documento') ? 'page' : undefined);
 
   return (
     <div className="app">
-      <header className="cabecera-movil">
+      <header className="cabecera-movil" inert={menuAbierto ? '' : undefined}>
         <Marca tamano={22} />
         <strong>{titulos[ruta.vista]}</strong>
-        <button aria-label="Abrir el menú" aria-expanded={menuAbierto} onClick={() => setMenuAbierto(true)}><IconoMenu /></button>
+        <button ref={abrirMenu} aria-controls="menu-asistente" aria-label="Abrir el menú" aria-expanded={menuAbierto} onClick={() => setMenuAbierto(true)}><IconoMenu /></button>
       </header>
 
-      <aside className="barra" data-abierta={menuAbierto}>
+      <aside id="menu-asistente" className="barra" data-abierta={menuAbierto}
+             role={menuAbierto ? 'dialog' : undefined} aria-modal={menuAbierto || undefined}
+             aria-label={menuAbierto ? 'Menú del asistente' : undefined} onKeyDown={tecladoMenu}>
         <div className="marca">
           <Marca />
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <span className="marca-nombre">Asistente BD2</span>
             <span className="marca-curso">CS2042 · Bases de Datos II · 2026-2</span>
           </div>
-          {menuAbierto && <button className="btn2" style={{ marginLeft: 'auto' }} onClick={() => setMenuAbierto(false)}>Cerrar</button>}
+          {menuAbierto && <button ref={cerrarMenu} className="btn2" style={{ marginLeft: 'auto' }} onClick={() => setMenuAbierto(false)}>Cerrar</button>}
         </div>
 
         <nav className="nav" aria-label="Secciones">
-          <a href={enlace.preguntar} aria-current={actual('preguntar')}><IconoPreguntar />Preguntar</a>
-          <a href={enlace.biblioteca} aria-current={actual('biblioteca')}>
+          <a href={enlace.preguntar} onClick={() => setMenuAbierto(false)} aria-current={actual('preguntar')}><IconoPreguntar />Preguntar</a>
+          <a href={volverBiblioteca} onClick={() => setMenuAbierto(false)} aria-current={actual('biblioteca')}>
             <IconoBiblioteca />Biblioteca<span className="cuenta num">{estado?.documentos ?? ''}</span>
           </a>
-          <a href={enlace.subir} aria-current={actual('subir')}><IconoSubir />Subir PDF</a>
+          <a href={enlace.subir} onClick={() => setMenuAbierto(false)} aria-current={actual('subir')}><IconoSubir />Subir PDF</a>
         </nav>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -91,13 +136,13 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="contenido">
+      <main className="contenido" inert={menuAbierto ? '' : undefined}>
         {ruta.vista === 'preguntar' && (
           <Preguntar key={ruta.reciente ?? ruta.auto ?? 'nueva'} reciente={reciente} auto={ruta.auto}
                      borrador={borrador} limpiarBorrador={() => setBorrador('')} alResponder={alResponder} />
         )}
-        {ruta.vista === 'biblioteca' && <Biblioteca />}
-        {ruta.vista === 'documento' && <Documento id={ruta.id} preguntarSobre={preguntarSobre} />}
+        {ruta.vista === 'biblioteca' && <Biblioteca filtros={ruta.filtros} cambiarRuta={reemplazarRuta} />}
+        {ruta.vista === 'documento' && <Documento id={ruta.id} volverBiblioteca={volverBiblioteca} preguntarSobre={preguntarSobre} />}
         {ruta.vista === 'subir' && <Subir alSubir={cargarEstado} preguntarSobre={preguntarSobre} />}
       </main>
     </div>

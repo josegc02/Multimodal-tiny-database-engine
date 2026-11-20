@@ -2,9 +2,8 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { autoresCortos, entero, esClase, paginas, sinCorreos, TEMAS } from '../formato.js';
 import { IconoError } from '../Iconos.jsx';
-import { enlace } from '../ruta.js';
 
-export default function Documento({ id, preguntarSobre }) {
+export default function Documento({ id, volverBiblioteca, preguntarSobre }) {
   const [doc, setDoc] = useState(null);
   const [error, setError] = useState(null);
 
@@ -17,7 +16,7 @@ export default function Documento({ id, preguntarSobre }) {
   if (error) {
     return (
       <div className="pagina">
-        <a href={enlace.biblioteca}>← Biblioteca</a>
+        <a href={volverBiblioteca}>← Biblioteca</a>
         <div className="panel respuesta" role="alert">
           <div className="error-bloque"><IconoError /><span>{error.message}</span></div>
         </div>
@@ -27,7 +26,7 @@ export default function Documento({ id, preguntarSobre }) {
   if (!doc) {
     return (
       <div className="pagina" aria-busy="true">
-        <a href={enlace.biblioteca}>← Biblioteca</a>
+        <a href={volverBiblioteca}>← Biblioteca</a>
         <div className="esqueleto" style={{ height: 28, width: '70%' }} />
         <div className="esqueleto" style={{ width: '40%' }} />
       </div>
@@ -41,7 +40,7 @@ export default function Documento({ id, preguntarSobre }) {
 
   return (
     <div className="pagina">
-      <a href={enlace.biblioteca} style={{ alignSelf: 'flex-start' }}>← Biblioteca</a>
+      <a href={volverBiblioteca} style={{ alignSelf: 'flex-start' }}>← Biblioteca</a>
       <div className="titulo-fila">
         <div className="titulo-texto">
           <h1 style={{ maxWidth: '60ch' }}>{doc.titulo}</h1>

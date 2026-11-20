@@ -172,7 +172,7 @@ export default function Preguntar({ reciente, auto, borrador, limpiarBorrador, a
             <div className="ejemplos-lista">
               {SUGERENCIAS.map((s) => (
                 <button key={s} className="ejemplo" onClick={() => enviar(s)}>
-                  {s}<span aria-hidden="true">↗</span>
+                  {s}
                 </button>
               ))}
             </div>

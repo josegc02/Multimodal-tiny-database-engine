@@ -8,11 +8,13 @@ import { useEffect, useState } from 'react';
 //   #/asistente/documento/<n> detalle de un documento
 //   #/asistente/subir         Subir PDF
 export function leerRuta(hash = window.location.hash) {
-  const partes = hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  const [camino, consulta = ''] = hash.split('?');
+  const filtros = new URLSearchParams(consulta);
+  const partes = camino.replace(/^#\/?/, '').split('/').filter(Boolean);
   if (partes[0] !== 'asistente') return { vista: 'preguntar' };
-  if (partes[1] === 'biblioteca') return { vista: 'biblioteca' };
+  if (partes[1] === 'biblioteca') return { vista: 'biblioteca', filtros };
   if (partes[1] === 'subir') return { vista: 'subir' };
-  if (partes[1] === 'documento' && /^\d+$/.test(partes[2] ?? '')) return { vista: 'documento', id: Number(partes[2]) };
+  if (partes[1] === 'documento' && /^\d+$/.test(partes[2] ?? '')) return { vista: 'documento', id: Number(partes[2]), filtros };
   if (partes[1] === 'r' && partes[2]) return { vista: 'preguntar', reciente: partes[2] };
   if (partes[1] === 'p' && partes[2]) return { vista: 'preguntar', auto: decodeURIComponent(partes.slice(2).join('/')) };
   return { vista: 'preguntar' };
@@ -23,9 +25,14 @@ export const enlace = {
   reciente: (id) => `#/asistente/r/${id}`,
   preguntarYa: (texto) => `#/asistente/p/${encodeURIComponent(texto)}`,
   biblioteca: '#/asistente/biblioteca',
-  documento: (id) => `#/asistente/documento/${id}`,
+  documento: (id, filtros) => conFiltros(`#/asistente/documento/${id}`, filtros),
   subir: '#/asistente/subir',
 };
+
+export function conFiltros(destino, filtros) {
+  const consulta = filtros?.toString();
+  return consulta ? `${destino}?${consulta}` : destino;
+}
 
 export function ir(destino) {
   window.location.hash = destino;
@@ -38,5 +45,9 @@ export function useRuta() {
     window.addEventListener('hashchange', cambiar);
     return () => window.removeEventListener('hashchange', cambiar);
   }, []);
-  return ruta;
+  function reemplazar(destino) {
+    window.history.replaceState(window.history.state, '', destino);
+    setRuta(leerRuta());
+  }
+  return [ruta, reemplazar];
 }
