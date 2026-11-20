@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { tienda } from '../api.js';
-import { cantidad, distancia, estrellas, precio } from './formato.js';
+import { cantidad, distancia, estrellas, precio, tituloCorto } from './formato.js';
 import { nombre as nombreConsola } from './consolas.js';
 import Foto from './Foto.jsx';
 import { IconoError, IconoUbicacion } from './Iconos.jsx';
@@ -80,7 +80,8 @@ export default function Ficha({ id, explicar, alVer }) {
               return <a key={ruta} href={enlace.catalogo({ categoria: ruta })}>{i === 0 ? nombreConsola(parte) : parte}</a>;
             })}
           </nav>
-          <h1 id="titulo-producto">{producto.titulo}</h1>
+          <h1 id="titulo-producto" title={producto.titulo}>{tituloCorto(producto.titulo)}</h1>
+          {tituloCorto(producto.titulo) !== producto.titulo && <p className="titulo-completo gris">{producto.titulo}</p>}
           <div className="datos num">
             <span>{estrellas(producto.rating)} de 5 en {cantidad(producto.num_resenas)} reseñas</span>
             {producto.marca && <span>Marca {producto.marca}</span>}
@@ -115,7 +116,7 @@ export default function Ficha({ id, explicar, alVer }) {
                 <p className="gris">{[cercana.direccion, cercana.distrito].filter(Boolean).join(', ')}</p>
               )}
               <p className="cifra num">{distancia(cercana.distancia_m)}<small>de {ubicacion.nombre}, {cantidad(cercana.unidades)} en stock</small></p>
-              <a className="enlace" target="_blank" rel="noreferrer"
+              <a className="enlace al-pie" target="_blank" rel="noreferrer"
                  href={`https://www.openstreetmap.org/directions?from=${ubicacion.lat},${ubicacion.lon}&to=${cercana.ubicacion.lat},${cercana.ubicacion.lon}`}>
                 Cómo llegar
               </a>

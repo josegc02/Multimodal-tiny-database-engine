@@ -74,6 +74,13 @@ export default function Catalogo({ ruta, categorias, errorCategorias, reintentar
         </div>
       )}
 
+      <label className="campo consola-select">
+        Consola
+        <select value={consola} onChange={(e) => filtrar({ categoria: e.target.value })}>
+          <option value="">Todas ({categorias ? cantidad(contar(categorias, '')) : '—'})</option>
+          {lista.map((c) => <option key={c.categoria} value={c.categoria}>{c.nombre} ({cantidad(c.productos)})</option>)}
+        </select>
+      </label>
       <div className="consolas" role="group" aria-label="Consola">
         <Consola nombre="Todas" productos={categorias ? contar(categorias, '') : null} activa={!consola}
                  alElegir={() => filtrar({ categoria: '' })} />
@@ -91,7 +98,7 @@ export default function Catalogo({ ruta, categorias, errorCategorias, reintentar
       </button>
       <form className="filtros" data-abiertos={verFiltros} onSubmit={(e) => { e.preventDefault(); filtrar({ min: precioMin, max: precioMax }); }}>
         {otras.length > 0 && (
-          <label className="campo">
+          <label className="campo otra-consola">
             Otra consola
             <select value={otras.some((c) => c.categoria === consola) ? consola : ''}
                     onChange={(e) => filtrar({ categoria: e.target.value })}>

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { tienda } from '../api.js';
-import { precio } from './formato.js';
+import { precio, tituloCorto } from './formato.js';
 import Foto from './Foto.jsx';
 import { IconoError } from './Iconos.jsx';
 import { enlace } from './ruta.js';
@@ -168,7 +168,7 @@ function Fila({ fila, posicion, previa, hayAntes, partes, explicar }) {
       <span className="rec-pos num">{posicion + 1}</span>
       <a className="rec-foto" href={enlace.ficha(fila.id)} tabIndex={-1} aria-hidden="true"><Foto producto={fila} /></a>
       <span className="rec-texto">
-        <a href={enlace.ficha(fila.id)}>{fila.titulo}</a>
+        <a href={enlace.ficha(fila.id)} title={fila.titulo}>{tituloCorto(fila.titulo)}</a>
         <span className="motivo">
           {motivos.map((m) => <span key={m.clave}>{m.motivo}</span>)}
           {cambio && <span className="cambio">{cambio}</span>}
