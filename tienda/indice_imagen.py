@@ -25,6 +25,9 @@ class ImageIndex:
     # Revisar los 7,995 archivos de imagen (stat de cada uno) tarda ~3.5 s: se hace como
     # mucho una vez por este intervalo, no en cada recomendación.
     REVISION_S = 60
+    # La API revisa en segundo plano y responde con el índice actual; False revisa dentro de
+    # la petición (las pruebas lo usan para ver el efecto de un cambio en el acto).
+    REVISAR_EN_SEGUNDO_PLANO = True
 
     def __init__(self, directory):
         self.directory = Path(directory) / "mobilenet"
@@ -32,7 +35,8 @@ class ImageIndex:
         self.index = None
         self._revisado = None  # time.monotonic() de la última revisión completa
         self.omitidos = []  # (id, motivo) de las imágenes que no se pudieron leer
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()         # búsquedas y el cambio de índice: un instante
+        self._construyendo = threading.Lock()  # una revisión o reconstrucción a la vez
 
     def vigente(self):
         """True si el índice existe y se revisó hace menos de REVISION_S segundos."""
@@ -43,8 +47,10 @@ class ImageIndex:
         """Pone el índice al día con el catálogo. Una imagen ilegible se omite, no detiene a las demás.
 
         Si falta el modelo MobileNet se lanza el error, porque afecta a todo el índice.
+        Revisar y reconstruir no bloquea las búsquedas: el índice nuevo reemplaza al
+        anterior al final, de una vez.
         """
-        with self._lock:
+        with self._construyendo:
             extractor_for("image", "mobilenet")  # sin modelo: error claro antes de recorrer el catálogo
             firma, omitidos = [], []
             for fila in sorted(filas, key=lambda f: f["id"]):
@@ -68,7 +74,8 @@ class ImageIndex:
                     omitidos.append((identificador, str(exc)))
                     continue
                 nuevo.insert(identificador, vector)
-            self.index, self.signature, self.omitidos = nuevo, firma, omitidos
+            with self._lock:
+                self.index, self.signature, self.omitidos = nuevo, firma, omitidos
             self._revisado = time.monotonic()
 
     def _vector(self, path, size, modified):

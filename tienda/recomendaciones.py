@@ -118,15 +118,18 @@ def sin_duplicados(origen, ordenados, vector=None, limite=10):
     return elegidos
 
 
-def filas_por_id(motor, ids):
-    """{id: fila} de los productos, una búsqueda por clave primaria por id.
+def filas_por_id(motor, ids, columnas=("id", "titulo", "categoria")):
+    """{id: fila} con las columnas pedidas que existan, una búsqueda por clave primaria por id.
 
     TEXT solo admite índices SPIMI, así que filtrar por categoría recorrería toda la
-    tabla (~570 ms); ~300 búsquedas por clave primaria tardan ~100 ms.
+    tabla (~570 ms); ~300 búsquedas por clave primaria tardan ~100 ms. Sin la
+    descripción: leerla de cada candidato sumaba ~0.3 s.
     """
+    existentes = motor.catalog.table("productos").storage.schema.fields
+    lista = ", ".join(c for c in columnas if c in existentes) or "*"
     filas = {}
     for i in sorted(ids):
-        encontradas = consultar(motor, f"SELECT * FROM productos WHERE id = {i}")
+        encontradas = consultar(motor, f"SELECT {lista} FROM productos WHERE id = {i}")
         if encontradas:
             filas[i] = encontradas[0]
     return filas

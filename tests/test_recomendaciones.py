@@ -50,6 +50,7 @@ def test_tienda_http(tmp_path, monkeypatch):
         return np.array(vectores[Path(ruta).name])
     monkeypatch.setattr("tienda.indice_imagen.extract_features", extraer_mobilenet)
     monkeypatch.setattr("tienda.indice_imagen.ImageIndex.REVISION_S", 0)  # revisar archivos en cada petición
+    monkeypatch.setattr("tienda.indice_imagen.ImageIndex.REVISAR_EN_SEGUNDO_PLANO", False)  # y dentro de ella
     with TestClient(create_app(str(tmp_path), llm=None)) as cliente:
         sql = """
         CREATE TABLE productos(id INT PRIMARY KEY, descripcion TEXT, imagen IMAGE, precio FLOAT, categoria TEXT);
@@ -216,3 +217,26 @@ def test_catalogo_filtra_por_categoria_y_subcategorias(tmp_path):
         assert [f["id"] for f in ps4] == [1, 2]  # no incluye "PlayStation 5" aunque empiece igual
         cats = cliente.get("/categorias").json()
         assert len(cats) == 4 and all(c["productos"] == 1 for c in cats)
+
+
+def test_revision_vencida_no_hace_esperar(tmp_path, monkeypatch):
+    import time
+    from api import tienda as api_tienda
+    from tienda.indice_imagen import ImageIndex
+    indice = ImageIndex(tmp_path)
+    indice.index, indice._revisado = object(), time.monotonic() - 3600  # armado, revisión vencida
+    revisiones = []
+
+    def lenta(filas):
+        time.sleep(0.5)
+        revisiones.append(len(filas))
+    monkeypatch.setattr(indice, "actualizar", lenta)
+    monkeypatch.setattr(api_tienda, "consultar", lambda motor, sql: [{"id": 1, "imagen": "a"}])
+    estado = {"motor": object(), "indice_mobilenet": indice}
+    import threading
+    inicio = time.perf_counter()
+    hilo = api_tienda.revisar_en_segundo_plano(estado, threading.Lock())
+    assert time.perf_counter() - inicio < 0.2              # vuelve sin esperar la revisión
+    assert api_tienda.revisar_en_segundo_plano(estado, threading.Lock()) is None  # una a la vez
+    hilo.join(timeout=5)
+    assert revisiones == [1] and estado["revisando_mobilenet"] is False
