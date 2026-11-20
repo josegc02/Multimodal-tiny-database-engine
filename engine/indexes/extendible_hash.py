@@ -30,6 +30,16 @@ class Bucket:
     local_depth: int
     records: List[Entry] = field(default_factory=list)
     overflow: Optional[Bucket] = None
+    # Cachés para claves muy repetidas (una llave foránea): sin ellas, cada inserción
+    # recorría la cadena de overflow entera y la carga era cuadrática. Se descartan en
+    # cuanto el bucket se reconstruye (refill, split, merge).
+    _cola: Optional[Bucket] = field(default=None, repr=False, compare=False)
+    _hashes: Optional[set] = field(default=None, repr=False, compare=False)
+
+    def olvidar(self) -> None:
+        """Descarta las cachés; llamar cada vez que cambian records u overflow por fuera de add_record."""
+        self._cola = None
+        self._hashes = None
 
     def is_full(self) -> bool:
         return len(self.records) >= self.bucket_capacity
@@ -45,18 +55,22 @@ class Bucket:
         capacity = self.bucket_capacity
         self.records = list(entries[:capacity])
         self.overflow = None
+        self.olvidar()
         tail = self
         for start in range(capacity, len(entries), capacity):
             tail.overflow = Bucket(capacity, self.local_depth, list(entries[start:start + capacity]))
             tail = tail.overflow
+        self._cola = tail
 
     def add_record(self, entry: Entry) -> None:
-        bucket = self
+        # Se parte del último bucket conocido de la cadena (O(1)), no del primero.
+        bucket = self._cola if self._cola is not None and self.overflow is not None else self
         while bucket.is_full():
             if bucket.overflow is None:
                 bucket.overflow = Bucket(self.bucket_capacity, self.local_depth)
             bucket = bucket.overflow
         bucket.records.append(entry)
+        self._cola = bucket
 
 
 class ExtendibleHash:
@@ -139,13 +153,15 @@ class ExtendibleHash:
                 break
 
             mask = (1 << self.max_depth) - 1
-            # Se hashea cada clave distinta una sola vez: con muchos duplicados
-            # (p. ej. el índice de una llave foránea) hashear cada entrada haría
-            # la carga cuadrática.
-            if bucket.local_depth == self.max_depth or all(
-                (self._hash_key(k) & mask) == (hashed & mask)
-                for k in {k for k, _ in bucket.entries()}
-            ):
+            if bucket.local_depth == self.max_depth:
+                bucket.add_record((key, rid))
+                break
+            # ¿Todas las claves del bucket comparten el hash de la nueva? Entonces dividir no
+            # sirve (duplicados o colisiones reales). Los hashes de sus claves se calculan una
+            # vez y se guardan en el bucket, en vez de recorrer la cadena en cada inserción.
+            if bucket._hashes is None:
+                bucket._hashes = {self._hash_key(k) & mask for k in {k for k, _ in bucket.entries()}}
+            if bucket._hashes <= {hashed & mask}:
                 # Duplicados y colisiones reales nunca se resuelven duplicando
                 # indefinidamente el directorio.
                 bucket.add_record((key, rid))
@@ -171,6 +187,7 @@ class ExtendibleHash:
 
         old.records.clear()
         old.overflow = None
+        old.olvidar()
         for key, rid in entries:
             target = self.directory[self._index(self._hash_key(key))]
             target.add_record((key, rid))
@@ -254,6 +271,7 @@ class ExtendibleHash:
             bucket.local_depth -= 1
             bucket.records = entries
             bucket.overflow = None
+            bucket.olvidar()
             stride = 1 << bucket.local_depth
             for i in range(index & (stride - 1), len(self.directory), stride):
                 self.directory[i] = bucket
