@@ -8,6 +8,10 @@ def test_fuera_de_tema_por_main_category_formato_campos_y_titulo():
     assert fuera_de_tema({"main_category": "Books", "title": "Born a Crime"})  # el caso que se vio en la tienda
     assert fuera_de_tema({"main_category": "Video Games", "details": {"Type of item": "Blu-ray"}, "title": "Planet Earth II"})
     assert fuera_de_tema({"main_category": "Video Games", "details": {"Runtime": "1 h"}, "title": "Office Space"})
+    assert fuera_de_tema({"main_category": "Video Games", "title": "Star Wars Armada EXPANSION PACK | Miniatures Battle Game"})
+    assert fuera_de_tema({"main_category": "Video Games", "title": "Dead of Winter A Crossroads Board Game"})
+    assert fuera_de_tema({"main_category": "Video Games", "title": "Hoyle Official Card Games (for Windows) [Download]"}) is None
+    assert fuera_de_tema({"main_category": "Video Games", "title": "Dungeons & Dragons: Dark Alliance - PlayStation 5"}) is None
     assert fuera_de_tema({"main_category": "Video Games", "title": "Leverage Seasons 1-5 Complete TV Series DVD Collection"})
     # Juegos y accesorios no se tocan, aunque Amazon los clasifique en otra main_category.
     assert fuera_de_tema({"main_category": "Video Games", "details": {"Type of item": "Audio CD"}, "title": "Wii Sports"}) is None

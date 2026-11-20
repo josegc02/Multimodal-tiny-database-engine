@@ -2,7 +2,7 @@
 
 El archivo de Video Games de Amazon Reviews 2023 trae ruido que la tienda no puede mostrar:
 
-- **Productos fuera de tema**: libros, películas, música o comida con la ruta
+- **Productos fuera de tema**: libros, películas, música, comida o juegos de mesa con la ruta
   "Video Games > PC > Games" (p. ej. *Born a Crime*, cuya main_category es "Books").
   Se descartan por main_category, por el formato ("Type of item": Blu-ray, Paperback...),
   por campos que solo tienen libros y películas (ISBN, duración, director...) o por un
@@ -54,7 +54,10 @@ FORMATOS_FUERA = {"Blu-ray", "DVD", "Paperback", "Hardcover", "Mass Market Paper
 CAMPOS_FUERA = re.compile(r"^(ISBN|Print length|Hardcover|Paperback|Board book|Spiral-bound|Runtime|Run time|"
                           r"Director|Actors|Contributor|Aspect Ratio|Media Format|MPAA rating|Lexile)", re.I)
 TITULO_FUERA = re.compile(r"\[(?:DVD|Blu-?ray)\b[^\]]*\]|\bDVD Collection\b|\bComplete (?:Movie |TV )?Series\b|"
-                          r"\bTV Series\b|\[ART book\]", re.I)
+                          r"\bTV Series\b|\[ART book\]|"
+                          # Juegos de mesa, rompecabezas y libros de reglas que Amazon dejó en consolas
+                          # (Star Wars Armada en "PC > Games", un rompecabezas en "PlayStation 2").
+                          r"\bboard game\b|\bminiatures battle\b|\bjigsaw puzzle\b|\bstrategy card game\b|\bcodex:", re.I)
 
 
 # Revisión a mano de los productos sin ninguna palabra de videojuegos (2026-11-20): no son de la
