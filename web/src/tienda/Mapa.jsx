@@ -38,5 +38,5 @@ export default function Mapa({ ubicacion, tiendas, cercanaId }) {
     else mapa.current.setView(puntos[0], 13);
   }, [ubicacion, tiendas, cercanaId]);
 
-  return <div ref={nodo} className="mapa" role="img" aria-label="Mapa de tu ubicación y las tiendas con stock" />;
+  return <div ref={nodo} className="mapa" role="region" aria-label="Mapa de tu ubicación y las tiendas con stock" />;
 }

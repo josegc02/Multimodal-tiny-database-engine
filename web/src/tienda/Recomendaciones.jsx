@@ -79,6 +79,9 @@ export default function Recomendaciones({ id, explicarAlAbrir = false }) {
   }, [filas, explicar]);
 
   const mover = (clave, valor) => setPesos((p) => ({ ...p, [clave]: valor }));
+  // Para lectores de pantalla: cuántos productos cambiaron de puesto con los pesos nuevos.
+  const movidos = antes && filas ? filas.filter((f, i) => antes.get(f.id) !== i).length : 0;
+  const anuncio = antes && filas ? (movidos ? `Lista actualizada: ${movidos} productos cambiaron de puesto.` : 'Lista actualizada: el orden no cambió.') : '';
   const cambiado = SENALES.some((s) => pesos[s.clave] !== PESOS[s.clave]) || vector !== 'mobilenet';
   const restablecer = () => { setPesos(PESOS); setVector('mobilenet'); };
 
@@ -103,6 +106,7 @@ export default function Recomendaciones({ id, explicarAlAbrir = false }) {
             <button className="enlace" onClick={() => setPesos((p) => ({ ...p }))} style={{ marginLeft: 'auto' }}>Reintentar</button>
           </div>
         )}
+        <p className="oculto" aria-live="polite">{anuncio}</p>
         {!filas && !error && <RecsCargando />}
         {filas?.length === 0 && <p className="vacio">Ninguna señal encontró productos parecidos con estos pesos.</p>}
 

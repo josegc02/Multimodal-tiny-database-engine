@@ -244,8 +244,17 @@ p { margin: 0; }
   .rec-foto { width: 48px; height: 48px; }
   .rec.explicando .recibo { grid-column: 1 / -1; }
   .mapa { height: 240px; }
+  /* Objetivos táctiles de 44 px en el teléfono. */
+  .btn, .btn2, .campo select, .campo input, .buscador input { height: 44px; }
+  .barra-der a { height: 44px; }
+  .segmentado button { height: 40px; }
+  .enlace { min-height: 44px; display: inline-flex; align-items: center; }
   .pie { padding: 12px 16px 16px; }
 }
+/* Con movimiento reducido se quita el desplazamiento (el reordenamiento ya lo omite en JS);
+   los cambios de color y opacidad se quedan, porque informan sin mover nada. */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
+  .btn:active, .btn2:active { transform: none; }
+  .recibo i { transition: none; }
+  *, *::before, *::after { animation-duration: 0ms !important; }
 }
