@@ -1,12 +1,53 @@
 """Catálogo explícito de storages abiertos y de sus índices vigentes."""
 
 from dataclasses import dataclass, field
+import heapq
 import math
 import threading
 
 from engine.query.errors import SQLIntegrityError, SQLSemanticError
 from engine.query.planner import IndexInfo, TableStats
 from engine.storage.heap_file import PAGE_HEADER_SIZE, SLOT_SIZE
+
+_MASK = (1 << 64) - 1
+
+
+def _mezclar(valor):
+    """Hash de 64 bits uniforme (splitmix64): hash() de un entero es el mismo entero."""
+    x = (hash(valor) + 0x9E3779B97F4A7C15) & _MASK
+    x = ((x ^ (x >> 30)) * 0xBF58476D1CE4E5B9) & _MASK
+    x = ((x ^ (x >> 27)) * 0x94D049BB133111EB) & _MASK
+    return x ^ (x >> 31)
+
+
+class DistintosKMV:
+    """Valores distintos con memoria acotada: guarda los k hashes más pequeños (KMV).
+
+    Exacto mientras haya menos de k distintos; si hay más, estima
+    (k - 1) / (k-ésimo hash normalizado a [0, 1)), con error relativo cercano a
+    1 / sqrt(k - 2) (unos 3 % con k = 1024).
+    """
+
+    def __init__(self, k=1024):
+        self.k = k
+        self._heap = []  # hashes negados: la raíz es el mayor de los k guardados
+        self._vistos = set()
+
+    def agregar(self, valor):
+        h = _mezclar(valor)
+        if h in self._vistos:
+            return
+        if len(self._vistos) < self.k:
+            self._vistos.add(h)
+            heapq.heappush(self._heap, -h)
+        elif h < -self._heap[0]:
+            self._vistos.discard(-heapq.heappushpop(self._heap, -h))
+            self._vistos.add(h)
+
+    def estimar(self):
+        if len(self._vistos) < self.k:
+            return len(self._vistos)
+        return round((self.k - 1) * (1 << 64) / -self._heap[0])
 
 
 @dataclass(frozen=True)
@@ -122,22 +163,23 @@ class TableBinding:
             return [(rid, record) for rid, record in self.storage.scan() if record[column] == value]
 
     def analyze(self):
-        """Estadísticas explícitas; hasta 1024 valores distintos por columna y
-        (mínimo, máximo) de las columnas numéricas.
+        """Estadísticas explícitas: valores distintos por columna (exactos hasta 1024;
+        más allá, estimados con KMV) y (mínimo, máximo) de las columnas numéricas.
 
-        El límite subestima cardinalidades grandes de forma conservadora.
+        Antes se contaban como máximo 1024 distintos. Eso sobrestimaba las filas por
+        clave de una columna con muchos valores (usuarios de compras: 1024 en vez de
+        ~260 000) y el optimizador descartaba el índice en los joins.
         Se ejecuta al registrar/refrescar, nunca dentro de explain().
         """
         schema = self.storage.schema
-        distinct = {name: set() for name in schema.fields}
+        distinct = {name: DistintosKMV() for name in schema.fields}
         numeric = [name for name, kind in zip(schema.fields, schema.types) if kind in ("int", "float")]
         bounds = {}
         count = 0
         for _, row in self.storage.scan():
             count += 1
             for name, values in distinct.items():
-                if len(values) < 1024:
-                    values.add(row[name])
+                values.agregar(row[name])
             for name in numeric:
                 value = row[name]
                 if name in bounds:
@@ -145,7 +187,7 @@ class TableBinding:
                     bounds[name] = (min(low, value), max(high, value))
                 else:
                     bounds[name] = (value, value)
-        distinct_counts = {name: len(values) for name, values in distinct.items()}
+        distinct_counts = {name: min(values.estimar(), count) for name, values in distinct.items()}
         if self.primary_key in distinct_counts:
             # Una clave primaria es única: tiene exactamente tantos valores como filas.
             distinct_counts[self.primary_key] = count

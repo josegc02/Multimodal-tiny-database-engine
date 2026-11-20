@@ -217,6 +217,10 @@ class LogicalPlanner:
             raise SQLSemanticError("MATCH y SIMILAR_TO no se pueden combinar en la misma consulta")
         where = self._bind(where, scope) if where is not None else None
         plan = node("Scan", table=statement.from_table, predicate=where if not statement.joins else None)
+        pushed = self._pushdown(where, statement) if statement.joins else None
+        if pushed is not None:
+            plan = node("Filter", replace(plan, options=(("table", statement.from_table), ("predicate", pushed))),
+                        predicate=pushed)
         joined_scope = self._scope((statement.from_table,))
         for join in statement.joins:
             joined_scope.update(self._scope((join.table,)))
@@ -425,6 +429,42 @@ class LogicalPlanner:
         rest = [term for term in terms if term is not call]
         where = reduce(lambda left, right: ast.BinaryOp("AND", left, right), rest) if rest else None
         return replace(call, column=column, metric=metric), where
+
+    @staticmethod
+    def _pushdown(where, statement):
+        """Conjunción de los términos del WHERE que solo usan la primera tabla del JOIN.
+
+        Bajarlos a su Scan (pushdown de selección) filtra antes del join y deja que el
+        optimizador use índices de esa tabla y estime bien el lado izquierdo. El WHERE
+        completo se sigue evaluando después del join, así que el resultado no cambia.
+        """
+        # Solo es válido si ningún join puede rellenar con NULL el lado izquierdo (RIGHT o
+        # FULL). Hoy el parser solo acepta INNER JOIN; la guarda evita que un tipo nuevo
+        # herede el pushdown sin revisarlo.
+        if where is None or any(join.kind != "INNER" for join in statement.joins):
+            return None
+        qualifier = statement.from_table.alias or statement.from_table.name
+        terms, pending = [], [where]
+        while pending:
+            term = pending.pop()
+            if isinstance(term, ast.BinaryOp) and term.operator == "AND":
+                pending += [term.right, term.left]
+            else:
+                terms.append(term)
+
+        def local(term):
+            tables, stack = set(), [term]
+            while stack:
+                current = stack.pop()
+                if isinstance(current, (ast.ScoreCall, ast.SimilarityScoreCall, ast.AggregateCall)):
+                    return False
+                if isinstance(current, ast.ColumnRef):
+                    tables.add(current.table)
+                stack.extend(expression_children(current))
+            return tables == {qualifier}
+
+        kept = [term for term in terms if local(term)]
+        return reduce(lambda left, right: ast.BinaryOp("AND", left, right), kept) if kept else None
 
     def _join_pairs(self, expression, right):
         if isinstance(expression, ast.BinaryOp) and expression.operator == "AND":

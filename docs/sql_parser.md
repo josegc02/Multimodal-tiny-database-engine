@@ -147,12 +147,73 @@ operador elegible; no recorre las tablas. La decisión se vuelve a calcular al
 ejecutar para respetar índices invalidados.
 
 El catálogo calcula filas, páginas y cardinalidades al registrar o refrescar una
-tabla. Conserva hasta 1024 valores distintos por columna; las cardinalidades
-mayores se subestiman. Se pueden proporcionar estimaciones con
+tabla. Los valores distintos son exactos hasta 1024 por columna; más allá se
+estiman con KMV (*k minimum values*: los 1024 hashes más pequeños, error cercano
+al 3 %) sin guardar todos los valores. Antes se cortaba en 1024, y eso hacía creer
+que cada usuario de `compras` tenía cientos de filas: el optimizador descartaba el
+índice en el join. Se pueden proporcionar estimaciones con
 `register_table(..., statistics=TableStats(rows, pages, distinct_values))`.
 Las escrituras SQL refrescan estas estadísticas. Los costos son aproximaciones:
 los filtros intermedios conservan la estimación de entrada y los joins encadenados
 usan una cota conservadora, sin materializar datos durante la planificación.
+
+**Pushdown de selección en JOIN.** Los términos del `WHERE` (unidos con `AND`) que
+solo usan la primera tabla del join se bajan a su `Scan`: se filtra antes del
+join, se puede usar un índice de esa tabla y el lado izquierdo se estima con el
+filtro. El `WHERE` completo se sigue evaluando después del join, así que el
+resultado no cambia. Con la consulta de "también compraron" de la tienda (714 mil
+compras), el plan pasa de un hash join de toda la tabla consigo misma a un
+*index nested loop*: la mediana baja de 27.7 s a 18 ms.
+
+Comparación con la versión anterior (`python -m benchmarks.bench_optimizador`, 20 000
+clientes y 60 000 pedidos, menor de 3 tiempos, en ms). Las 15 consultas devuelven
+exactamente las mismas filas. Las 9 de una sola tabla mantienen su plan; las 6 con
+JOIN pasan a usar índices:
+
+| Consulta | Antes | Después |
+|---|---:|---:|
+| `SELECT * FROM clientes WHERE correo = 'u777@x'` | 0.4 | 0.4 |
+| `SELECT * FROM clientes WHERE ciudad = 'c7'` | 11.3 | 12.3 |
+| `SELECT * FROM pedidos WHERE producto = 1234` | 0.8 | 0.8 |
+| `SELECT * FROM pedidos WHERE cliente = 42` | 0.5 | 0.5 |
+| `SELECT * FROM pedidos WHERE dia BETWEEN 100 AND 110` | 6.9 | 7.2 |
+| `SELECT * FROM pedidos WHERE dia BETWEEN 100 AND 2000` | 1,026.0 | 1,024.0 |
+| `SELECT id FROM pedidos ORDER BY dia LIMIT 10` | 106.3 | 107.7 |
+| `SELECT producto, COUNT(*) FROM pedidos GROUP BY producto ORDER BY producto LIMIT 5` | 1,824.4 | 1,672.1 |
+| `SELECT ciudad, COUNT(*) FROM clientes GROUP BY ciudad ORDER BY ciudad` | 286.3 | 279.1 |
+| `SELECT c.id, p.id FROM clientes c JOIN pedidos p ON c.id = p.cliente WHERE c.correo = 'u77@x' ORDER BY p.id` | 6,246.4 | 0.9 |
+| `SELECT c.id, p.id FROM clientes c JOIN pedidos p ON c.id = p.cliente WHERE c.ciudad = 'c3' AND p.monto > 90 ORDER BY p.id` | 6,274.1 | 69.9 |
+| `SELECT p.id, c.id FROM pedidos p JOIN clientes c ON p.cliente = c.id WHERE p.producto = 99 ORDER BY p.id` | 6,183.9 | 1.7 |
+| `SELECT p.id, c.id FROM pedidos p JOIN clientes c ON p.cliente = c.id WHERE p.dia BETWEEN 10 AND 12 ORDER BY p.id` | 6,299.7 | 5.4 |
+| `SELECT c.ciudad, COUNT(*) FROM clientes c JOIN pedidos p ON c.id = p.cliente WHERE c.edad < 20 GROUP BY c.ciudad ORDER BY c.ciudad` | 6,289.4 | 2,390.2 |
+| `SELECT a.id, b.id FROM pedidos a JOIN pedidos b ON a.cliente = b.cliente WHERE a.producto = 7 AND b.producto <> 7 ORDER BY a.id, b.id` | 18,571.0 | 3.0 |
+
+`EXPLAIN` de la última consulta, la misma forma que "también compraron":
+
+```text
+-- antes
+Sort  (cost=6220437294.90..6220437294.90 rows=1171875)
+  Sort Key: a.id, b.id
+  ->  Hash Join  (cost=6667.00..24338.00 rows=1171875)
+        Hash Cond: (a.cliente = b.cliente)
+        Filter: ((a.producto = 7) AND (b.producto != 7))
+        ->  Seq Scan on pedidos a  (cost=0.00..6667.00 rows=60000)
+        ->  Hash  (cost=6667.00..6667.00 rows=60000)
+              ->  Seq Scan on pedidos b  (cost=0.00..6667.00 rows=60000)
+
+-- después
+Sort  (cost=6220413176.50..6220413176.50 rows=12)
+  Sort Key: a.id, b.id
+  ->  Nested Loop  (cost=0.00..219.60 rows=12)
+        Filter: ((a.producto = 7) AND (b.producto != 7))
+        ->  Index Scan using pe_producto on pedidos a  (cost=0.00..49.19 rows=12)
+              Index Cond: (a.producto = 7)
+        ->  Index Scan using pe_cliente on pedidos b  (cost=0.00..1.00 rows=3)
+              Index Cond: (b.cliente = a.cliente)
+```
+
+Las estadísticas se recalculan solas tras 50 + 10 % de las filas en cambios
+(INSERT, DELETE o UPDATE); entre medio, los distintos conservan su estimación.
 
 Para índices ordenados se registra un `IndexInfo` con `ordered=True` y un índice
 que implemente `iter_ordered(reverse=False)`, además de búsqueda y reconstrucción.
