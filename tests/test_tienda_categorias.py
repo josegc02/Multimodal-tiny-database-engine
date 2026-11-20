@@ -60,3 +60,11 @@ def test_lista_de_excluidos_revisados_a_mano():
     from tienda.categorias import EXCLUIDOS
     assert fuera_de_tema({"parent_asin": "B07WMTHLTH", "main_category": "Cell Phones & Accessories", "title": "Apple Watch Charger"})
     assert all(len(asin) == 10 for asin in EXCLUIDOS)
+
+
+def test_multiplataforma_en_consola_clasica_pasa_a_la_primera_del_titulo():
+    ps1 = ["Video Games", "Legacy Systems", "PlayStation Systems", "PlayStation", "Accessories"]
+    titulo = "Turtle Beach Recon 50 Xbox Gaming Headset for Xbox Series X/ S, Xbox One, PS5, PS4, Nintendo Switch & PC"
+    assert normalizar(ps1, titulo) == "Video Games > Xbox Series X & S > Accessories"
+    # Si nombra también una consola clásica, la ruta de Amazon se respeta.
+    assert normalizar(ps1, "Headset for PS3, PS4 and Xbox 360") == " > ".join(ps1)

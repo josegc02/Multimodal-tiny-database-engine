@@ -17,7 +17,7 @@ El archivo de Video Games de Amazon Reviews 2023 trae ruido que la tienda no pue
 """
 import re
 
-from tienda.recomendaciones import plataformas
+from tienda.recomendaciones import PLATAFORMAS, plataformas
 
 RAIZ = "Video Games"
 LEGADO = f"{RAIZ} > Legacy Systems"
@@ -131,6 +131,21 @@ def consola_de_ruta(ruta):
     return mejor
 
 
+ACTUALES = {"switch", "ps5", "ps4", "xbox series", "xbox one", "pc", "vr"}
+
+
+def primera_consola(titulo, consolas):
+    """De las consolas que nombra el título, la que aparece primero."""
+    texto = (titulo or "").lower()
+    posiciones = {}
+    for nombre, patron in PLATAFORMAS:
+        if nombre in consolas:
+            hallado = re.search(patron, texto)
+            if hallado:
+                posiciones[nombre] = hallado.start()
+    return min(posiciones, key=posiciones.get)
+
+
 def normalizar(categorias, titulo):
     """La ruta de categoría que la tienda muestra, corregida contra el título."""
     partes = [c for c in categorias if isinstance(c, str) and c.strip()]
@@ -142,6 +157,13 @@ def normalizar(categorias, titulo):
     promocional = len(partes) < 2 or partes[0] != RAIZ or partes[1] not in CONSOLAS
     if promocional:
         return RUTAS[unica] if unica else RAIZ
+    # Multiplataforma que Amazon dejó en una consola clásica (unos audífonos "for Xbox Series
+    # X/S, Xbox One, PS5, PS4..." en "Legacy Systems > PlayStation"): si el título solo nombra
+    # consolas actuales, pasa a la primera que nombra, que suele ser la principal.
+    if len(del_titulo) > 1 and ruta.startswith(LEGADO + " > ") and del_titulo <= ACTUALES:
+        primera = primera_consola(titulo, del_titulo)
+        resto = partes[4:] if len(partes) > 3 and partes[2].endswith("Systems") else partes[3:]
+        return RUTAS[primera] + "".join(f" > {parte}" for parte in resto)
     actual = consola_de_ruta(ruta)
     if unica and actual and unica != actual:
         resto = ruta[len(RUTAS[actual]):]  # " > Accessories > Cases & Storage", o vacío
