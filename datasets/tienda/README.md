@@ -17,7 +17,7 @@ corrige antes de elegir (medido sobre el catálogo anterior):
 
 | Problema | Antes | Después | Cómo |
 |---|---:|---:|---|
-| Libros, películas, música y comida (*Born a Crime* salía en "PC > Games") | 125 | 0 | `main_category` (Books, Kindle, Movies & TV, Digital Music, Grocery), formato (`Type of item`: Blu-ray, DVD, Paperback…), campos de libro o película (ISBN, duración, director…) o un título inequívoco ("[DVD]", "Complete Series") |
+| Libros, películas, música, comida y juegos de mesa (*Born a Crime* y *Star Wars Armada* salían en "PC > Games") | 131 | 0 | `main_category` (Books, Kindle, Movies & TV, Digital Music, Grocery), formato (`Type of item`: Blu-ray, DVD, Paperback…), campos de libro o película (ISBN, duración, director…) o un título inequívoco ("[DVD]", "Complete Series") |
 | Productos sin relación que ningún campo delata (audífonos genéricos, cargadores de Fitbit, Funko Pop, software de impuestos…) | 38 | 0 | Lista revisada a mano (`EXCLUIDOS`), con el motivo de cada uno |
 | Rutas promocionales tratadas como consola ("Game Genre of the Month", "Ubisoft", "Value Games Under $20") | 89 | 0 | Pasan a la consola que nombra el título, o a "Video Games" |
 | La consola del título contradice la de la ruta (una funda de Switch en "Nintendo DS", un soporte de PS5 en "Sega Game Gear") | 455 | 0 | La ruta pasa a la de la consola del título, conservando el resto ("Accessories > Cases & Storage") |
