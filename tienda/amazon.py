@@ -12,8 +12,10 @@ origen es una instantánea fija (2023), así que la selección es determinista.
 
 ``compras`` recorre las reseñas de la misma categoría: cada reseña con
 ``verified_purchase`` es una compra real de un usuario. Se conservan los
-usuarios con al menos dos compras dentro del catálogo (los que aportan
-pares "también compraron") hasta un máximo de filas.
+usuarios con 2 a 20 compras dentro del catálogo: con una sola no aportan pares
+"también compraron", y los que compran mucho conectan cientos de productos sin
+relación entre sí (medido en benchmarks/tienda: filtrarlos sube la señal de
+compras de 5.8 % a 9.5 % de co-compras recuperadas).
 """
 
 import argparse
@@ -128,12 +130,12 @@ def seleccionar(meta_path, cantidad):
     return [{"id": numero, **fila} for numero, fila in enumerate(elegidos, 1)]
 
 
-def compras(resenas_path, productos, min_compras=2, maximo=100_000):
+def compras(resenas_path, productos, min_compras=2, max_compras=20):
     """Compras verificadas de los productos del catálogo.
 
     Una compra repetida del mismo usuario y producto cuenta una vez (la más
-    antigua). Si hay más de ``maximo`` filas, se priorizan los usuarios con
-    más compras, que son los que más informan a la recomendación.
+    antigua). Solo quedan los usuarios con ``min_compras`` a ``max_compras``
+    productos distintos.
     """
     id_por_asin = {fila["asin"]: int(fila["id"]) for fila in productos}
     por_usuario = defaultdict(dict)  # usuario -> {producto_id: (fecha, rating)}
@@ -147,14 +149,10 @@ def compras(resenas_path, productos, min_compras=2, maximo=100_000):
         if anterior is None or fecha < anterior[0]:
             por_usuario[usuario][producto_id] = (fecha, float(resena.get("rating") or 0))
 
-    usuarios = sorted((u for u, c in por_usuario.items() if len(c) >= min_compras),
-                      key=lambda u: (-len(por_usuario[u]), u))
-    filas = []
-    for usuario in usuarios:
-        if len(filas) + len(por_usuario[usuario]) > maximo:
-            break
-        filas += [(fecha, usuario, producto_id, rating)
-                  for producto_id, (fecha, rating) in por_usuario[usuario].items()]
+    filas = [(fecha, usuario, producto_id, rating)
+             for usuario, compras_usuario in por_usuario.items()
+             if min_compras <= len(compras_usuario) <= max_compras
+             for producto_id, (fecha, rating) in compras_usuario.items()]
     filas.sort()
     return [{"id": numero, "usuario": usuario, "producto_id": producto_id, "rating": rating, "fecha": fecha}
             for numero, (fecha, usuario, producto_id, rating) in enumerate(filas, 1)]
@@ -170,7 +168,7 @@ def main(argv=None):
     com = sub.add_parser("compras", help="descarga las reseñas y genera compras.csv")
     com.add_argument("--categoria", default=CATEGORIA)
     com.add_argument("--min-compras", type=int, default=2)
-    com.add_argument("--maximo", type=int, default=100_000)
+    com.add_argument("--max-compras", type=int, default=20)
     args = parser.parse_args(argv)
 
     if args.comando == "seleccionar":
@@ -186,7 +184,7 @@ def main(argv=None):
         from tienda.imagenes import CAMPOS_PRODUCTOS
         productos = leer_csv(PRODUCTOS, CAMPOS_PRODUCTOS)
         resenas = descargar(url_resenas(args.categoria), RAW_DIR / f"{args.categoria}.jsonl.gz")
-        filas = compras(resenas, productos, args.min_compras, args.maximo)
+        filas = compras(resenas, productos, args.min_compras, args.max_compras)
         escribir_csv(COMPRAS, CAMPOS_COMPRAS, filas)
         usuarios = len({fila["usuario"] for fila in filas})
         print(f"{len(filas)} compras de {usuarios} usuarios en {COMPRAS}")

@@ -1,0 +1,78 @@
+{
+ "ruido": 0.8,
+ "consultas": 200,
+ "filas": [
+  {
+   "n": 8000,
+   "k": 10,
+   "ef_search": 50,
+   "construccion_s": 36,
+   "recall": 0.9725,
+   "ms_hnsw": 3.5,
+   "ms_exacta_numpy": 3.93,
+   "ms_exacta_fila_por_fila": 20,
+   "visitados": 363,
+   "visitados_pct": 0.0454
+  },
+  {
+   "n": 8000,
+   "k": 102,
+   "ef_search": 102,
+   "construccion_s": 36,
+   "recall": 0.9404,
+   "ms_hnsw": 6.17,
+   "ms_exacta_numpy": 3.93,
+   "ms_exacta_fila_por_fila": 20,
+   "visitados": 608,
+   "visitados_pct": 0.076
+  },
+  {
+   "n": 25000,
+   "k": 10,
+   "ef_search": 50,
+   "construccion_s": 121,
+   "recall": 0.9775,
+   "ms_hnsw": 3.98,
+   "ms_exacta_numpy": 12.82,
+   "ms_exacta_fila_por_fila": 92,
+   "visitados": 448,
+   "visitados_pct": 0.0179
+  },
+  {
+   "n": 25000,
+   "k": 102,
+   "ef_search": 102,
+   "construccion_s": 121,
+   "recall": 0.9338,
+   "ms_hnsw": 7.28,
+   "ms_exacta_numpy": 12.82,
+   "ms_exacta_fila_por_fila": 92,
+   "visitados": 789,
+   "visitados_pct": 0.0316
+  },
+  {
+   "n": 50000,
+   "k": 10,
+   "ef_search": 50,
+   "construccion_s": 259,
+   "recall": 0.9765,
+   "ms_hnsw": 4.56,
+   "ms_exacta_numpy": 24.32,
+   "ms_exacta_fila_por_fila": 110,
+   "visitados": 558,
+   "visitados_pct": 0.0112
+  },
+  {
+   "n": 50000,
+   "k": 102,
+   "ef_search": 102,
+   "construccion_s": 259,
+   "recall": 0.9188,
+   "ms_hnsw": 8.77,
+   "ms_exacta_numpy": 24.32,
+   "ms_exacta_fila_por_fila": 110,
+   "visitados": 1042,
+   "visitados_pct": 0.0208
+  }
+ ]
+}

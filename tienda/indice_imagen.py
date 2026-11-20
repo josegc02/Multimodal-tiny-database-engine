@@ -11,6 +11,7 @@ import hashlib
 import os
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -21,12 +22,22 @@ from engine.indexes.hnsw import HNSWIndex
 
 
 class ImageIndex:
+    # Revisar los 7,995 archivos de imagen (stat de cada uno) tarda ~3.5 s: se hace como
+    # mucho una vez por este intervalo, no en cada recomendación.
+    REVISION_S = 60
+
     def __init__(self, directory):
         self.directory = Path(directory) / "mobilenet"
         self.signature = None
         self.index = None
+        self._revisado = None  # time.monotonic() de la última revisión completa
         self.omitidos = []  # (id, motivo) de las imágenes que no se pudieron leer
         self._lock = threading.Lock()
+
+    def vigente(self):
+        """True si el índice existe y se revisó hace menos de REVISION_S segundos."""
+        return (self.index is not None and self._revisado is not None
+                and time.monotonic() - self._revisado < self.REVISION_S)
 
     def actualizar(self, filas):
         """Pone el índice al día con el catálogo. Una imagen ilegible se omite, no detiene a las demás.
@@ -46,6 +57,7 @@ class ImageIndex:
                 firma.append((fila["id"], str(path), stat.st_size, stat.st_mtime_ns))
             firma = tuple(firma)
             if firma == self.signature:
+                self._revisado = time.monotonic()
                 return
             nuevo = HNSWIndex(metric="cosine")
             self.directory.mkdir(parents=True, exist_ok=True)
@@ -57,6 +69,7 @@ class ImageIndex:
                     continue
                 nuevo.insert(identificador, vector)
             self.index, self.signature, self.omitidos = nuevo, firma, omitidos
+            self._revisado = time.monotonic()
 
     def _vector(self, path, size, modified):
         key = hashlib.sha256(repr((SHA256, path, size, modified)).encode()).hexdigest()

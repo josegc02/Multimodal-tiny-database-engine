@@ -1,11 +1,64 @@
 """API de catálogo, recomendaciones y tiendas."""
 import math
+import threading
 from typing import Literal
 from tienda.indice_imagen import ImageIndex
 
 from fastapi import APIRouter, HTTPException, Query
 
-from tienda.recomendaciones import cercanas, compras, consultar, fusionar, literal, texto, visual
+import numpy as np
+
+from tienda.recomendaciones import (CANDIDATOS, cercanas, compras, consultar, filas_por_id, fusionar, literal,
+                                    misma_categoria, misma_plataforma, sin_duplicados, texto, visual)
+
+# Pesos medidos en benchmarks/tienda con dos métricas (tipo de producto y co-compras
+# posteriores), elegidos en validación y reportados en prueba con fusión RRF.
+PESOS = "1,0.5,1"
+PESO_CATEGORIA = 0.25
+PESO_PLATAFORMA = 0.5  # misma consola de 75 % a 93 %; elegido con las métricas de tipo y comportamiento
+
+
+def compras_en_cache(estado, motor, producto_id):
+    """"También compraron" de un producto, calculado una sola vez.
+
+    El producto más comprado tarda ~0.6 s; el resultado solo cambia si cambian las
+    compras. El motor reemplaza las estadísticas de la tabla en cada INSERT, DELETE o
+    UPDATE, así que un objeto de estadísticas distinto invalida la caché. Llamar con el
+    lock del motor tomado.
+    """
+    stats = motor.catalog.table("compras").statistics
+    cache = estado.get("cache_compras")
+    if cache is None or cache["stats"] is not stats:
+        cache = estado["cache_compras"] = {"stats": stats, "datos": {}}
+    if producto_id not in cache["datos"]:
+        cache["datos"][producto_id] = compras(motor, producto_id)
+    return cache["datos"][producto_id]
+
+
+def indice_mobilenet(estado):
+    return estado.setdefault("indice_mobilenet", ImageIndex(estado["motor"].directorio))
+
+
+def precalentar(estado, lock):
+    """Construye el índice MobileNet en segundo plano al iniciar la API.
+
+    Así la primera recomendación no espera ~45 s a que se arme el grafo. Solo si
+    la tienda ya está cargada; si falta el modelo, la API recomienda con SIFT.
+    """
+    def trabajo():
+        try:
+            with lock:
+                motor = estado["motor"]
+                if "productos" not in motor.catalog.tables:
+                    return
+                filas = consultar(motor, "SELECT id, imagen FROM productos")
+            indice_mobilenet(estado).actualizar(filas)
+        except (OSError, ValueError, RuntimeError, KeyError):
+            pass  # sin modelo o sin tienda: la primera petición decide
+
+    hilo = threading.Thread(target=trabajo, name="precalentar-mobilenet", daemon=True)
+    hilo.start()
+    return hilo
 
 
 def rutas_tienda(estado, lock):
@@ -52,8 +105,13 @@ def rutas_tienda(estado, lock):
             return fila
 
     @router.get("/recomendaciones/{id}")
-    def recomendaciones(id: int, pesos: str = Query("1,1,1", description="Compras, imagen, texto"),
-                        vector_imagen: Literal["sift", "mobilenet"] = "sift"):
+    def recomendaciones(id: int, pesos: str = Query(PESOS, description="Compras, imagen, texto"),
+                        vector_imagen: Literal["sift", "mobilenet"] | None = Query(
+                            None, description="Por defecto mobilenet; si falta el modelo, sift"),
+                        peso_categoria: float = Query(PESO_CATEGORIA, ge=0, allow_inf_nan=False),
+                        peso_plataforma: float = Query(PESO_PLATAFORMA, ge=0, allow_inf_nan=False),
+                        duplicados: bool = Query(False, description="True deja los duplicados (otro color, relistado)"),
+                        fusion: Literal["rrf", "max"] = "rrf"):
         try:
             valores = [float(p) for p in pesos.split(",")]
         except ValueError:
@@ -61,28 +119,51 @@ def rutas_tienda(estado, lock):
         if (len(valores) != 3 or any(p < 0 for p in valores)
                 or not math.isfinite(sum(valores)) or sum(valores) <= 0):
             raise HTTPException(422, "Indique tres pesos no negativos con suma positiva y finita")
+        usar_mobilenet = vector_imagen != "sift"
+        indice = indice_mobilenet(estado) if usar_mobilenet else None
+        revisar = usar_mobilenet and not indice.vigente()
         with lock:
             motor = estado["motor"]
             origen = producto(motor, id)
-            catalogo_imagenes = (consultar(motor, "SELECT id, imagen FROM productos")
-                                 if vector_imagen == "mobilenet" else None)
-        if vector_imagen == "mobilenet":
+            catalogo_imagenes = consultar(motor, "SELECT id, imagen FROM productos") if revisar else None
+        if usar_mobilenet:
             # Fuera del lock del motor: extraer el catálogo tarda minutos la primera vez y
             # no debe congelar el resto de la API. El índice tiene su propio lock.
-            indice = estado.setdefault("indice_mobilenet", ImageIndex(estado["motor"].directorio))
             try:
-                indice.actualizar(catalogo_imagenes)
+                if revisar:
+                    indice.actualizar(catalogo_imagenes)
+                imagen = indice.buscar(id, k=CANDIDATOS + 1)  # vacío si el producto no tiene vector: quedan compras y texto
             except (OSError, ValueError) as exc:  # falta el modelo: afecta a todo el índice
-                raise HTTPException(503, str(exc)) from exc
-            imagen = indice.buscar(id)  # vacío si el producto no tiene vector: quedan compras y texto
+                if vector_imagen == "mobilenet":
+                    raise HTTPException(503, str(exc)) from exc
+                usar_mobilenet = False  # por defecto: se recomienda con SIFT
         with lock:
             motor = estado["motor"]
-            if vector_imagen != "mobilenet":
+            if not usar_mobilenet:
                 imagen = visual(motor, origen["imagen"])
-            senales = {"compras": compras(motor, id), "imagen": imagen,
+            senales = {"compras": compras_en_cache(estado, motor, id), "imagen": imagen,
                        "texto": texto(motor, origen["descripcion"])}
-            filas = fusionar(id, senales, dict(zip(senales, valores)))
-            return [{**producto(motor, fila["id"]), **fila} for fila in filas]
+            pesos_senales = dict(zip(senales, valores))
+            if peso_categoria > 0 or peso_plataforma > 0:
+                # Solo los candidatos de señales con peso: una señal apagada no aporta productos.
+                candidatos = filas_por_id(motor, {i for nombre, puntos in senales.items() if pesos_senales[nombre] > 0
+                                                  for i, valor in puntos.items() if valor > 0} - {id})
+                if peso_categoria > 0:
+                    senales["categoria"] = misma_categoria(origen.get("categoria"), candidatos)
+                    pesos_senales["categoria"] = peso_categoria
+                if peso_plataforma > 0:
+                    senales["plataforma"] = misma_plataforma(origen, candidatos)
+                    pesos_senales["plataforma"] = peso_plataforma
+            filas = fusionar(id, senales, pesos_senales, fusion, limite=10 if duplicados else 60)
+            filas = [{**producto(motor, fila["id"]), **fila} for fila in filas]
+        if not duplicados:
+            vectores = indice.index.vectors if usar_mobilenet and indice.index is not None else {}
+
+            def vector(i):
+                v = vectores.get(i)
+                return None if v is None else v / (np.linalg.norm(v) or 1)
+            filas = sin_duplicados(origen, filas, vector)
+        return filas
 
     @router.get("/tiendas/cercanas")
     def tiendas(lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180),

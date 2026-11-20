@@ -162,12 +162,24 @@ Las cifras de precisión que justifican estos valores están en `benchmarks/asis
 
 ### `GET /recomendaciones/{id}`
 
-Combina compras conjuntas, similitud de imagen y texto. `pesos=1,1,1` controla
-esas tres señales en ese orden. `vector_imagen=sift` es el valor predeterminado;
-`vector_imagen=mobilenet` elige el modelo CNN preentrenado del issue #102.
+Combina tres señales: compras (usuarios que compraron también otro producto a 30
+días o menos), imagen y texto. Cada una trae 101 candidatos y se fusionan por
+posición con RRF (`fusion=rrf`, el valor predeterminado); `fusion=max` divide cada
+señal por su máximo, como antes. `pesos=1,0.5,1` (el valor predeterminado) controla
+compras, imagen y texto en ese orden. `vector_imagen=mobilenet` es el valor
+predeterminado (si falta el modelo se usa SIFT); `vector_imagen=sift` elige SIFT +
+BoVW. `peso_categoria=0.25` suma la señal "categoría similar": los candidatos de la
+misma categoría que el producto suben, sin agregar productos nuevos; `0` la apaga.
+`peso_plataforma=0.5` hace lo mismo con la consola (PS4, Switch, Xbox One...), solo si
+el producto es de una sola consola. Se quitan los duplicados (misma clave de título o
+imagen casi idéntica: otro color, otra edición, relistados); `duplicados=true` los
+deja. "También compraron" se guarda en caché por producto y se recalcula si cambia la
+tabla `compras`.
+Los valores se midieron en [benchmarks/tienda](../benchmarks/tienda/README.md).
 
 ```text
-GET /recomendaciones/1?pesos=0,1,0&vector_imagen=mobilenet
+GET /recomendaciones/1
+GET /recomendaciones/1?pesos=0,1,0&vector_imagen=sift&peso_categoria=0&fusion=max
 ```
 
 Devuelve hasta diez productos, excluyendo el producto consultado, con `puntaje`
@@ -177,6 +189,6 @@ la primera petición. Consulte [instalación, caché y evaluación](extractor_mo
 ## Límites
 
 - Atiende **una petición a la vez**, porque el motor tiene una sola sesión SQL. Alcanza para la demo; una consulta lenta hace esperar a las demás.
-- Al iniciar, los índices se reconstruyen desde las tablas. Con miles de imágenes, el HNSW puede tardar alrededor de un minuto en estar listo.
+- Al iniciar, los índices se reconstruyen desde las tablas. Con la tienda completa (7,995 productos y 714 mil compras) el arranque tarda ~6 minutos, y el índice MobileNet se construye en segundo plano ~50 s más: **levante la API unos 7 minutos antes de la demo**. Después, una recomendación tarda ~0.2 s.
 - El asistente tarda lo que tarde el LLM: con `gemini-3.1-flash-lite`, de 3 a 5 segundos por pregunta. Mientras espera al LLM no bloquea las demás peticiones; solo las consultas SQL van de a una.
 - **Cuota gratuita de Gemini**: Google la muestra por proyecto en AI Studio y la renueva cada minuto y cada día (a medianoche del Pacífico). Cada pregunta gasta 2 llamadas, o 1 con `BD2_PALABRAS_CLAVE=local`. Si se acaba, el endpoint responde `502` con un mensaje claro; si Google está saturado (`503`), se reintenta solo hasta 3 veces.

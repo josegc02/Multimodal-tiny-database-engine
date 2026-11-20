@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field
 
 from api.asistente import (ErrorAsistente, ErrorLLM, crear_llm, indexar_pdf, listar_documentos,
                            obtener_documento, preguntar)
-from api.tienda import rutas_tienda
+from api.tienda import precalentar, rutas_tienda
 
 from engine.indexes.extendible_hash import ExtendibleHash
 from engine.indexes.bplus_tree_unclustered import BPlusTreeUnclustered
@@ -162,6 +162,7 @@ def create_app(directorio: str | None = None, carpetas_archivos: list[str] | Non
     async def ciclo_de_vida(app: FastAPI):
         datos = os.path.abspath(directorio or os.environ.get("BD2_DATA_DIR") or DATA_DIR_DEFECTO)
         estado["motor"] = Motor(directorio=datos, modo_demo=False)
+        precalentar(estado, lock)
         estado["archivos"] = (
             [os.path.realpath(c) for c in carpetas_archivos] if carpetas_archivos is not None
             else _carpetas(os.environ.get("BD2_ARCHIVOS"), ["datasets", "fotos", datos]))
