@@ -1105,8 +1105,9 @@ misma categoría. Los índices no son la causa: IVF y HNSW dan casi la misma
 precisión que la búsqueda exacta. El límite es el descriptor: SIFT + BoVW
 compara texturas y estructuras locales, no el significado de la imagen (por
 eso una consulta de un gato puede devolver una fachada antes que otro gato).
-Una búsqueda semántica requiere embeddings aprendidos (CNN o CLIP), fuera del
-alcance de esta parte. Los porcentajes son menores que en la prueba con
+Una búsqueda semántica requiere embeddings aprendidos: en la Parte 5 se agregó
+MobileNetV2, que en COCO 1K sube la precisión por categoría de 6,3 % a 33,2 %
+(sección 13). Los porcentajes son menores que en la prueba con
 val2017 de la sección 10 porque estas consultas cubren categorías poco
 frecuentes (azar ≈ 4 % frente a ≈ 20 %).
 
@@ -1158,3 +1159,113 @@ de la misma categoría, así que en la galería son comunes resultados de otra
 categoría aunque el Recall@10 sea alto. Estos números proceden de una sola
 corrida por configuración (Windows 11, Intel Core i7-10510U, Python 3.13); no
 tienen intervalos de confianza ni justifican extrapolaciones a otros equipos.
+
+## Aplicaciones sobre el motor (Parte 5)
+
+La Parte 5 construye dos aplicaciones encima del motor, sin usar otra base de datos: un asistente académico que responde con citas a partir de las clases y papers del curso (opción A) y una tienda de videojuegos con recomendaciones híbridas (opción B). Las dos se exponen con una API REST (`api/main.py`, FastAPI) y un front web (`web/`) con una página para cada una. Toda consulta a los datos es SQL del motor: `MATCH ... USING BM25` sobre índices SPIMI, `SIMILAR_TO` sobre HNSW, `distancia(...)` sobre el R-Tree y `JOIN ... GROUP BY` sobre tablas con índices hash.
+
+### 12. Asistente académico (opción A)
+
+**Corpus.** 259 documentos: papers de índices, recuperación y RAG, y las diapositivas de las clases del curso. Cada PDF se divide en fragmentos por página y se carga en dos tablas, `papers` y `fragmentos`, con un índice SPIMI sobre `fragmentos.texto`. Desde la interfaz se puede subir un PDF nuevo: se extrae, se fragmenta y se indexa en el motor.
+
+**Flujo de una pregunta.**
+
+1. *Palabras clave.* Un LLM (Gemini 3.1 Flash-Lite) traduce la pregunta a cinco palabras clave en inglés, el idioma de casi todo el corpus. A esas se suman los **cognados** de la pregunta (palabras en español con un prefijo común con alguna clave en inglés: *fragmentación* y *fragmentation*), para encontrar también las clases del curso, que están en español.
+2. *Recuperación.* `SELECT ... WHERE MATCH(texto, '<palabras>') USING BM25 ORDER BY SCORE() DESC LIMIT k` en el motor. Se toman a lo sumo dos fragmentos por documento y solo los que tienen al menos el 70 % del puntaje del mejor (umbral relativo), para no citar fragmentos débiles.
+3. *Respuesta.* El LLM redacta con los fragmentos elegidos y cita cada afirmación con `[n]`. Sin LLM (sin clave o sin cuota), la API devuelve solo los fragmentos.
+
+**Evaluación.** 18 preguntas del curso con términos de evidencia esperados (`benchmarks/asistente/`). La precisión cuenta qué fracción de los fragmentos recuperados trae esos términos.
+
+![Precisión del asistente por versión y BM25 contra TF-IDF](../benchmarks/results/parte5/asistente_precision.png)
+
+| Versión | Precisión de las fuentes | Acierto en el 1.er fragmento |
+|---|---:|---:|
+| Con LLM, al inicio (16 palabras en inglés y español) | 0,767 | 0,778 |
+| 5 palabras en inglés, umbral del 60 % | 0,919 | 1,000 |
+| **5 en inglés + cognados, umbral del 70 %** | **0,962** | **1,000** |
+| Sin LLM (glosario y palabras traducidas) | 0,875 | 0,833 |
+
+Pedir pocas palabras y solo en inglés fue lo que más ayudó: las palabras en español diluían el puntaje BM25 en un corpus en inglés. Los cognados recuperan las clases del curso sin bajar la precisión. Con las mismas palabras clave, **BM25 supera a TF-IDF con coseno** en todos los umbrales (0,949 frente a 0,886 con el umbral del 70 %), porque satura la frecuencia de un término y corrige por la longitud del fragmento. De las 53 citas que escribió el LLM, 51 eran del tema (0,962).
+
+**Límites.** La cuota gratuita de Gemini se renueva por minuto y por día; cada pregunta gasta dos llamadas. La respuesta tarda lo que tarde el LLM (3 a 5 s); la recuperación en el motor, decenas de milisegundos.
+
+### 13. Tienda con recomendaciones híbridas (opción B)
+
+**Datos.** 7 994 productos de Amazon Reviews 2023 (categoría Video Games) con su foto, 718 733 compras verificadas de 264 464 usuarios, 623 tiendas reales de Lima tomadas de OpenStreetMap y un stock generado con semilla fija (no es inventario real). Las tablas son `productos`, `compras`, `tiendas` y `stock`, con índice hash en las claves, B+ en `precio`, SPIMI en `descripcion`, HNSW en `imagen` y R-Tree en `ubicacion`.
+
+**Limpieza del dataset.** El archivo de Amazon traía productos que no son de una tienda de videojuegos y categorías que contradicen al producto. `tienda/categorias.py` los corrige antes de elegir los productos:
+
+| Problema | Productos | Corrección |
+|---|---:|---|
+| Libros, películas, música, comida y juegos de mesa con ruta de videojuegos | 131 | Descartados por `main_category`, formato, campos de libro o película, o título inequívoco |
+| Productos ajenos que ningún campo delata (audífonos genéricos, cargadores de Fitbit...) | 38 | Lista revisada a mano |
+| Rutas promocionales tratadas como consola ("Ubisoft", "Game Genre of the Month") | 89 | Pasan a la consola del título |
+| Consola de la ruta contradicha por el título (una funda de Switch en "Nintendo DS") | 455 | Pasan a la consola del título |
+
+**Las señales.** `GET /recomendaciones/{id}` combina cinco señales, cada una una consulta del motor:
+
+| Señal | Consulta | Qué aporta |
+|---|---|---|
+| Compras | self-JOIN de `compras` por usuario, `GROUP BY b.producto_id` | Quienes compraron este producto compraron también aquel, a 30 días o menos |
+| Imagen | `SIMILAR_TO(imagen, ...) USING HNSW` sobre MobileNetV2 (o SIFT + BoVW) | Fotos parecidas |
+| Texto | `MATCH(descripcion, ...) USING BM25` | Descripciones parecidas |
+| Categoría | Búsqueda por clave primaria de cada candidato | Bono si comparte la categoría |
+| Consola | La consola del título y la categoría | Bono si es de la misma consola |
+
+Cada señal trae hasta 101 candidatos; se fusionan con **RRF** (cada señal aporta `peso / (61 + posición)`, sin depender de la escala de sus puntajes: BM25 no tiene tope y los cosenos sí) con pesos 1 (compras), 0,5 (imagen), 1 (texto), 0,25 (categoría) y 0,5 (consola), y se quitan los duplicados (misma clave de título o foto casi idéntica: otro color o un relistado del mismo producto). La respuesta trae el puntaje de cada señal, que el front muestra como "cuánto aportó".
+
+**Extractor preentrenado.** SIFT + BoVW (Parte 4) compara texturas locales, no el significado de la foto. MobileNetV2 (ONNX, vector de 1280 dimensiones antes del clasificador) reconoce qué objeto hay:
+
+![Precisión por categoría en COCO 1K según el extractor](../benchmarks/results/parte5/coco_extractores.png)
+
+**Evaluación.** Dos métricas, porque cada una favorece a una señal distinta: el **tipo** (P@10 del mismo tipo de producto: juego, mando, audífonos...; favorece al texto) y el **comportamiento** (recall@10 de lo que el mismo usuario compró después, con las compras separadas por tiempo: la señal usa las anteriores al 4 de agosto de 2021 y la métrica, las posteriores; favorece a las compras). La configuración se eligió en consultas de validación con una regla fijada antes de medir (el mejor promedio de las dos métricas normalizadas) y se reporta en consultas de prueba distintas, con IC 95 % por bootstrap.
+
+![Las dos métricas en prueba](../benchmarks/results/parte5/tienda_metricas.png)
+
+| | Antes (texto + SIFT) | La app |
+|---|---:|---:|
+| Mismo tipo de producto | 45,7 % [42,9; 48,4] | **69,1 %** [66,3; 71,9] |
+| Compró después | 6,7 % [5,8; 7,7] | **10,6 %** [9,4; 11,9] |
+| Misma consola | 51,9 % | **92,7 %** |
+| Listas con duplicados | 42 % | **0 %** |
+
+Recomendar siempre los más populares da 8,3 % y 2,8 %: la métrica de comportamiento no mide popularidad. La mayor parte de la ganancia viene de quitarle peso a SIFT (normalizado por su máximo daba similitudes casi iguales para todo) y de usar MobileNet. La ablación separa el resto:
+
+![Qué aporta cada cambio](../benchmarks/results/parte5/tienda_ablacion.png)
+
+RRF con los nuevos pesos mejora el tipo; filtrar las compras (usuarios con 2 a 20 compras y pares a 30 días o menos) mejora el comportamiento, porque los usuarios con cientos de compras conectaban productos sin relación. Una revisión a mano de 30 recomendaciones contadas como "otro tipo" encontró que 19 eran errores de la etiqueta de evaluación, no del sistema: las cifras subestiman la exactitud.
+
+**Búsqueda en español.** Las descripciones están en inglés, así que "mando inalámbrico" no encontraba mandos. `tienda/busqueda.py` completa cada palabra con sus equivalentes en inglés (mando: controller; audífonos: headset) y conserva las originales. En 20 búsquedas en español, la fracción de los 10 primeros resultados del tipo pedido sube de **21 % a 54 %**.
+
+![Búsqueda en español](../benchmarks/results/parte5/tienda_busqueda_es.png)
+
+**HNSW frente a búsqueda exacta.** Con la configuración de la app (M = 8, `ef_search` = 102), el HNSW recupera el 93 % de los vecinos exactos de MobileNet visitando el 8 % de los nodos, y el acierto de tipo es el mismo que con la búsqueda exacta. Con 8 mil productos, la búsqueda exacta vectorizada en numpy (4 ms) es más rápida que nuestro HNSW en Python puro; al crecer el catálogo con copias calibradas de los vectores reales, el HNSW crece mucho más despacio y las curvas se cruzan entre 8 mil y 25 mil productos.
+
+![HNSW según el tamaño del catálogo](../benchmarks/results/parte5/tienda_hnsw_escala.png)
+
+![Recall contra latencia al subir ef_search](../benchmarks/results/parte5/tienda_hnsw_ef.png)
+
+### 14. Mejoras al motor durante la Parte 5
+
+Usar el motor con datos reales (718 mil compras) mostró tres problemas que las pruebas de las partes anteriores no tenían tamaño para revelar.
+
+**Pushdown de selección en JOIN.** El `WHERE` se evaluaba después del join, así que "también compraron" hacía un hash join de toda la tabla de compras consigo misma (27,7 s por producto). Ahora los términos del `WHERE` que solo usan la primera tabla bajan a su Scan: se filtra antes, se puede usar un índice y el lado izquierdo se estima con el filtro. El `WHERE` completo se sigue evaluando después, así que el resultado no cambia (verificado con y sin pushdown en 11 consultas); solo se aplica con INNER JOIN, el único que el motor tiene.
+
+**Valores distintos con KMV.** Las estadísticas contaban hasta 1024 valores distintos por columna, así que 264 mil usuarios "eran" 1024 y cada uno parecía tener cientos de compras: el optimizador descartaba el índice en el join. Ahora son exactos hasta 1024 y, más allá, se estiman con KMV (los 1024 hashes más pequeños; error cercano al 3 %). Con las dos correcciones, el join pasa a *index nested loop* y "también compraron" baja de **27,7 s a 18 ms**:
+
+![Consultas con JOIN antes y después](../benchmarks/results/parte5/optimizador_join.png)
+
+**Hash extensible con claves repetidas.** Al construir el índice de una llave foránea (`compras.producto_id`: 8 mil productos para 718 mil compras), cada inserción recorría la cadena de overflow de su clave y volvía a calcular los hashes del bucket: carga cuadrática. Cada bucket guarda ahora el último de su cadena y los hashes de sus claves, y descarta ambas cachés al reconstruirse. La estructura y las búsquedas no cambian (30 cargas aleatorias dan las mismas búsquedas); el índice sobre `producto_id` pasa de 508 s a 60 s.
+
+**Lo que sigue.** El motor reconstruye todos los índices al arrancar: con la tienda completa, la API tarda unos 5 minutos en estar lista. Guardar los índices en disco lo resolvería; para la demo, la API se levanta antes. El motor atiende una consulta SQL a la vez, no tiene LEFT JOIN y sus columnas INT no admiten NULL.
+
+### 15. La aplicación web
+
+`web/` es un proyecto Vite + React con dos aplicaciones, cada una con su armazón e identidad, que comparten el cliente de la API:
+
+* **Asistente** (`index.html`): la pregunta, la respuesta con citas que muestran la fuente al pasar el mouse, los fragmentos con su página y su puntaje BM25, y un panel plegable "Cómo se respondió" con el flujo, los candidatos de BM25 (elegidos y por qué se descartó el resto), el tiempo de cada paso y el SQL real. También la biblioteca de documentos y la subida de PDFs.
+* **Tienda "Partida"** (`tienda.html`): catálogo con búsqueda (en español o inglés), tarjetas por consola que filtran, tipo y precio; ficha con la tienda más cercana con stock, su distancia y un mapa (Leaflet con OpenStreetMap); y "Te puede interesar", con el motivo de cada recomendación. El modo "Explicar y ajustar" muestra cuánto aportó cada señal y deja mover los pesos y cambiar entre MobileNet y SIFT: la lista se reordena en vivo y marca cuánto subió o bajó cada producto.
+
+El diseño se revisó en navegador a 1440, 768 y 390 px, con las reglas de accesibilidad de contraste, foco visible y movimiento reducido. Con la tienda cargada, una recomendación tarda 0,2–0,6 s y una página del catálogo, 0,2 s.
+
+**Limitaciones del dataset.** Quedan productos multiplataforma que Amazon ubicó en una consola antigua cuando el título nombra varias, descripciones de marketing que ensucian BM25, un sesgo hacia productos antiguos (se eligieron los más reseñados), precios de Estados Unidos de 2023 y un stock generado. Las compras son reseñas con compra verificada, una aproximación del comportamiento real.
