@@ -8,6 +8,8 @@ from fastapi import APIRouter, HTTPException, Query
 
 import numpy as np
 
+from tienda.busqueda import ampliar
+
 from tienda.recomendaciones import (CANDIDATOS, cercanas, compras, consultar, filas_por_id, fusionar, literal,
                                     misma_categoria, misma_plataforma, sin_duplicados, texto, visual)
 
@@ -109,7 +111,8 @@ def rutas_tienda(estado, lock):
             if valor is not None:
                 filtros.append(f"precio {operador} {valor:.12f}")
         if q:
-            filtros.append(f"MATCH(descripcion, {literal(q)}) USING BM25")
+            # Las descripciones están en inglés: "mando inalámbrico" también busca "controller wireless".
+            filtros.append(f"MATCH(descripcion, {literal(ampliar(q))}) USING BM25")
         where = " WHERE " + " AND ".join(filtros) if filtros else ""
         # Con búsqueda, por relevancia BM25. Sin ella, en el orden de carga del archivo, que es
         # el de id (los productos se cargan de más a menos reseñados): el índice de la clave

@@ -243,3 +243,11 @@ def test_revision_vencida_no_hace_esperar(tmp_path, monkeypatch):
     assert api_tienda.revisar_en_segundo_plano(estado, threading.Lock()) is None  # una a la vez
     hilo.join(timeout=5)
     assert revisiones == [1] and estado["revisando_mobilenet"] is False
+
+
+def test_busqueda_en_espanol_amplia_al_ingles():
+    from tienda.busqueda import ampliar
+    assert ampliar("mando inalámbrico") == "mando inalámbrico controller gamepad wireless"
+    assert ampliar("audífonos") == "audífonos headset headphones"   # plural y tildes
+    assert ampliar("Mario Kart") == "Mario Kart"                     # sin traducción, igual
+    assert ampliar("") == ""

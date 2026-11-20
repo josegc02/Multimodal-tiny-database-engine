@@ -246,3 +246,23 @@ etiqueta.
 - 18 % de las consultas de tipo tiene un casi duplicado en el catálogo; sin ellas las
   cifras bajan cerca de un punto y el orden no cambia.
 - En la app la imagen se busca con HNSW, no exacta; ver la sección de HNSW: no cambia el acierto.
+
+## Búsqueda en español
+
+Las descripciones del catálogo están en inglés, así que "mando inalámbrico" no
+encontraba mandos. `tienda/busqueda.py` completa cada palabra de la búsqueda con sus
+equivalentes en inglés (un diccionario corto de la tienda: mando → controller gamepad,
+audífonos → headset headphones, funda → case cover...) y conserva las originales, así
+que marcas y búsquedas en inglés no cambian. `python -m benchmarks.tienda.busqueda_es`
+mide 20 búsquedas en español contra `GET /catalogo` (`busqueda_es.json`):
+
+| | P@10 del tipo pedido |
+|---|---:|
+| La búsqueda tal cual | 21.0 % |
+| **Ampliada al inglés** | **54.0 %** |
+
+Las tres búsquedas que siguen en 0 son en parte la etiqueta de la evaluación, no la
+búsqueda: "cargador de mandos ps4" trae "Charging Station for PS4 Controller", que las
+reglas del título etiquetan como mando; "soporte para audífonos" trae "Headset Stand"
+(etiquetado audífonos); "pegatinas para consola" trae skins de mandos. La única que
+empeora es "mouse inalámbrico" (0.9 → 0.7): "wireless" también trae audífonos.
