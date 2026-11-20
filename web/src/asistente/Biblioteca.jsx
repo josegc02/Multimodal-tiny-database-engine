@@ -2,19 +2,26 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { autoresCortos, entero, esClase, TEMAS } from '../formato.js';
 import { IconoBuscar, IconoError } from '../Iconos.jsx';
-import { enlace } from '../ruta.js';
+import { conFiltros, enlace } from '../ruta.js';
 
 const PASO = 50; // filas por tanda
 
-export default function Biblioteca() {
+export default function Biblioteca({ filtros, cambiarRuta }) {
   const [documentos, setDocumentos] = useState(null);
   const [error, setError] = useState(null);
-  const [busqueda, setBusqueda] = useState('');
-  const [tipo, setTipo] = useState('todos');
-  const [tema, setTema] = useState('');
-  const [anio, setAnio] = useState('');
-  const [autor, setAutor] = useState('');
+  const busqueda = filtros.get('titulo') ?? '';
+  const tipo = ['papers', 'clases'].includes(filtros.get('tipo')) ? filtros.get('tipo') : 'todos';
+  const tema = filtros.get('tema') ?? '';
+  const anio = filtros.get('anio') ?? '';
+  const autor = filtros.get('autor') ?? '';
   const [visibles, setVisibles] = useState(PASO);
+
+  function cambiarFiltro(nombre, valor) {
+    const nuevos = new URLSearchParams(filtros);
+    if (valor) nuevos.set(nombre, valor);
+    else nuevos.delete(nombre);
+    cambiarRuta(conFiltros(enlace.biblioteca, nuevos));
+  }
 
   const cargar = () => { setError(null); api.documentos().then(setDocumentos).catch(setError); };
   useEffect(cargar, []);
@@ -49,32 +56,32 @@ export default function Biblioteca() {
         <label className="buscador">
           <IconoBuscar />
           <span className="oculto">Buscar por título</span>
-          <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Título" />
+          <input value={busqueda} onChange={(e) => cambiarFiltro('titulo', e.target.value)} placeholder="Título" />
         </label>
         <div className="segmentos" role="group" aria-label="Tipo de documento">
           {[['todos', 'Todos'], ['papers', 'Papers'], ['clases', 'Clases']].map(([id, texto]) => (
-            <button key={id} aria-pressed={tipo === id} onClick={() => setTipo(id)}>
+            <button key={id} aria-pressed={tipo === id} onClick={() => cambiarFiltro('tipo', id === 'todos' ? '' : id)}>
               {texto} <span className="num sub">{documentos ? totales[id] : ''}</span>
             </button>
           ))}
         </div>
         <label className="filtro-biblioteca">
           <span id="filtro-tema">Tema</span>
-          <select className="selector" aria-labelledby="filtro-tema" value={tema} onChange={(e) => setTema(e.target.value)}>
+          <select className="selector" aria-labelledby="filtro-tema" value={tema} onChange={(e) => cambiarFiltro('tema', e.target.value)}>
             <option value="">Todos</option>
             {temas.map((t) => <option key={t} value={t}>{TEMAS[t] ?? t}</option>)}
           </select>
         </label>
         <label className="filtro-biblioteca">
           <span id="filtro-anio">Año</span>
-          <select className="selector" aria-labelledby="filtro-anio" value={anio} onChange={(e) => setAnio(e.target.value)}>
+          <select className="selector" aria-labelledby="filtro-anio" value={anio} onChange={(e) => cambiarFiltro('anio', e.target.value)}>
             <option value="">Todos</option>
             {anios.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
         </label>
         <label className="filtro-biblioteca">
           Autor
-          <input className="selector" value={autor} onChange={(e) => setAutor(e.target.value)} />
+          <input className="selector" value={autor} onChange={(e) => cambiarFiltro('autor', e.target.value)} />
         </label>
       </div>
 
@@ -107,7 +114,7 @@ export default function Biblioteca() {
                 {filas.slice(0, visibles).map((d) => (
                   <tr key={d.id}>
                     <td>
-                      <a href={enlace.documento(d.id)} className="titulo-documento">{d.titulo}</a>
+                      <a href={enlace.documento(d.id, filtros)} className="titulo-documento">{d.titulo}</a>
                       <span className="celda-sub">{autoresCortos(d.autores)}</span>
                       <span className="celda-sub ficha-movil">
                         {[esClase(d) ? 'Clase' : 'Paper', TEMAS[d.tema] ?? d.tema, d.anio,

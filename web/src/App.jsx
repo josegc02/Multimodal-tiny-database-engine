@@ -3,14 +3,14 @@ import { api } from './api.js';
 import { entero } from './formato.js';
 import { guardarReciente, leerRecientes } from './historial.js';
 import { IconoBiblioteca, IconoMenu, IconoPreguntar, IconoSubir, Marca } from './Iconos.jsx';
-import { enlace, ir, useRuta } from './ruta.js';
+import { conFiltros, enlace, ir, useRuta } from './ruta.js';
 import Preguntar from './asistente/Preguntar.jsx';
 import Biblioteca from './asistente/Biblioteca.jsx';
 import Documento from './asistente/Documento.jsx';
 import Subir from './asistente/Subir.jsx';
 
 export default function App() {
-  const ruta = useRuta();
+  const [ruta, reemplazarRuta] = useRuta();
   const [recientes, setRecientes] = useState(leerRecientes);
   const [filtroHistorial, setFiltroHistorial] = useState('');
   const [estado, setEstado] = useState(null);       // GET /asistente/estado
@@ -75,6 +75,7 @@ export default function App() {
 
   const consultasVisibles = recientes.filter((item) => item.pregunta.toLowerCase().includes(filtroHistorial.trim().toLowerCase()));
   const reciente = ruta.reciente ? recientes.find((r) => r.id === ruta.reciente) : null;
+  const volverBiblioteca = conFiltros(enlace.biblioteca, ruta.filtros);
   const titulos = { preguntar: 'Preguntar', biblioteca: 'Biblioteca', documento: 'Documento', subir: 'Subir PDF' };
   const actual = (vista) => (ruta.vista === vista || (vista === 'biblioteca' && ruta.vista === 'documento') ? 'page' : undefined);
 
@@ -100,7 +101,7 @@ export default function App() {
 
         <nav className="nav" aria-label="Secciones">
           <a href={enlace.preguntar} onClick={() => setMenuAbierto(false)} aria-current={actual('preguntar')}><IconoPreguntar />Preguntar</a>
-          <a href={enlace.biblioteca} onClick={() => setMenuAbierto(false)} aria-current={actual('biblioteca')}>
+          <a href={volverBiblioteca} onClick={() => setMenuAbierto(false)} aria-current={actual('biblioteca')}>
             <IconoBiblioteca />Biblioteca<span className="cuenta num">{estado?.documentos ?? ''}</span>
           </a>
           <a href={enlace.subir} onClick={() => setMenuAbierto(false)} aria-current={actual('subir')}><IconoSubir />Subir PDF</a>
@@ -140,8 +141,8 @@ export default function App() {
           <Preguntar key={ruta.reciente ?? ruta.auto ?? 'nueva'} reciente={reciente} auto={ruta.auto}
                      borrador={borrador} limpiarBorrador={() => setBorrador('')} alResponder={alResponder} />
         )}
-        {ruta.vista === 'biblioteca' && <Biblioteca />}
-        {ruta.vista === 'documento' && <Documento id={ruta.id} preguntarSobre={preguntarSobre} />}
+        {ruta.vista === 'biblioteca' && <Biblioteca filtros={ruta.filtros} cambiarRuta={reemplazarRuta} />}
+        {ruta.vista === 'documento' && <Documento id={ruta.id} volverBiblioteca={volverBiblioteca} preguntarSobre={preguntarSobre} />}
         {ruta.vista === 'subir' && <Subir alSubir={cargarEstado} preguntarSobre={preguntarSobre} />}
       </main>
     </div>
